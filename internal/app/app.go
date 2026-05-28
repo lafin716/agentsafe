@@ -5,18 +5,55 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 
 	"github.com/spf13/cobra"
 
 	"github.com/agentsafe/agentsafe/internal/agent"
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
+	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/repo"
 )
 
+type simpleResult struct {
+	Status  string `json:"status"            yaml:"status"`
+	Message string `json:"message,omitempty" yaml:"message,omitempty"`
+}
+
+type repoListResult struct {
+	Repositories []repoEntry `json:"repositories" yaml:"repositories"`
+}
+
+type repoEntry struct {
+	Name string `json:"name" yaml:"name"`
+	Type string `json:"type" yaml:"type"`
+	URL  string `json:"url"  yaml:"url"`
+}
+
+type diffResult struct {
+	Feature      string       `json:"feature"      yaml:"feature"`
+	Repositories []repoDiff   `json:"repositories" yaml:"repositories"`
+}
+
+type repoDiff struct {
+	Name    string         `json:"name"    yaml:"name"`
+	Changes []agent.Change `json:"changes" yaml:"changes"`
+}
+
 func NewRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{Use: "agentsafe", Short: "Multi-repository safe workspace manager for AI coding agents"}
-	rootCmd.AddCommand(initCmd(), repoCmd(), cloneCmd(), featureCmd(), statusCmd(), agentCmd(), commitCmd(), pushCmd(), mrCmd())
+	var outputFormat string
+	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "text", "output format: text, json, yaml")
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		f, err := output.Validate(outputFormat)
+		if err != nil {
+			return err
+		}
+		output.Set(f)
+		return nil
+	}
+	rootCmd.AddCommand(initCmd(), repoCmd(), pullCmd(), featureCmd(), statusCmd(), agentCmd(), commitCmd(), pushCmd(), mrCmd())
 	return rootCmd
 }
 
@@ -34,6 +71,9 @@ func initCmd() *cobra.Command {
 		cfg, err := config.InitWorkspace(root, name)
 		if err != nil {
 			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok", Message: "Initialized agentsafe workspace: " + cfg.Workspace.Root})
 		}
 		fmt.Printf("Initialized agentsafe workspace: %s\n", cfg.Workspace.Root)
 		return nil
@@ -55,6 +95,9 @@ func repoCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok", Message: "Added repository " + args[0]})
+		}
 		fmt.Printf("Added repository %s\n", args[0])
 		return nil
 	}}
@@ -65,6 +108,13 @@ func repoCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if output.IsStructured() {
+			result := repoListResult{}
+			for _, r := range cfg.Repositories {
+				result.Repositories = append(result.Repositories, repoEntry{Name: r.Name, Type: r.Type, URL: r.URL})
+			}
+			return output.Emit(result)
+		}
 		repo.List(cfg)
 		return nil
 	}}
@@ -72,31 +122,67 @@ func repoCmd() *cobra.Command {
 	return c
 }
 
-func cloneCmd() *cobra.Command {
-	return &cobra.Command{Use: "clone", Short: "Clone or fetch all configured repositories", RunE: func(cmd *cobra.Command, args []string) error {
+func pullCmd() *cobra.Command {
+	return &cobra.Command{Use: "pull", Short: "Pull (clone or fetch) all configured repositories", RunE: func(cmd *cobra.Command, args []string) error {
 		root, cfg, err := cwdConfig()
 		if err != nil {
 			return err
 		}
-		return repo.CloneAll(root, cfg)
+		if err := repo.PullAll(root, cfg); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok", Message: "pull completed"})
+		}
+		return nil
 	}}
 }
 
 func featureCmd() *cobra.Command {
 	c := &cobra.Command{Use: "feature", Short: "Manage feature worktrees"}
 	var base string
-	create := &cobra.Command{Use: "create NAME", Short: "Create feature branches and worktrees", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		root, cfg, err := cwdConfig()
-		if err != nil {
-			return err
-		}
-		return feature.Create(root, cfg, args[0], base)
-	}}
-	create.Flags().StringVar(&base, "base", "", "base branch")
+	var force bool
+	create := &cobra.Command{
+		Use:   "create NAME",
+		Short: "Create feature branches and worktrees",
+		Long: `Create feature branches and worktrees across all configured repositories.
+
+By default, each repository's current branch is used as the base.
+Use --base to specify an explicit base branch for all repositories.
+
+Errors if the feature branch already exists. Use -f to force delete
+the local branch and recreate it from the base.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, cfg, err := cwdConfig()
+			if err != nil {
+				return err
+			}
+			if err := feature.Create(root, cfg, args[0], base, force); err != nil {
+				return err
+			}
+			if output.IsStructured() {
+				m, err := feature.Load(root, args[0])
+				if err != nil {
+					return err
+				}
+				return output.Emit(m)
+			}
+			return nil
+		}}
+	create.Flags().StringVarP(&base, "base", "b", "", "base branch for all repos (default: each repo's current branch)")
+	create.Flags().BoolVarP(&force, "force", "f", false, "force recreate if local branch already exists")
 	list := &cobra.Command{Use: "list", Short: "List feature workspaces", RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
 		if err != nil {
 			return err
+		}
+		if output.IsStructured() {
+			data, err := feature.ListData(root)
+			if err != nil {
+				return err
+			}
+			return output.Emit(data)
 		}
 		return feature.List(root)
 	}}
@@ -110,18 +196,46 @@ func statusCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if output.IsStructured() {
+			data, err := feature.StatusData(root, args[0])
+			if err != nil {
+				return err
+			}
+			return output.Emit(data)
+		}
 		return feature.Status(root, args[0])
 	}}
 }
 
 func agentCmd() *cobra.Command {
 	c := &cobra.Command{Use: "agent", Short: "Manage sanitized agent workspaces"}
-	prepare := &cobra.Command{Use: "prepare FEATURE", Short: "Create a sanitized agent workspace", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	agentInit := &cobra.Command{Use: "init FEATURE", Short: "Create a sanitized agent workspace", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, cfg, err := cwdConfig()
 		if err != nil {
 			return err
 		}
-		return agent.Prepare(root, cfg, args[0])
+		if err := agent.Init(root, cfg, args[0]); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			meta := agent.LoadPrepareMetadata(root, args[0])
+			return output.Emit(meta)
+		}
+		return nil
+	}}
+	del := &cobra.Command{Use: "delete FEATURE", Short: "Delete the agent workspace for a feature", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, _, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		if err := agent.Delete(root, args[0]); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok", Message: "deleted agent workspace for " + args[0]})
+		}
+		fmt.Printf("Deleted agent workspace: %s\n", args[0])
+		return nil
 	}}
 	var repoFilter string
 	diff := &cobra.Command{Use: "diff FEATURE", Short: "Show differences between agent workspace and worktree", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
@@ -132,6 +246,22 @@ func agentCmd() *cobra.Command {
 		byRepo, err := agent.Diff(root, cfg, args[0], repoFilter)
 		if err != nil {
 			return err
+		}
+		if output.IsStructured() {
+			result := diffResult{Feature: args[0]}
+			repos := make([]string, 0, len(byRepo))
+			for r := range byRepo {
+				repos = append(repos, r)
+			}
+			sort.Strings(repos)
+			for _, r := range repos {
+				changes := byRepo[r]
+				if changes == nil {
+					changes = []agent.Change{}
+				}
+				result.Repositories = append(result.Repositories, repoDiff{Name: r, Changes: changes})
+			}
+			return output.Emit(result)
 		}
 		agent.PrintChanges(args[0], byRepo)
 		return nil
@@ -166,7 +296,7 @@ func agentCmd() *cobra.Command {
 		return e.Start()
 	}}
 	open.Flags().StringVar(&editor, "editor", "", "editor command (code/cursor)")
-	c.AddCommand(prepare, diff, sync, open)
+	c.AddCommand(agentInit, del, diff, sync, open)
 	return c
 }
 
@@ -177,7 +307,13 @@ func commitCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return feature.Commit(root, args[0], msg)
+		if err := feature.Commit(root, args[0], msg); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok", Message: msg})
+		}
+		return nil
 	}}
 	c.Flags().StringVarP(&msg, "message", "m", "", "commit message")
 	return c
@@ -189,7 +325,13 @@ func pushCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return feature.Push(root, args[0])
+		if err := feature.Push(root, args[0]); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok"})
+		}
+		return nil
 	}}
 }
 
@@ -206,6 +348,22 @@ func mrCmd() *cobra.Command {
 		}
 		if title == "" {
 			title = "[" + args[0] + "] merge request"
+		}
+		if output.IsStructured() {
+			type mrSkeleton struct {
+				BaseURL  string `json:"baseUrl"   yaml:"baseUrl"`
+				TokenEnv string `json:"tokenEnv"  yaml:"tokenEnv"`
+				Source   string `json:"source"    yaml:"source"`
+				Target   string `json:"target"    yaml:"target"`
+				Title    string `json:"title"     yaml:"title"`
+			}
+			return output.Emit(mrSkeleton{
+				BaseURL:  cfg.GitLab.BaseURL,
+				TokenEnv: cfg.GitLab.TokenEnv,
+				Source:   cfg.Git.BranchPrefix + args[0],
+				Target:   target,
+				Title:    title,
+			})
 		}
 		fmt.Printf("GitLab MR skeleton: baseUrl=%s tokenEnv=%s source=%s%s target=%s title=%s\n", cfg.GitLab.BaseURL, cfg.GitLab.TokenEnv, cfg.Git.BranchPrefix, args[0], target, title)
 		return nil

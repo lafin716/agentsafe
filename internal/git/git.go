@@ -98,6 +98,10 @@ func CommitAll(path, message string) error {
 	return err
 }
 func Push(path, branch string) error { _, err := Run(path, "push", "-u", "origin", branch); return err }
+func DeleteLocalBranch(repoPath, branch string) error {
+	_, err := Run(repoPath, "branch", "-D", branch)
+	return err
+}
 func AddWorktree(repoPath, dest, branch, start string, create bool) error {
 	if create {
 		_, err := Run(repoPath, "worktree", "add", dest, "-b", branch, start)

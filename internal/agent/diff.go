@@ -18,11 +18,11 @@ const (
 )
 
 type Change struct {
-	Repo   string
-	Type   ChangeType
-	Path   string
-	Risky  bool
-	Masked bool
+	Repo   string     `json:"repo"   yaml:"repo"`
+	Type   ChangeType `json:"type"   yaml:"type"`
+	Path   string     `json:"path"   yaml:"path"`
+	Risky  bool       `json:"risky"  yaml:"risky"`
+	Masked bool       `json:"masked" yaml:"masked"`
 }
 
 type fileInfo struct {

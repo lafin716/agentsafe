@@ -10,21 +10,22 @@ import (
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/fsutil"
+	"github.com/agentsafe/agentsafe/internal/output"
 )
 
 type PrepareMetadata struct {
-	Feature      string        `json:"feature"`
-	PreparedAt   string        `json:"preparedAt"`
-	Repositories []PrepareRepo `json:"repositories"`
+	Feature      string        `json:"feature"      yaml:"feature"`
+	PreparedAt   string        `json:"preparedAt"   yaml:"preparedAt"`
+	Repositories []PrepareRepo `json:"repositories" yaml:"repositories"`
 }
 type PrepareRepo struct {
-	Name           string            `json:"name"`
-	Source         string            `json:"source"`
-	Agent          string            `json:"agent"`
-	CopiedFiles    int               `json:"copiedFiles"`
-	IgnoredFiles   int               `json:"ignoredFiles"`
-	MaskedFiles    []string          `json:"maskedFiles"`
-	PreparedHashes map[string]string `json:"preparedHashes,omitempty"`
+	Name           string            `json:"name"                     yaml:"name"`
+	Source         string            `json:"source"                   yaml:"source"`
+	Agent          string            `json:"agent"                    yaml:"agent"`
+	CopiedFiles    int               `json:"copiedFiles"              yaml:"copiedFiles"`
+	IgnoredFiles   int               `json:"ignoredFiles"             yaml:"ignoredFiles"`
+	MaskedFiles    []string          `json:"maskedFiles"              yaml:"maskedFiles"`
+	PreparedHashes map[string]string `json:"preparedHashes,omitempty" yaml:"preparedHashes,omitempty"`
 }
 
 func LoadPrepareMetadata(root, featureName string) PrepareMetadata {
@@ -58,13 +59,13 @@ func preparedHashes(pm PrepareMetadata, repoName string) map[string]string {
 	return nil
 }
 
-func Prepare(root string, cfg config.Config, featureName string) error {
+func Init(root string, cfg config.Config, featureName string) error {
 	fm, err := feature.Load(root, featureName)
 	if err != nil {
 		return err
 	}
 	meta := PrepareMetadata{Feature: featureName, PreparedAt: time.Now().Format(time.RFC3339)}
-	fmt.Printf("Agent workspace prepared: agent/%s\n\n", featureName)
+	output.Printf("Agent workspace prepared: agent/%s\n\n", featureName)
 	for _, r := range fm.Repositories {
 		source := filepath.Join(root, r.WorktreePath)
 		target := config.AgentPath(root, featureName, r.Name)
@@ -128,7 +129,7 @@ func Prepare(root string, cfg config.Config, featureName string) error {
 			return err
 		}
 		meta.Repositories = append(meta.Repositories, pr)
-		fmt.Printf("[%s]\ncopied: %d files\nignored: %d files\nmasked: %d files\n\n", pr.Name, pr.CopiedFiles, pr.IgnoredFiles, len(pr.MaskedFiles))
+		output.Printf("[%s]\ncopied: %d files\nignored: %d files\nmasked: %d files\n\n", pr.Name, pr.CopiedFiles, pr.IgnoredFiles, len(pr.MaskedFiles))
 	}
 	b, _ := json.MarshalIndent(meta, "", "  ")
 	if err := os.MkdirAll(filepath.Dir(config.SessionMetaPath(root, featureName)), 0755); err != nil {

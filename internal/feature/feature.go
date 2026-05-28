@@ -9,6 +9,7 @@ import (
 
 	"github.com/agentsafe/agentsafe/internal/config"
 	aggit "github.com/agentsafe/agentsafe/internal/git"
+	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/ui"
 )
 
@@ -23,6 +24,7 @@ type RepoMeta struct {
 	Name         string `json:"name"`
 	WorktreePath string `json:"worktreePath"`
 	Branch       string `json:"branch"`
+	BaseBranch   string `json:"baseBranch"`
 }
 
 func BranchName(cfg config.Config, featureName string) string {
@@ -46,12 +48,9 @@ func Save(root string, m Metadata) error {
 	return os.WriteFile(config.FeatureMetaPath(root, m.Name), b, 0644)
 }
 
-func Create(root string, cfg config.Config, name, base string) error {
+func Create(root string, cfg config.Config, name, base string, force bool) error {
 	if err := config.ValidateFeatureName(name); err != nil {
 		return err
-	}
-	if base == "" {
-		base = cfg.Git.DefaultBaseBranch
 	}
 	branch := BranchName(cfg, name)
 	meta := Metadata{Name: name, Branch: branch, BaseBranch: base, CreatedAt: time.Now().Format(time.RFC3339)}
@@ -59,58 +58,97 @@ func Create(root string, cfg config.Config, name, base string) error {
 		repoPath := config.RepoPath(root, r.Name)
 		dest := config.WorktreePath(root, name, r.Name)
 		rel, _ := filepath.Rel(root, dest)
-		fmt.Printf("[%s] creating worktree %s\n", r.Name, rel)
+		output.Printf("[%s] creating worktree %s\n", r.Name, rel)
 		if _, err := os.Stat(repoPath); err != nil {
-			return fmt.Errorf("repository %s is not cloned at %s; run `agentsafe clone`", r.Name, repoPath)
+			return fmt.Errorf("repository %s is not cloned at %s; run `agentsafe pull`", r.Name, repoPath)
 		}
-		fmt.Printf("  fetch origin (non-interactive, timeout controlled by AGENTSAFE_GIT_TIMEOUT_SECONDS)...\n")
+
+		// determine base for this repo: explicit flag > current branch
+		repoBase := base
+		if repoBase == "" {
+			cur, err := aggit.CurrentBranch(repoPath)
+			if err != nil || cur == "" {
+				return fmt.Errorf("repository %s is in detached HEAD state; use --base to specify a branch", r.Name)
+			}
+			repoBase = cur
+		}
+
+		output.Printf("  fetch origin (non-interactive, timeout controlled by AGENTSAFE_GIT_TIMEOUT_SECONDS)...\n")
 		if err := aggit.Fetch(repoPath); err != nil {
-			fmt.Printf("  warning: fetch failed, continuing with local refs: %v\n", err)
+			output.Printf("  warning: fetch failed, continuing with local refs: %v\n", err)
 		}
-		fmt.Printf("  checkout base branch %s...\n", base)
-		if err := aggit.Checkout(repoPath, base); err != nil {
-			return fmt.Errorf("failed to checkout base branch %s for repository %s: %w", base, r.Name, err)
+		output.Printf("  fast-forward pull %s/%s...\n", "origin", repoBase)
+		if err := aggit.Pull(repoPath, "origin", repoBase); err != nil {
+			output.Printf("  warning: pull failed, continuing with local %s: %v\n", repoBase, err)
 		}
-		fmt.Printf("  fast-forward pull %s/%s...\n", "origin", base)
-		if err := aggit.Pull(repoPath, "origin", base); err != nil {
-			fmt.Printf("  warning: pull failed, continuing with local %s: %v\n", base, err)
-		}
+
 		if _, err := os.Stat(dest); err == nil {
-			fmt.Println("exists, skipping git worktree add")
+			output.Println("  worktree already exists, skipping")
 		} else {
 			if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 				return err
 			}
 			local := aggit.LocalBranchExists(repoPath, branch)
 			remote := aggit.RemoteBranchExists(repoPath, branch)
-			var err error
-			switch {
-			case local:
-				fmt.Printf("  using existing local branch %s\n", branch)
-				err = aggit.AddWorktree(repoPath, dest, branch, "", false)
-			case remote:
-				fmt.Printf("  creating local branch %s from origin/%s\n", branch, branch)
-				err = aggit.AddWorktree(repoPath, dest, branch, "origin/"+branch, true)
-			default:
-				fmt.Printf("  creating new branch %s from %s\n", branch, base)
-				err = aggit.AddWorktree(repoPath, dest, branch, base, true)
+
+			if remote && !local {
+				return fmt.Errorf("remote branch %s already exists; delete it manually and retry", branch)
 			}
-			if err != nil {
+			if local && !force {
+				return fmt.Errorf("branch %s already exists in repository %s; use -f to force recreate", branch, r.Name)
+			}
+			if local && force {
+				output.Printf("  deleting existing local branch %s\n", branch)
+				if err := aggit.DeleteLocalBranch(repoPath, branch); err != nil {
+					return fmt.Errorf("failed to delete branch %s in repository %s: %w", branch, r.Name, err)
+				}
+			}
+
+			output.Printf("  creating new branch %s from %s\n", branch, repoBase)
+			if err := aggit.AddWorktree(repoPath, dest, branch, repoBase, true); err != nil {
 				return fmt.Errorf("failed to create worktree for repository %s: %w", r.Name, err)
 			}
 		}
-		meta.Repositories = append(meta.Repositories, RepoMeta{Name: r.Name, WorktreePath: filepath.ToSlash(rel), Branch: branch})
+		meta.Repositories = append(meta.Repositories, RepoMeta{
+			Name:         r.Name,
+			WorktreePath: filepath.ToSlash(rel),
+			Branch:       branch,
+			BaseBranch:   repoBase,
+		})
 	}
 	return Save(root, meta)
 }
 
-func List(root string) error {
+type FeatureListResult struct {
+	Features []FeatureEntry `json:"features" yaml:"features"`
+}
+
+type FeatureEntry struct {
+	Name       string `json:"name"       yaml:"name"`
+	Branch     string `json:"branch"     yaml:"branch"`
+	BaseBranch string `json:"baseBranch" yaml:"baseBranch"`
+	RepoCount  int    `json:"repoCount"  yaml:"repoCount"`
+	AgentReady bool   `json:"agentReady" yaml:"agentReady"`
+}
+
+type FeatureStatusResult struct {
+	Feature      string       `json:"feature"      yaml:"feature"`
+	Branch       string       `json:"branch"       yaml:"branch"`
+	Repositories []RepoStatus `json:"repositories" yaml:"repositories"`
+}
+
+type RepoStatus struct {
+	Name   string `json:"name"   yaml:"name"`
+	Status string `json:"status" yaml:"status"`
+}
+
+func ListData(root string) (FeatureListResult, error) {
 	dir := filepath.Join(root, config.DirName, "features")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		return FeatureListResult{}, err
 	}
-	rows := [][]string{}
+	var features []FeatureEntry
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
@@ -118,35 +156,68 @@ func List(root string) error {
 		b, _ := os.ReadFile(filepath.Join(dir, e.Name()))
 		var m Metadata
 		if json.Unmarshal(b, &m) == nil {
-			ready := "no"
+			ready := false
 			if st, err := os.Stat(filepath.Join(root, "agent", m.Name)); err == nil && st.IsDir() {
-				ready = "yes"
+				ready = true
 			}
-			rows = append(rows, []string{m.Name, m.Branch, m.BaseBranch, fmt.Sprint(len(m.Repositories)), ready})
+			features = append(features, FeatureEntry{
+				Name:       m.Name,
+				Branch:     m.Branch,
+				BaseBranch: m.BaseBranch,
+				RepoCount:  len(m.Repositories),
+				AgentReady: ready,
+			})
 		}
+	}
+	return FeatureListResult{Features: features}, nil
+}
+
+func List(root string) error {
+	data, err := ListData(root)
+	if err != nil {
+		return err
+	}
+	rows := [][]string{}
+	for _, f := range data.Features {
+		ready := "no"
+		if f.AgentReady {
+			ready = "yes"
+		}
+		rows = append(rows, []string{f.Name, f.Branch, f.BaseBranch, fmt.Sprint(f.RepoCount), ready})
 	}
 	ui.PrintRows([]string{"FEATURE", "BRANCH", "BASE", "REPOS", "AGENT_READY"}, rows)
 	return nil
 }
 
-func Status(root, name string) error {
+func StatusData(root, name string) (FeatureStatusResult, error) {
 	m, err := Load(root, name)
+	if err != nil {
+		return FeatureStatusResult{}, err
+	}
+	result := FeatureStatusResult{Feature: m.Name, Branch: m.Branch}
+	for _, r := range m.Repositories {
+		p := filepath.Join(root, r.WorktreePath)
+		s, err := aggit.StatusShort(p)
+		if err != nil {
+			s = "ERROR: " + err.Error()
+		}
+		result.Repositories = append(result.Repositories, RepoStatus{Name: r.Name, Status: s})
+	}
+	return result, nil
+}
+
+func Status(root, name string) error {
+	data, err := StatusData(root, name)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Feature: %s\nBranch: %s\n\n", m.Name, m.Branch)
-	for _, r := range m.Repositories {
-		p := filepath.Join(root, r.WorktreePath)
+	fmt.Printf("Feature: %s\nBranch: %s\n\n", data.Feature, data.Branch)
+	for _, r := range data.Repositories {
 		fmt.Printf("[%s]\n", r.Name)
-		s, err := aggit.StatusShort(p)
-		if err != nil {
-			fmt.Printf("ERROR: %v\n\n", err)
-			continue
-		}
-		if s == "" {
+		if r.Status == "" {
 			fmt.Println("clean")
 		} else {
-			fmt.Println(s)
+			fmt.Println(r.Status)
 		}
 		fmt.Println()
 	}
@@ -163,15 +234,15 @@ func Commit(root, name, message string) error {
 	}
 	for _, r := range m.Repositories {
 		p := filepath.Join(root, r.WorktreePath)
-		fmt.Printf("[%s] ", r.Name)
+		output.Printf("[%s] ", r.Name)
 		if !aggit.HasChanges(p) {
-			fmt.Println("clean, skipped")
+			output.Println("clean, skipped")
 			continue
 		}
 		if err := aggit.CommitAll(p, message); err != nil {
-			fmt.Printf("failed: %v\n", err)
+			output.Printf("failed: %v\n", err)
 		} else {
-			fmt.Println("committed")
+			output.Println("committed")
 		}
 	}
 	return nil
@@ -184,11 +255,11 @@ func Push(root, name string) error {
 	}
 	for _, r := range m.Repositories {
 		p := filepath.Join(root, r.WorktreePath)
-		fmt.Printf("[%s] pushing %s\n", r.Name, r.Branch)
+		output.Printf("[%s] pushing %s\n", r.Name, r.Branch)
 		if err := aggit.Push(p, r.Branch); err != nil {
-			fmt.Printf("failed: %v\n", err)
+			output.Printf("failed: %v\n", err)
 		} else {
-			fmt.Println("pushed")
+			output.Println("pushed")
 		}
 	}
 	return nil
