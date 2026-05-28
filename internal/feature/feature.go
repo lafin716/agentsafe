@@ -63,9 +63,18 @@ func Create(root string, cfg config.Config, name, base string) error {
 		if _, err := os.Stat(repoPath); err != nil {
 			return fmt.Errorf("repository %s is not cloned at %s; run `agentsafe clone`", r.Name, repoPath)
 		}
-		_ = aggit.Fetch(repoPath)
-		_ = aggit.Checkout(repoPath, base)
-		_ = aggit.Pull(repoPath, "origin", base)
+		fmt.Printf("  fetch origin (non-interactive, timeout controlled by AGENTSAFE_GIT_TIMEOUT_SECONDS)...\n")
+		if err := aggit.Fetch(repoPath); err != nil {
+			fmt.Printf("  warning: fetch failed, continuing with local refs: %v\n", err)
+		}
+		fmt.Printf("  checkout base branch %s...\n", base)
+		if err := aggit.Checkout(repoPath, base); err != nil {
+			return fmt.Errorf("failed to checkout base branch %s for repository %s: %w", base, r.Name, err)
+		}
+		fmt.Printf("  fast-forward pull %s/%s...\n", "origin", base)
+		if err := aggit.Pull(repoPath, "origin", base); err != nil {
+			fmt.Printf("  warning: pull failed, continuing with local %s: %v\n", base, err)
+		}
 		if _, err := os.Stat(dest); err == nil {
 			fmt.Println("exists, skipping git worktree add")
 		} else {
@@ -77,10 +86,13 @@ func Create(root string, cfg config.Config, name, base string) error {
 			var err error
 			switch {
 			case local:
+				fmt.Printf("  using existing local branch %s\n", branch)
 				err = aggit.AddWorktree(repoPath, dest, branch, "", false)
 			case remote:
+				fmt.Printf("  creating local branch %s from origin/%s\n", branch, branch)
 				err = aggit.AddWorktree(repoPath, dest, branch, "origin/"+branch, true)
 			default:
+				fmt.Printf("  creating new branch %s from %s\n", branch, base)
 				err = aggit.AddWorktree(repoPath, dest, branch, base, true)
 			}
 			if err != nil {

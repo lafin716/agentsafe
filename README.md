@@ -56,6 +56,14 @@ agentsafe push coupon-v2
 
 `.git`, `.env`, secret key files, local application configs, build outputs and dependency folders are excluded from agent workspaces. `mask.json` supports `plain` and `regex` replacement rules for text files. Risky and masked files are blocked during sync unless explicit override flags are used.
 
+## Git command timeout
+
+agentsafe runs Git commands non-interactively to avoid hanging on credential prompts. The default Git timeout is 120 seconds and can be changed with:
+
+```powershell
+$env:AGENTSAFE_GIT_TIMEOUT_SECONDS = "300"
+```
+
 ## Windows example
 
 ```powershell
