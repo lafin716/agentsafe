@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"gopkg.in/yaml.v3"
 
 	"github.com/agentsafe/agentsafe/internal/agent"
 	"github.com/agentsafe/agentsafe/internal/config"
@@ -413,141 +414,105 @@ func (a *App) SyncHistoryCounts(name string) (map[string]int, error) {
 
 // ---- Agent security (ignore / mask) ----
 
-// ignoreFilePath returns the absolute path of the workspace-root ignore file,
-// falling back to ".agentignore" when the config field is empty.
-func (a *App) ignoreFilePath(root string, cfg config.Config) string {
-	name := cfg.Agent.IgnoreFileName
-	if name == "" {
-		name = ".agentignore"
+// loadSecurity migrates any legacy split files and returns the unified security
+// config for the workspace root.
+func (a *App) loadSecurity() (string, config.Config, agent.SecurityFile, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", config.Config{}, agent.SecurityFile{}, err
 	}
-	return filepath.Join(root, name)
+	cfg, err := config.Load(root)
+	if err != nil {
+		return "", config.Config{}, agent.SecurityFile{}, err
+	}
+	_ = agent.EnsureSecurityFile(cfg, root)
+	return root, cfg, agent.LoadSecurity(cfg, root), nil
 }
 
-// maskFilePath returns the absolute path of the workspace-root mask file,
-// falling back to "mask.json" when the config field is empty.
-func (a *App) maskFilePath(root string, cfg config.Config) string {
-	name := cfg.Agent.MaskFileName
-	if name == "" {
-		name = "mask.json"
-	}
-	return filepath.Join(root, name)
-}
-
-// GetAgentIgnore returns the contents of the workspace-root ignore file
-// (gitignore-style patterns, one per line). Returns "" when the file is absent.
+// GetAgentIgnore returns the ignore patterns from the unified agentsafe.yaml as
+// newline-separated text (gitignore-style, one per line, "#" comments kept).
 func (a *App) GetAgentIgnore() (string, error) {
-	root, err := a.requireRoot()
+	_, _, sf, err := a.loadSecurity()
 	if err != nil {
 		return "", err
 	}
-	cfg, err := config.Load(root)
-	if err != nil {
-		return "", err
-	}
-	b, err := os.ReadFile(a.ignoreFilePath(root, cfg))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	return string(b), nil
+	return strings.Join(sf.Ignore, "\n"), nil
 }
 
-// SaveAgentIgnore writes the ignore patterns to the workspace-root ignore file.
+// SaveAgentIgnore writes the ignore patterns into the unified agentsafe.yaml,
+// preserving the existing mask rules.
 func (a *App) SaveAgentIgnore(content string) error {
-	root, err := a.requireRoot()
+	root, cfg, sf, err := a.loadSecurity()
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(root)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(a.ignoreFilePath(root, cfg), []byte(content), 0644)
+	sf.Ignore = splitLines(content)
+	return agent.WriteSecurity(cfg, root, sf)
 }
 
-// GetMaskFile returns the parsed masking rules from the workspace-root mask file.
-// Returns an empty rule set when the file is absent.
+// GetMaskFile returns the masking rules from the unified agentsafe.yaml. Returns
+// an empty rule set when none are defined.
 func (a *App) GetMaskFile() (agent.MaskFile, error) {
-	root, err := a.requireRoot()
+	_, _, sf, err := a.loadSecurity()
 	if err != nil {
 		return agent.MaskFile{}, err
 	}
-	cfg, err := config.Load(root)
-	if err != nil {
-		return agent.MaskFile{}, err
+	rules := sf.Mask
+	if rules == nil {
+		rules = []agent.MaskRule{}
 	}
-	m, err := agent.LoadMask(a.maskFilePath(root, cfg))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return agent.MaskFile{Rules: []agent.MaskRule{}}, nil
-		}
-		return agent.MaskFile{}, err
-	}
-	if m.Rules == nil {
-		m.Rules = []agent.MaskRule{}
-	}
-	return m, nil
+	return agent.MaskFile{Rules: rules}, nil
 }
 
-// SaveMaskFile writes the masking rules to the workspace-root mask file as
-// indented JSON.
+// SaveMaskFile writes the masking rules into the unified agentsafe.yaml,
+// preserving the existing ignore patterns.
 func (a *App) SaveMaskFile(m agent.MaskFile) error {
-	root, err := a.requireRoot()
+	root, cfg, sf, err := a.loadSecurity()
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(root)
-	if err != nil {
-		return err
-	}
-	if m.Rules == nil {
-		m.Rules = []agent.MaskRule{}
-	}
-	b, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(a.maskFilePath(root, cfg), b, 0644)
+	sf.Mask = m.Rules
+	return agent.WriteSecurity(cfg, root, sf)
 }
 
-// AgentSecurityBundle is the export/import format bundling a workspace's ignore
-// patterns and masking rules into a single portable file.
+// splitLines splits textarea content into trimmed-of-CR lines, dropping a single
+// trailing empty line so a round-trip through the editor is stable.
+func splitLines(content string) []string {
+	if content == "" {
+		return []string{}
+	}
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// AgentSecurityBundle is the legacy JSON export/import format. It is retained so
+// previously exported bundles can still be imported; new exports use the
+// unified agentsafe.yaml directly.
 type AgentSecurityBundle struct {
 	Version int            `json:"version"`
 	Ignore  string         `json:"ignore"`
 	Mask    agent.MaskFile `json:"mask"`
 }
 
-// ExportAgentSecurity writes the workspace's saved ignore patterns and masking
-// rules to a JSON file chosen via a native save dialog. Returns the saved path,
-// or "" when the dialog is cancelled.
+// ExportAgentSecurity writes the workspace's unified agentsafe.yaml to a file
+// chosen via a native save dialog. Returns the saved path, or "" when the
+// dialog is cancelled.
 func (a *App) ExportAgentSecurity() (string, error) {
-	root, err := a.requireRoot()
+	_, _, sf, err := a.loadSecurity()
 	if err != nil {
 		return "", err
 	}
-	cfg, err := config.Load(root)
-	if err != nil {
-		return "", err
-	}
-	ignore := ""
-	if b, rerr := os.ReadFile(a.ignoreFilePath(root, cfg)); rerr == nil {
-		ignore = string(b)
-	}
-	mask, err := a.GetMaskFile()
-	if err != nil {
-		return "", err
-	}
-	data, err := json.MarshalIndent(AgentSecurityBundle{Version: 1, Ignore: ignore, Mask: mask}, "", "  ")
+	data, err := yaml.Marshal(sf)
 	if err != nil {
 		return "", err
 	}
 	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:           "Export Agent security settings",
-		DefaultFilename: "agentsafe-security.json",
-		Filters:         []runtime.FileFilter{{DisplayName: "JSON", Pattern: "*.json"}},
+		DefaultFilename: "agentsafe.yaml",
+		Filters:         []runtime.FileFilter{{DisplayName: "YAML", Pattern: "*.yaml;*.yml"}},
 	})
 	if err != nil || path == "" {
 		return "", err
@@ -558,16 +523,20 @@ func (a *App) ExportAgentSecurity() (string, error) {
 	return path, nil
 }
 
-// ImportAgentSecurity reads a previously exported bundle (chosen via a native
-// open dialog) and overwrites the workspace's ignore patterns and masking
-// rules. Returns the imported path, or "" when the dialog is cancelled.
+// ImportAgentSecurity reads an exported security file (chosen via a native open
+// dialog) and overwrites the workspace's unified agentsafe.yaml. It accepts the
+// unified YAML format and, for backward compatibility, the legacy JSON bundle.
+// Returns the imported path, or "" when the dialog is cancelled.
 func (a *App) ImportAgentSecurity() (string, error) {
-	if _, err := a.requireRoot(); err != nil {
+	root, cfg, _, err := a.loadSecurity()
+	if err != nil {
 		return "", err
 	}
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:   "Import Agent security settings",
-		Filters: []runtime.FileFilter{{DisplayName: "JSON", Pattern: "*.json"}},
+		Title: "Import Agent security settings",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Security config", Pattern: "*.yaml;*.yml;*.json"},
+		},
 	})
 	if err != nil || path == "" {
 		return "", err
@@ -576,20 +545,30 @@ func (a *App) ImportAgentSecurity() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var bundle AgentSecurityBundle
-	if err := json.Unmarshal(b, &bundle); err != nil {
-		return "", fmt.Errorf("invalid settings file: %w", err)
-	}
-	if bundle.Version < 1 {
-		return "", fmt.Errorf("unrecognized settings file")
-	}
-	if err := a.SaveAgentIgnore(bundle.Ignore); err != nil {
+	sf, err := parseImportedSecurity(b)
+	if err != nil {
 		return "", err
 	}
-	if err := a.SaveMaskFile(bundle.Mask); err != nil {
+	if err := agent.WriteSecurity(cfg, root, sf); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// parseImportedSecurity decodes an imported security config, accepting the
+// unified YAML format and the legacy JSON bundle.
+func parseImportedSecurity(b []byte) (agent.SecurityFile, error) {
+	// Legacy JSON bundle ({"version":1,"ignore":"...","mask":{...}}).
+	var bundle AgentSecurityBundle
+	if err := json.Unmarshal(b, &bundle); err == nil && bundle.Version >= 1 {
+		return agent.SecurityFile{Ignore: splitLines(bundle.Ignore), Mask: bundle.Mask.Rules}, nil
+	}
+	// Unified YAML (also parses unified JSON, since JSON is valid YAML).
+	var sf agent.SecurityFile
+	if err := yaml.Unmarshal(b, &sf); err != nil {
+		return agent.SecurityFile{}, fmt.Errorf("invalid settings file: %w", err)
+	}
+	return sf, nil
 }
 
 // ---- Backups ----

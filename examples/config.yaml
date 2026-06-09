@@ -1,0 +1,30 @@
+version: 1
+workspace:
+  name: my-service
+  root: D:/workspace/my-service
+git:
+  defaultBaseBranch: develop
+  branchPrefix: feature/
+repositories:
+  - name: backend
+    url: https://gitlab.example.com/company/backend.git
+    defaultBranch: develop
+    type: backend
+  - name: admin-front
+    url: https://gitlab.example.com/company/admin-front.git
+    defaultBranch: develop
+    type: frontend
+agent:
+  securityFileName: agentsafe.yaml
+  defaultExclude:
+    - .git
+    - node_modules
+    - build
+    - dist
+    - target
+    - .env
+    - .env.*
+gitlab:
+  baseUrl: https://gitlab.example.com
+  tokenEnv: GITLAB_TOKEN
+  targetBranch: develop

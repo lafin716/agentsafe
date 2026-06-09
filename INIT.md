@@ -35,8 +35,8 @@
 ### 1.2 agentroom 컨셉
 
 * 코딩 에이전트가 읽으면 안 되는 파일이나 문자열을 숨긴다.
-* `.agentignore` 파일을 통해 에이전트용 폴더 복사 시 제외할 파일/폴더 패턴을 정의한다.
-* `mask.json` 파일을 통해 특정 문자열 패턴을 마스킹한다.
+* 통합 보안 설정 파일 `agentsafe.yaml`의 `ignore` 섹션으로 에이전트용 폴더 복사 시 제외할 파일/폴더 패턴을 정의한다.
+* 같은 `agentsafe.yaml`의 `mask` 섹션으로 특정 문자열 패턴을 마스킹한다.
 * 원본 개발 작업공간과 에이전트 작업공간을 분리한다.
 * 에이전트 작업공간에서 수정된 파일을 원본 워크트리로 다시 동기화한다.
 * 동기화 전 변경사항을 diff로 보여주고 사용자의 승인을 받는다.
@@ -135,9 +135,8 @@ agentsafe/
   docs/
     mvp.md
   examples/
+    config.yaml
     agentsafe.yaml
-    .agentignore
-    mask.json
 ```
 
 ## 5. 작업공간 디렉토리 모델
@@ -254,8 +253,7 @@ repositories:
     type: frontend
 
 agent:
-  ignoreFileName: .agentignore
-  maskFileName: mask.json
+  securityFileName: agentsafe.yaml
   defaultExclude:
     - .git
     - node_modules
@@ -276,85 +274,76 @@ gitlab:
   targetBranch: develop
 ```
 
-## 7. `.agentignore` 파일
+## 7. `agentsafe.yaml` 보안 설정 파일
 
-각 저장소 루트 또는 전체 작업공간 루트에 `.agentignore`를 둘 수 있다.
+에이전트 보안 설정은 단일 파일 `agentsafe.yaml`로 통합되어 있다. 각 저장소 루트 또는 전체 작업공간 루트에 둘 수 있으며, `ignore`(복사 제외 패턴)와 `mask`(내용 마스킹 규칙) 두 섹션으로 구성된다.
 
-MVP에서는 다음 우선순위를 적용한다.
+> 하위 호환: 기존 `.agentignore` + `mask.json`이 있고 `agentsafe.yaml`이 없으면 그대로 읽어 동작하며, 작업공간 루트에 한해 자동으로 `agentsafe.yaml`로 마이그레이션한다(기존 파일은 비파괴적으로 유지).
 
-1. 저장소별 `.agentignore`
-2. 루트 `.agentignore`
+### 7.1 `ignore` 섹션
+
+복사 제외 패턴 우선순위:
+
+1. 저장소별 `agentsafe.yaml`의 `ignore`
+2. 루트 `agentsafe.yaml`의 `ignore`
 3. config의 `agent.defaultExclude`
 
-예시:
+gitignore 스타일 패턴을 사용하며 `#`로 시작하는 항목은 주석으로 무시된다.
 
-```gitignore
-# secrets
-.env
-.env.*
-*.pem
-*.key
-*.p12
-*.jks
+### 7.2 `mask` 섹션
 
-# local config
-application-local.yml
-application-secret.yml
-application-dev.yml
+에이전트용 폴더 복사 시 텍스트 파일 내용에서 특정 문자열을 치환한다. 마스킹 규칙은 저장소별 → 루트 순으로 우선 적용된다.
 
-# build outputs
-build/
-dist/
-target/
-node_modules/
+지원 타입:
 
-# IDE
-.idea/
-.vscode/
+* `plain` — 문자열 그대로 치환
+* `regex` — 정규식 치환
+* `keypath`(=`key`) — JSON/YAML 구조 내 점(`.`) 경로의 값 치환
 
-# git
-.git/
+마스킹은 텍스트 파일로 판단되는 파일에만 적용하며, 바이너리 파일은 복사하거나 제외만 하고 내용 마스킹을 하지 않는다.
+
+### 7.3 예시 (`agentsafe.yaml`)
+
+```yaml
+# ignore: 에이전트 사본에서 제외할 파일/폴더 (gitignore 스타일, "#" 주석 허용)
+# mask:   복사된 텍스트 파일에 적용할 마스킹 규칙 (plain | regex | keypath)
+
+ignore:
+  # secrets
+  - .env
+  - .env.*
+  - "*.pem"
+  - "*.key"
+  - "*.p12"
+  - "*.jks"
+  # local config
+  - application-local.yml
+  - application-secret.yml
+  - application-dev.yml
+  # build outputs
+  - build/
+  - dist/
+  - target/
+  - node_modules/
+  # IDE / git
+  - .idea/
+  - .vscode/
+  - .git/
+
+mask:
+  - name: AWS Access Key
+    type: regex
+    pattern: AKIA[0-9A-Z]{16}
+    replacement: __MASKED_AWS_ACCESS_KEY__
+  - name: JWT Token
+    type: regex
+    pattern: eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+
+    replacement: __MASKED_JWT__
+  - name: Internal Domain
+    type: plain
+    pattern: internal.company.local
+    replacement: __MASKED_INTERNAL_DOMAIN__
 ```
-
-## 8. `mask.json` 파일
-
-에이전트용 폴더 복사 시 특정 문자열을 치환한다.
-
-예시:
-
-```json
-{
-  "rules": [
-    {
-      "name": "AWS Access Key",
-      "type": "regex",
-      "pattern": "AKIA[0-9A-Z]{16}",
-      "replacement": "__MASKED_AWS_ACCESS_KEY__"
-    },
-    {
-      "name": "JWT Token",
-      "type": "regex",
-      "pattern": "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+",
-      "replacement": "__MASKED_JWT__"
-    },
-    {
-      "name": "Internal Domain",
-      "type": "plain",
-      "pattern": "internal.company.local",
-      "replacement": "__MASKED_INTERNAL_DOMAIN__"
-    }
-  ]
-}
-```
-
-MVP에서는 다음 타입을 지원한다.
-
-* `plain`
-* `regex`
-
-마스킹 대상 파일은 텍스트 파일로 판단되는 파일에만 적용한다.
-
-바이너리 파일은 복사하거나 제외만 하고, 내용 마스킹을 하지 않는다.
 
 ## 9. 주요 명령어
 
@@ -371,7 +360,7 @@ agentsafe init --name my-service
 1. `.agentsafe/` 디렉토리 생성
 2. `.agentsafe/config.yaml` 기본 생성
 3. `repos/`, `worktrees/`, `agent/` 디렉토리 생성
-4. 예시 `.agentignore`, `mask.json` 생성 여부를 묻는다
+4. 예시 `agentsafe.yaml`(통합 보안 설정) 생성 여부를 묻는다
 
 옵션:
 
@@ -558,8 +547,8 @@ agentsafe agent prepare coupon-v2
 1. `worktrees/{featureName}/{repoName}`을 읽는다.
 2. `agent/{featureName}/{repoName}`을 새로 만든다.
 3. 기존 agent 폴더가 있으면 백업 또는 삭제 여부를 묻는다.
-4. `.agentignore`와 config exclude 규칙을 적용해 민감 파일을 제외한다.
-5. `mask.json` 규칙을 적용해 텍스트 파일 내용을 마스킹한다.
+4. `agentsafe.yaml`의 `ignore`와 config exclude 규칙을 적용해 민감 파일을 제외한다.
+5. `agentsafe.yaml`의 `mask` 규칙을 적용해 텍스트 파일 내용을 마스킹한다.
 6. 복사 결과 요약을 출력한다.
 
 출력 예시:
@@ -682,8 +671,7 @@ agentsafe agent sync coupon-v2
 * `*.jks`
 * `application-secret.yml`
 * `application-local.yml`
-* `mask.json`
-* `.agentignore`
+* `agentsafe.yaml`
 
 기본 정책:
 
@@ -969,7 +957,7 @@ credentials.yml
 
 ### 12.4 위험 파일 sync 차단
 
-`.agentignore`, `mask.json`, `.env`, secret 계열 파일은 기본적으로 sync하지 않는다.
+`agentsafe.yaml`, `.env`, secret 계열 파일은 기본적으로 sync하지 않는다.
 
 ### 12.5 작업 전 diff 필수
 
@@ -1288,7 +1276,7 @@ agentsafe agent prepare login-v2
 
 * `agent/login-v2` 폴더 생성
 * `.git`, `.env`, `node_modules` 제외
-* mask.json 규칙 적용
+* agentsafe.yaml의 mask 규칙 적용
 
 ### 20.5 에이전트 변경 sync
 
@@ -1324,12 +1312,11 @@ agentsafe agent sync login-v2
 1. 전체 프로젝트 코드
 2. `README.md`
 3. `docs/mvp.md`
-4. `examples/agentsafe.yaml`
-5. `examples/.agentignore`
-6. `examples/mask.json`
-7. 기본 사용 예시
-8. 주요 명령어 help 문구
-9. Windows 기준 실행 예시
+4. `examples/config.yaml`
+5. `examples/agentsafe.yaml`
+6. 기본 사용 예시
+7. 주요 명령어 help 문구
+8. Windows 기준 실행 예시
 
 ## 23. README에 포함할 내용
 

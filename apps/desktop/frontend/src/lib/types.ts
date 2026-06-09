@@ -28,8 +28,10 @@ export interface Repository {
 }
 
 export interface AgentConfig {
-  IgnoreFileName: string;
-  MaskFileName: string;
+  SecurityFileName: string;
+  // Legacy split-file names, retained for backward compatibility.
+  IgnoreFileName?: string;
+  MaskFileName?: string;
   DefaultExclude: string[] | null;
 }
 

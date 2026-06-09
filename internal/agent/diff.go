@@ -133,5 +133,5 @@ func PrintChanges(feature string, byRepo map[string][]Change) {
 }
 
 func IsRisky(rel string) bool {
-	return NewIgnoreMatcher([]string{".env", ".env.*", "*.pem", "*.key", "*.p12", "*.jks", "application-secret.yml", "application-local.yml", "mask.json", ".agentignore", "secrets.yml", "credentials.yml"}).Match(rel, false)
+	return NewIgnoreMatcher([]string{".env", ".env.*", "*.pem", "*.key", "*.p12", "*.jks", "application-secret.yml", "application-local.yml", "agentsafe.yaml", "mask.json", ".agentignore", "secrets.yml", "credentials.yml"}).Match(rel, false)
 }

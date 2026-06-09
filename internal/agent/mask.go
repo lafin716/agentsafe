@@ -15,10 +15,10 @@ type MaskFile struct {
 	Rules []MaskRule `json:"rules"`
 }
 type MaskRule struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Pattern     string `json:"pattern"`
-	Replacement string `json:"replacement"`
+	Name        string `json:"name"        yaml:"name"`
+	Type        string `json:"type"        yaml:"type"`
+	Pattern     string `json:"pattern"     yaml:"pattern"`
+	Replacement string `json:"replacement" yaml:"replacement"`
 }
 
 func LoadMask(path string) (MaskFile, error) {
@@ -28,15 +28,6 @@ func LoadMask(path string) (MaskFile, error) {
 	}
 	var m MaskFile
 	return m, json.Unmarshal(b, &m)
-}
-
-func LoadFirstMask(paths ...string) MaskFile {
-	for _, p := range paths {
-		if m, err := LoadMask(p); err == nil {
-			return m
-		}
-	}
-	return MaskFile{}
 }
 
 func (m MaskFile) Apply(s string) (string, bool) {

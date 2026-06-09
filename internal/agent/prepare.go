@@ -73,16 +73,26 @@ func Init(root string, cfg config.Config, featureName string, opt PrepareOptions
 		return err
 	}
 	meta := PrepareMetadata{Feature: featureName, PreparedAt: time.Now().Format(time.RFC3339)}
+	// Migrate any legacy .agentignore/mask.json at the workspace root into the
+	// unified agentsafe.yaml before loading security config.
+	_ = EnsureSecurityFile(cfg, root)
+	secRoot := LoadSecurity(cfg, root)
 	output.Printf("Agent workspace prepared: agent/%s\n\n", featureName)
 	for _, r := range fm.Repositories {
 		source := filepath.Join(root, r.WorktreePath)
 		target := config.AgentPath(root, featureName, r.Name)
 		resetTarget(target, opt.Backup)
+		secSource := LoadSecurity(cfg, source)
 		pats := []string{".git/"}
 		pats = append(pats, cfg.Agent.DefaultExclude...)
-		pats = append(pats, LoadIgnoreFiles(filepath.Join(root, cfg.Agent.IgnoreFileName), filepath.Join(source, cfg.Agent.IgnoreFileName))...)
+		pats = append(pats, secRoot.Ignore...)
+		pats = append(pats, secSource.Ignore...)
 		matcher := NewIgnoreMatcher(pats)
-		mask := LoadFirstMask(filepath.Join(source, cfg.Agent.MaskFileName), filepath.Join(root, cfg.Agent.MaskFileName))
+		// Mask rules: repo-source takes priority, falling back to workspace root.
+		mask := MaskFile{Rules: secSource.Mask}
+		if len(mask.Rules) == 0 {
+			mask = MaskFile{Rules: secRoot.Mask}
+		}
 		pr := PrepareRepo{Name: r.Name, Source: r.WorktreePath, Agent: filepath.ToSlash(filepath.Join("agent", featureName, r.Name)), PreparedHashes: map[string]string{}}
 		err := filepath.WalkDir(source, func(path string, d os.DirEntry, err error) error {
 			if err != nil {

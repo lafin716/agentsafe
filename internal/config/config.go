@@ -41,8 +41,13 @@ type Repository struct {
 	TestCommand   string `yaml:"testCommand,omitempty"`
 }
 type AgentConfig struct {
-	IgnoreFileName string   `yaml:"ignoreFileName"`
-	MaskFileName   string   `yaml:"maskFileName"`
+	// SecurityFileName is the unified ignore+mask config (agentsafe.yaml).
+	SecurityFileName string `yaml:"securityFileName"`
+	// IgnoreFileName and MaskFileName are the legacy split-file names, retained
+	// for backward-compatible reading and one-time migration into the unified
+	// SecurityFileName. New workspaces no longer create them.
+	IgnoreFileName string   `yaml:"ignoreFileName,omitempty"`
+	MaskFileName   string   `yaml:"maskFileName,omitempty"`
 	DefaultExclude []string `yaml:"defaultExclude"`
 }
 type GitLabConfig struct {
@@ -66,9 +71,8 @@ func Default(root, name string) Config {
 		Git:          GitConfig{DefaultBaseBranch: "develop", BranchPrefix: "feature/"},
 		Repositories: []Repository{},
 		Agent: AgentConfig{
-			IgnoreFileName: ".agentignore",
-			MaskFileName:   "mask.json",
-			DefaultExclude: []string{".git", "node_modules", "build", "dist", "target", ".gradle", ".idea", ".vscode", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.jks", "application-local.yml", "application-secret.yml", "application-dev.yml", "secrets.yml", "credentials.yml"},
+			SecurityFileName: "agentsafe.yaml",
+			DefaultExclude:   []string{".git", "node_modules", "build", "dist", "target", ".gradle", ".idea", ".vscode", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.jks", "application-local.yml", "application-secret.yml", "application-dev.yml", "secrets.yml", "credentials.yml"},
 		},
 		GitLab: GitLabConfig{BaseURL: "https://gitlab.example.com", TokenEnv: "GITLAB_TOKEN", TargetBranch: "develop"},
 		GitHub: GitHubConfig{BaseURL: "https://github.com", TokenEnv: "GITHUB_TOKEN", TargetBranch: "main"},
@@ -89,8 +93,7 @@ func InitWorkspace(root, name string) (Config, error) {
 	if err := Save(abs, cfg); err != nil {
 		return Config{}, err
 	}
-	writeIfMissing(filepath.Join(abs, ".agentignore"), SampleAgentIgnore)
-	writeIfMissing(filepath.Join(abs, "mask.json"), SampleMaskJSON)
+	writeIfMissing(filepath.Join(abs, "agentsafe.yaml"), SampleSecurityYAML)
 	return cfg, nil
 }
 
@@ -218,25 +221,48 @@ func RemoveRepository(root string, cfg Config, name string) (Config, error) {
 	return cfg, Save(root, cfg)
 }
 
-const SampleAgentIgnore = `# secrets
-.env
-.env.*
-*.pem
-*.key
-*.p12
-*.jks
-application-local.yml
-application-secret.yml
-application-dev.yml
-secrets.yml
-credentials.yml
-build/
-dist/
-target/
-node_modules/
-.idea/
-.vscode/
-.git/
-`
+// SampleSecurityYAML is the unified agent security config written to new
+// workspaces. It merges the former .agentignore patterns and mask.json rules
+// into a single agentsafe.yaml document.
+const SampleSecurityYAML = `# Agent security config (agentsafe.yaml)
+# ignore: files/folders excluded from the agent copy (gitignore-style, "#" comments allowed)
+# mask:   content masking rules applied to copied text files (type: plain | regex | keypath)
 
-const SampleMaskJSON = `{"rules":[{"name":"AWS Access Key","type":"regex","pattern":"AKIA[0-9A-Z]{16}","replacement":"__MASKED_AWS_ACCESS_KEY__"},{"name":"JWT Token","type":"regex","pattern":"eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+","replacement":"__MASKED_JWT__"},{"name":"Internal Domain","type":"plain","pattern":"internal.company.local","replacement":"__MASKED_INTERNAL_DOMAIN__"},{"name":"DB Password","type":"keypath","pattern":"spring.datasource.password","replacement":"__MASKED__"}]}`
+ignore:
+  - .env
+  - .env.*
+  - "*.pem"
+  - "*.key"
+  - "*.p12"
+  - "*.jks"
+  - application-local.yml
+  - application-secret.yml
+  - application-dev.yml
+  - secrets.yml
+  - credentials.yml
+  - build/
+  - dist/
+  - target/
+  - node_modules/
+  - .idea/
+  - .vscode/
+  - .git/
+
+mask:
+  - name: AWS Access Key
+    type: regex
+    pattern: AKIA[0-9A-Z]{16}
+    replacement: __MASKED_AWS_ACCESS_KEY__
+  - name: JWT Token
+    type: regex
+    pattern: eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+
+    replacement: __MASKED_JWT__
+  - name: Internal Domain
+    type: plain
+    pattern: internal.company.local
+    replacement: __MASKED_INTERNAL_DOMAIN__
+  - name: DB Password
+    type: keypath
+    pattern: spring.datasource.password
+    replacement: __MASKED__
+`

@@ -165,7 +165,7 @@ const en: Dict = {
   "agentsec.noWorkspace": "Open a workspace to edit agent security settings.",
   "agentsec.transferTitle": "Export / Import",
   "agentsec.transferDesc":
-    "Save or load exclusion and masking settings as a single JSON file.",
+    "Save or load exclusion and masking settings as a single agentsafe.yaml file.",
   "agentsec.export": "Export",
   "agentsec.import": "Import",
   "agentsec.importConfirm":
@@ -407,7 +407,7 @@ const ko: Dict = {
   // agent security
   "agentsec.noWorkspace": "Agent 보안 설정을 편집하려면 워크스페이스를 여세요.",
   "agentsec.transferTitle": "내보내기 / 가져오기",
-  "agentsec.transferDesc": "제외·마스킹 설정을 JSON 파일 하나로 저장하거나 불러옵니다.",
+  "agentsec.transferDesc": "제외·마스킹 설정을 agentsafe.yaml 파일 하나로 저장하거나 불러옵니다.",
   "agentsec.export": "내보내기",
   "agentsec.import": "가져오기",
   "agentsec.importConfirm": "가져오면 현재 제외·마스킹 설정을 덮어씁니다. 계속할까요?",

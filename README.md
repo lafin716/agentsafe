@@ -54,7 +54,7 @@ agentsafe push coupon-v2
 
 ## Security defaults
 
-`.git`, `.env`, secret key files, local application configs, build outputs and dependency folders are excluded from agent workspaces. `mask.json` supports `plain` and `regex` replacement rules for text files. Risky and masked files are blocked during sync unless explicit override flags are used.
+Agent security is configured by a single `agentsafe.yaml` file at the workspace root (and optionally per repository). It has two sections: `ignore` (gitignore-style patterns for files excluded from agent workspaces — `.git`, `.env`, secret key files, local application configs, build outputs and dependency folders) and `mask` (content masking rules for text files, supporting `plain`, `regex`, and `keypath` types). Risky and masked files are blocked during sync unless explicit override flags are used. Legacy `.agentignore` + `mask.json` files are still read and are automatically migrated to `agentsafe.yaml`.
 
 ## Git command timeout
 
