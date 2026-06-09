@@ -132,6 +132,21 @@ export interface BackupEntry {
   files: number;
 }
 
+export interface SyncChange {
+  path: string;
+  type: string; // ADDED | MODIFIED | DELETED
+}
+
+export interface SyncHistoryEntry {
+  id: string;
+  feature: string;
+  repo: string;
+  syncedAt: string;
+  changeCount: number;
+  changes: SyncChange[] | null;
+  canRollback: boolean;
+}
+
 export type ChangeType = "added" | "modified" | "deleted" | string;
 
 export interface Change {

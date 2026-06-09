@@ -6,6 +6,7 @@ import {
   ExternalLink,
   GitCommit,
   GitMerge,
+  History,
   RefreshCw,
   Terminal,
   Trash2,
@@ -37,11 +38,12 @@ import { useI18n } from "@/i18n/I18nProvider";
 interface Props {
   name: string;
   onBack: () => void;
+  onViewHistory: (feature: string) => void;
 }
 
 type Tab = "status" | "agent" | "deliver";
 
-export function FeatureDetailPage({ name, onBack }: Props) {
+export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   const { notify } = useToast();
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("status");
@@ -49,6 +51,8 @@ export function FeatureDetailPage({ name, onBack }: Props) {
 
   const [status, setStatus] = useState<FeatureStatusResult | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
+  // Sync-history stack depth per repository, for the count badges.
+  const [histCounts, setHistCounts] = useState<Record<string, number>>({});
   // Local override of prepared state. null = no user action yet (fall back to
   // backend status); true/false once the user prepares or deletes. Keeping it
   // separate from status avoids a status reload clobbering the value right
@@ -105,9 +109,18 @@ export function FeatureDetailPage({ name, onBack }: Props) {
     }
   }, [name, notify]);
 
+  const loadCounts = useCallback(async () => {
+    try {
+      setHistCounts(await api.SyncHistoryCounts(name));
+    } catch {
+      /* badges are best-effort */
+    }
+  }, [name]);
+
   useEffect(() => {
     loadStatus();
-  }, [loadStatus]);
+    loadCounts();
+  }, [loadStatus, loadCounts]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -143,7 +156,7 @@ export function FeatureDetailPage({ name, onBack }: Props) {
         dryRun ? t("toast.dryRunCompleted") : t("toast.syncCompleted"),
         "success"
       );
-      await Promise.all([loadDiff(), loadStatus()]);
+      await Promise.all([loadDiff(), loadStatus(), loadCounts()]);
     });
 
   const del = () =>
@@ -267,6 +280,13 @@ export function FeatureDetailPage({ name, onBack }: Props) {
                   {r.status.trim() === "" && (
                     <Badge variant="outline">{t("feature.clean")}</Badge>
                   )}
+                  {(histCounts[r.name] ?? 0) > 0 && (
+                    <Badge variant="secondary">
+                      {t("feature.syncHistoryBadge", {
+                        count: histCounts[r.name],
+                      })}
+                    </Badge>
+                  )}
                 </div>
                 {r.status.trim() !== "" && (
                   <pre className="overflow-auto rounded-md border bg-muted/40 p-3 text-xs">
@@ -323,6 +343,13 @@ export function FeatureDetailPage({ name, onBack }: Props) {
                   >
                     <AppWindow className="size-4" /> {t("feature.selectProgram")}
                   </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => onViewHistory(name)}
+                    disabled={busy}
+                  >
+                    <History className="size-4" /> {t("feature.viewHistory")}
+                  </Button>
                   <Button variant="destructive" onClick={del} disabled={busy}>
                     <Trash2 className="size-4" /> {t("common.delete")}
                   </Button>
@@ -356,7 +383,16 @@ export function FeatureDetailPage({ name, onBack }: Props) {
             <CardContent className="space-y-4">
               {(diff?.repositories ?? []).map((r) => (
                 <div key={r.name}>
-                  <div className="mb-1 font-medium">{r.name}</div>
+                  <div className="mb-1 flex items-center gap-2 font-medium">
+                    {r.name}
+                    {(histCounts[r.name] ?? 0) > 0 && (
+                      <Badge variant="secondary">
+                        {t("feature.syncHistoryBadge", {
+                          count: histCounts[r.name],
+                        })}
+                      </Badge>
+                    )}
+                  </div>
                   {(r.changes ?? []).length === 0 ? (
                     <p className="text-sm text-muted-foreground">{t("feature.noChanges")}</p>
                   ) : (

@@ -16,12 +16,14 @@ const en: Dict = {
   "nav.features": "Worktrees",
   "nav.agentSecurity": "Agent security",
   "nav.backups": "Backups",
+  "nav.history": "Sync history",
   "nav.settings": "Settings",
   "header.workspace": "Workspace",
   "header.features": "Worktrees",
   "header.feature": "Worktree · {name}",
   "header.agentSecurity": "Agent security",
   "header.backups": "Backups",
+  "header.history": "Sync history",
   "header.settings": "Settings",
 
   // common
@@ -104,6 +106,8 @@ const en: Dict = {
   "feature.agentDesc": "Prepare a masked copy for the agent, review the diff, then sync approved changes back to the worktrees.",
   "feature.prepare": "Prepare",
   "feature.regenerate": "Regenerate",
+  "feature.viewHistory": "Sync history",
+  "feature.syncHistoryBadge": "{count} synced",
   "feature.backupOnPrepare": "Back up existing on re-prepare",
   "feature.refreshDiff": "Refresh diff",
   "feature.terminal": "Terminal",
@@ -204,6 +208,18 @@ const en: Dict = {
   "backups.deleteAllConfirm":
     "Delete all backups? This cannot be undone.",
   "backups.colFiles": "{count} files",
+
+  // sync history
+  "history.title": "Sync history",
+  "history.desc":
+    "Each sync (agent → worktree) is recorded as a stack. Only the most recent sync per repository can be rolled back.",
+  "history.empty": "No sync history.",
+  "history.noWorkspace": "Open a workspace to view sync history.",
+  "history.rollback": "Roll back",
+  "history.rollbackConfirm":
+    "Roll back the latest sync of \"{repo}\"? The worktree is restored to its pre-sync state.",
+  "history.locked": "Locked",
+  "history.colChanges": "{count} changes",
   "backups.restoreConfirm":
     "Restore this backup of \"{repo}\"? The current agent copy will be overwritten.",
   "backups.deleteConfirm": "Delete this backup of \"{repo}\"?",
@@ -234,6 +250,7 @@ const en: Dict = {
   "toast.backupRestored": "Backup restored",
   "toast.backupDeleted": "Backup deleted",
   "toast.backupsAllDeleted": "{count} backups deleted",
+  "toast.rolledBack": "Rolled back",
 };
 
 const ko: Dict = {
@@ -242,12 +259,14 @@ const ko: Dict = {
   "nav.features": "워크트리",
   "nav.agentSecurity": "Agent 보안",
   "nav.backups": "백업 관리",
+  "nav.history": "동기화 이력",
   "nav.settings": "설정",
   "header.workspace": "워크스페이스",
   "header.features": "워크트리",
   "header.feature": "워크트리 · {name}",
   "header.agentSecurity": "Agent 보안",
   "header.backups": "백업 관리",
+  "header.history": "동기화 이력",
   "header.settings": "설정",
 
   // common
@@ -330,6 +349,8 @@ const ko: Dict = {
   "feature.agentDesc": "에이전트용 마스킹된 사본을 준비하고, 변경 내역을 검토한 뒤 승인된 변경을 worktree로 동기화합니다.",
   "feature.prepare": "준비",
   "feature.regenerate": "재생성",
+  "feature.viewHistory": "동기화 이력",
+  "feature.syncHistoryBadge": "동기화 {count}",
   "feature.backupOnPrepare": "재준비 시 기존본 백업",
   "feature.refreshDiff": "변경 새로고침",
   "feature.terminal": "터미널",
@@ -426,6 +447,18 @@ const ko: Dict = {
   "backups.deleteAll": "전체 삭제",
   "backups.deleteAllConfirm": "모든 백업을 삭제할까요? 되돌릴 수 없습니다.",
   "backups.colFiles": "파일 {count}개",
+
+  // sync history
+  "history.title": "동기화 이력",
+  "history.desc":
+    "각 동기화(에이전트 → 워크트리)가 스택으로 기록됩니다. 저장소별로 가장 최근 동기화만 되돌릴 수 있습니다.",
+  "history.empty": "동기화 이력이 없습니다.",
+  "history.noWorkspace": "동기화 이력을 보려면 워크스페이스를 여세요.",
+  "history.rollback": "되돌리기",
+  "history.rollbackConfirm":
+    "\"{repo}\"의 최근 동기화를 되돌릴까요? 워크트리가 동기화 직전 상태로 복원됩니다.",
+  "history.locked": "잠김",
+  "history.colChanges": "변경 {count}건",
   "backups.restoreConfirm":
     "\"{repo}\"의 이 백업을 복원할까요? 현재 에이전트 사본을 덮어씁니다.",
   "backups.deleteConfirm": "\"{repo}\"의 이 백업을 삭제할까요?",
@@ -456,6 +489,7 @@ const ko: Dict = {
   "toast.backupRestored": "백업 복원됨",
   "toast.backupDeleted": "백업 삭제됨",
   "toast.backupsAllDeleted": "백업 {count}개 삭제됨",
+  "toast.rolledBack": "되돌렸습니다",
 };
 
 export const messages: Record<Locale, Dict> = { en, ko };

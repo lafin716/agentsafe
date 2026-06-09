@@ -93,9 +93,14 @@ func Sync(root string, cfg config.Config, featureName string, opt Options) error
 		if opt.Repo != "" && r.Name != opt.Repo {
 			continue
 		}
-		for _, c := range byRepo[r.Name] {
+		changes := byRepo[r.Name]
+		dstRoot := filepath.Join(root, r.WorktreePath)
+		// Snapshot the worktree before applying so the sync can be rolled back.
+		if err := RecordSync(root, featureName, r.Name, dstRoot, changes); err != nil {
+			return err
+		}
+		for _, c := range changes {
 			src := filepath.Join(config.AgentPath(root, featureName, r.Name), filepath.FromSlash(c.Path))
-			dstRoot := filepath.Join(root, r.WorktreePath)
 			dst := filepath.Join(dstRoot, filepath.FromSlash(c.Path))
 			if err := fsutil.EnsureInside(dstRoot, dst); err != nil {
 				return err

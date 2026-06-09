@@ -3,6 +3,7 @@ import {
   Archive,
   FolderGit2,
   GitBranch,
+  History,
   LayoutGrid,
   RefreshCw,
   Settings,
@@ -21,6 +22,7 @@ import { FeatureDetailPage } from "@/pages/FeatureDetailPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { AgentSecurityPage } from "@/pages/AgentSecurityPage";
 import { BackupsPage } from "@/pages/BackupsPage";
+import { HistoryPage } from "@/pages/HistoryPage";
 
 type View =
   | { kind: "workspace" }
@@ -28,6 +30,7 @@ type View =
   | { kind: "feature"; name: string }
   | { kind: "agentsec" }
   | { kind: "backups" }
+  | { kind: "history"; feature?: string }
   | { kind: "settings" };
 
 export default function App() {
@@ -82,6 +85,7 @@ export default function App() {
       icon: ShieldCheck,
     },
     { id: "backups" as const, label: t("nav.backups"), icon: Archive },
+    { id: "history" as const, label: t("nav.history"), icon: History },
     { id: "settings" as const, label: t("nav.settings"), icon: Settings },
   ];
 
@@ -107,7 +111,8 @@ export default function App() {
             const disabled =
               (item.id === "features" ||
                 item.id === "agentsec" ||
-                item.id === "backups") &&
+                item.id === "backups" ||
+                item.id === "history") &&
               !opened;
             return (
               <button
@@ -138,6 +143,7 @@ export default function App() {
             {view.kind === "feature" && t("header.feature", { name: view.name })}
             {view.kind === "agentsec" && t("header.agentSecurity")}
             {view.kind === "backups" && t("header.backups")}
+            {view.kind === "history" && t("header.history")}
             {view.kind === "settings" && t("header.settings")}
           </h1>
           {opened && (
@@ -174,9 +180,16 @@ export default function App() {
             <FeatureDetailPage
               name={view.name}
               onBack={() => setView({ kind: "features" })}
+              onViewHistory={(feature) => setView({ kind: "history", feature })}
             />
           )}
           {view.kind === "agentsec" && <AgentSecurityPage config={config} />}
+          {view.kind === "history" && (
+            <HistoryPage
+              config={config}
+              feature={view.kind === "history" ? view.feature : undefined}
+            />
+          )}
           {view.kind === "backups" && <BackupsPage config={config} />}
           {view.kind === "settings" && (
             <SettingsPage config={config} onChanged={refreshConfig} />

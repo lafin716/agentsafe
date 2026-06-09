@@ -324,6 +324,93 @@ func (a *App) AgentDelete(name string) error {
 	return agent.Delete(root, name)
 }
 
+// ---- Sync history ----
+
+// SyncHistoryEntry is one sync record for the frontend, with a CanRollback flag
+// set only on the newest entry of each (feature, repo) stack.
+type SyncHistoryEntry struct {
+	ID          string             `json:"id"`
+	Feature     string             `json:"feature"`
+	Repo        string             `json:"repo"`
+	SyncedAt    string             `json:"syncedAt"`
+	ChangeCount int                `json:"changeCount"`
+	Changes     []agent.SyncChange `json:"changes"`
+	CanRollback bool               `json:"canRollback"`
+}
+
+// AllSyncHistory returns every sync record across features/repos, newest first.
+// Only the latest entry per (feature, repo) is rollbackable (LIFO stack).
+func (a *App) AllSyncHistory() ([]SyncHistoryEntry, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	recs, err := agent.ListAllHistory(root)
+	if err != nil {
+		return nil, err
+	}
+	topSeen := map[string]bool{}
+	out := []SyncHistoryEntry{}
+	for _, r := range recs {
+		key := r.Feature + "\x00" + r.Repo
+		changes := r.Changes
+		if changes == nil {
+			changes = []agent.SyncChange{}
+		}
+		entry := SyncHistoryEntry{
+			ID:          r.ID,
+			Feature:     r.Feature,
+			Repo:        r.Repo,
+			SyncedAt:    r.SyncedAt,
+			ChangeCount: len(changes),
+			Changes:     changes,
+		}
+		if !topSeen[key] {
+			entry.CanRollback = true
+			topSeen[key] = true
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+// RollbackSync undoes the most recent sync for a repository, restoring its
+// worktree to the pre-sync state.
+func (a *App) RollbackSync(name, repo, id string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	meta, err := feature.Load(root, name)
+	if err != nil {
+		return err
+	}
+	for _, r := range meta.Repositories {
+		if r.Name == repo {
+			return agent.Rollback(root, name, repo, id, filepath.Join(root, r.WorktreePath))
+		}
+	}
+	return fmt.Errorf("repository %q not found in feature %q", repo, name)
+}
+
+// SyncHistoryCounts returns the sync-history stack depth per repository for a
+// feature, used for the count badges.
+func (a *App) SyncHistoryCounts(name string) (map[string]int, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	meta, err := feature.Load(root, name)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int{}
+	for _, r := range meta.Repositories {
+		out[r.Name] = agent.HistoryDepth(root, name, r.Name)
+	}
+	return out, nil
+}
+
 // ---- Agent security (ignore / mask) ----
 
 // ignoreFilePath returns the absolute path of the workspace-root ignore file,

@@ -13,3 +13,16 @@ func FeatureMetaPath(root, feature string) string {
 func SessionMetaPath(root, feature string) string {
 	return filepath.Join(root, DirName, "sessions", feature+".json")
 }
+
+// HistoryDir is the root of the sync-history store.
+func HistoryDir(root string) string { return filepath.Join(root, DirName, "history") }
+
+// HistoryRepoDir holds the per-repository stack of sync records.
+func HistoryRepoDir(root, feature, repo string) string {
+	return filepath.Join(HistoryDir(root), feature, repo)
+}
+
+// HistoryEntryDir is one sync record (manifest.json + backup/).
+func HistoryEntryDir(root, feature, repo, id string) string {
+	return filepath.Join(HistoryRepoDir(root, feature, repo), id)
+}

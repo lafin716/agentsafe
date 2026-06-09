@@ -4,6 +4,7 @@ import type {
   BackupEntry,
   Config,
   DiffResult,
+  SyncHistoryEntry,
   FeatureListResult,
   FeatureMetadata,
   FeatureStatusResult,
@@ -45,6 +46,9 @@ type AppBindings = {
   AgentDiff(name: string, repoFilter: string): Promise<DiffResult>;
   AgentSync(name: string, opt: SyncOptions): Promise<void>;
   AgentDelete(name: string): Promise<void>;
+  AllSyncHistory(): Promise<SyncHistoryEntry[]>;
+  RollbackSync(name: string, repo: string, id: string): Promise<void>;
+  SyncHistoryCounts(name: string): Promise<Record<string, number>>;
   GetAgentIgnore(): Promise<string>;
   SaveAgentIgnore(content: string): Promise<void>;
   GetMaskFile(): Promise<MaskFile>;
