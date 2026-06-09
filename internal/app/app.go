@@ -209,12 +209,13 @@ func statusCmd() *cobra.Command {
 
 func agentCmd() *cobra.Command {
 	c := &cobra.Command{Use: "agent", Short: "Manage sanitized agent workspaces"}
+	var noBackup bool
 	agentInit := &cobra.Command{Use: "init FEATURE", Short: "Create a sanitized agent workspace", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, cfg, err := cwdConfig()
 		if err != nil {
 			return err
 		}
-		if err := agent.Init(root, cfg, args[0]); err != nil {
+		if err := agent.Init(root, cfg, args[0], agent.PrepareOptions{Backup: !noBackup}); err != nil {
 			return err
 		}
 		if output.IsStructured() {
@@ -223,6 +224,7 @@ func agentCmd() *cobra.Command {
 		}
 		return nil
 	}}
+	agentInit.Flags().BoolVar(&noBackup, "no-backup", false, "delete the existing agent workspace instead of backing it up")
 	del := &cobra.Command{Use: "delete FEATURE", Short: "Delete the agent workspace for a feature", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
 		if err != nil {

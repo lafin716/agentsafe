@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/agentsafe/agentsafe/internal/config"
@@ -59,7 +60,14 @@ func preparedHashes(pm PrepareMetadata, repoName string) map[string]string {
 	return nil
 }
 
-func Init(root string, cfg config.Config, featureName string) error {
+// PrepareOptions controls how Init treats an existing agent workspace when
+// re-preparing. Backup renames the existing copy to a timestamped ".bak-"
+// directory; otherwise it is deleted.
+type PrepareOptions struct {
+	Backup bool
+}
+
+func Init(root string, cfg config.Config, featureName string, opt PrepareOptions) error {
 	fm, err := feature.Load(root, featureName)
 	if err != nil {
 		return err
@@ -69,7 +77,7 @@ func Init(root string, cfg config.Config, featureName string) error {
 	for _, r := range fm.Repositories {
 		source := filepath.Join(root, r.WorktreePath)
 		target := config.AgentPath(root, featureName, r.Name)
-		backupExisting(target)
+		resetTarget(target, opt.Backup)
 		pats := []string{".git/"}
 		pats = append(pats, cfg.Agent.DefaultExclude...)
 		pats = append(pats, LoadIgnoreFiles(filepath.Join(root, cfg.Agent.IgnoreFileName), filepath.Join(source, cfg.Agent.IgnoreFileName))...)
@@ -110,6 +118,9 @@ func Init(root string, cfg config.Config, featureName string) error {
 					return err
 				}
 				out, changed := mask.Apply(string(b))
+				if out2, c2 := mask.ApplyKeyPaths(out, strings.ToLower(filepath.Ext(path))); c2 {
+					out, changed = out2, true
+				}
 				if changed {
 					pr.MaskedFiles = append(pr.MaskedFiles, rel)
 				}
@@ -138,10 +149,17 @@ func Init(root string, cfg config.Config, featureName string) error {
 	return os.WriteFile(config.SessionMetaPath(root, featureName), b, 0644)
 }
 
-func backupExisting(path string) {
+// resetTarget clears an existing agent workspace directory before a fresh
+// prepare. When backup is true the existing directory is renamed to a
+// timestamped ".bak-" sibling; otherwise it is removed.
+func resetTarget(path string, backup bool) {
 	if st, err := os.Stat(path); err == nil && st.IsDir() {
-		bak := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102150405"))
-		_ = os.Rename(path, bak)
+		if backup {
+			bak := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102150405"))
+			_ = os.Rename(path, bak)
+		} else {
+			_ = os.RemoveAll(path)
+		}
 	}
 	_ = os.MkdirAll(path, 0755)
 }

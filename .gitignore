@@ -1,0 +1,6 @@
+# build artifacts
+/agr
+apps/desktop/build/bin/
+
+# OS
+.DS_Store

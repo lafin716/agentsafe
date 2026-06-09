@@ -134,6 +134,7 @@ type FeatureEntry struct {
 type FeatureStatusResult struct {
 	Feature      string       `json:"feature"      yaml:"feature"`
 	Branch       string       `json:"branch"       yaml:"branch"`
+	AgentReady   bool         `json:"agentReady"   yaml:"agentReady"`
 	Repositories []RepoStatus `json:"repositories" yaml:"repositories"`
 }
 
@@ -195,6 +196,9 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 		return FeatureStatusResult{}, err
 	}
 	result := FeatureStatusResult{Feature: m.Name, Branch: m.Branch}
+	if st, err := os.Stat(filepath.Join(root, "agent", m.Name)); err == nil && st.IsDir() {
+		result.AgentReady = true
+	}
 	for _, r := range m.Repositories {
 		p := filepath.Join(root, r.WorktreePath)
 		s, err := aggit.StatusShort(p)

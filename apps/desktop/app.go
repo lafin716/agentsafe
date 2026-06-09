@@ -1,0 +1,976 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	goruntime "runtime"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"github.com/agentsafe/agentsafe/internal/agent"
+	"github.com/agentsafe/agentsafe/internal/config"
+	"github.com/agentsafe/agentsafe/internal/feature"
+	"github.com/agentsafe/agentsafe/internal/forge"
+	"github.com/agentsafe/agentsafe/internal/registry"
+	"github.com/agentsafe/agentsafe/internal/repo"
+)
+
+// App exposes agentsafe's core packages to the Wails frontend.
+// It is a thin binding layer: every method delegates to the same internal/
+// functions the CLI uses, so GUI and CLI share identical behavior.
+type App struct {
+	ctx  context.Context
+	root string // currently opened workspace root ("" when none)
+}
+
+func NewApp() *App { return &App{} }
+
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	// Restore the last active workspace from the registry (if it still loads).
+	if r, err := registry.Load(); err == nil && r.Active != "" {
+		if root, _, err := config.LoadFrom(r.Active); err == nil {
+			a.root = root
+		}
+	}
+}
+
+// requireRoot returns the opened workspace root or an error when none is open.
+func (a *App) requireRoot() (string, error) {
+	if a.root == "" {
+		return "", fmt.Errorf("no workspace is open; open or initialize one first")
+	}
+	return a.root, nil
+}
+
+// ---- Workspace ----
+
+// SelectWorkspaceDir opens a native directory picker and returns the chosen path.
+func (a *App) SelectWorkspaceDir() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select agentsafe workspace",
+	})
+}
+
+// SelectProgram opens a native file picker so the user can choose the program
+// used to open agent workspaces (e.g. an editor). Returns the chosen path
+// ("" when cancelled).
+func (a *App) SelectProgram() (string, error) {
+	opts := runtime.OpenDialogOptions{Title: "Select a program"}
+	if goruntime.GOOS == "darwin" {
+		opts.DefaultDirectory = "/Applications"
+		opts.Filters = []runtime.FileFilter{
+			{DisplayName: "Applications", Pattern: "*.app"},
+		}
+	}
+	return runtime.OpenFileDialog(a.ctx, opts)
+}
+
+// OpenWorkspace discovers the agentsafe root from the given path and loads config.
+func (a *App) OpenWorkspace(path string) (config.Config, error) {
+	root, cfg, err := config.LoadFrom(path)
+	if err != nil {
+		return config.Config{}, err
+	}
+	a.root = root
+	_ = registry.Add(cfg.Workspace.Name, root)
+	return cfg, nil
+}
+
+// InitWorkspace initializes a new workspace at path and opens it.
+func (a *App) InitWorkspace(path, name string) (config.Config, error) {
+	if path == "" {
+		return config.Config{}, fmt.Errorf("path is required")
+	}
+	cfg, err := config.InitWorkspace(path, name)
+	if err != nil {
+		return config.Config{}, err
+	}
+	a.root = cfg.Workspace.Root
+	_ = registry.Add(cfg.Workspace.Name, cfg.Workspace.Root)
+	return cfg, nil
+}
+
+// ListWorkspaces returns the workspaces registered with the app.
+func (a *App) ListWorkspaces() ([]registry.Entry, error) {
+	entries, err := registry.List()
+	if err != nil {
+		return nil, err
+	}
+	if entries == nil {
+		return []registry.Entry{}, nil
+	}
+	return entries, nil
+}
+
+// RemoveWorkspace unregisters a workspace from the app. It does not touch the
+// workspace directory on disk. When the removed workspace is the open one, the
+// open workspace is cleared.
+func (a *App) RemoveWorkspace(path string) error {
+	if err := registry.Remove(path); err != nil {
+		return err
+	}
+	if a.root == path {
+		a.root = ""
+	}
+	return nil
+}
+
+// CurrentRoot reports the currently opened workspace root (empty if none).
+func (a *App) CurrentRoot() string { return a.root }
+
+// GetConfig returns the config for the open workspace.
+func (a *App) GetConfig() (config.Config, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return config.Config{}, err
+	}
+	return config.Load(root)
+}
+
+// ---- Repositories ----
+
+func (a *App) ListRepos() ([]config.Repository, error) {
+	cfg, err := a.GetConfig()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Repositories == nil {
+		return []config.Repository{}, nil
+	}
+	return cfg.Repositories, nil
+}
+
+func (a *App) AddRepo(name, url, typ, defaultBranch string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	_, err = config.AddRepository(root, cfg, config.Repository{
+		Name: name, URL: url, Type: typ, DefaultBranch: defaultBranch,
+	})
+	return err
+}
+
+// RemoveRepo drops a repository from the open workspace's config. It only edits
+// config.yaml; cloned directories and worktrees are left in place.
+func (a *App) RemoveRepo(name string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	_, err = config.RemoveRepository(root, cfg, name)
+	return err
+}
+
+func (a *App) Pull() error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	return repo.PullAll(root, cfg)
+}
+
+// ---- Features ----
+
+func (a *App) ListFeatures() (feature.FeatureListResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.FeatureListResult{}, err
+	}
+	return feature.ListData(root)
+}
+
+func (a *App) CreateFeature(name, base string, force bool) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	return feature.Create(root, cfg, name, base, force)
+}
+
+func (a *App) FeatureStatus(name string) (feature.FeatureStatusResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.FeatureStatusResult{}, err
+	}
+	return feature.StatusData(root, name)
+}
+
+func (a *App) LoadFeature(name string) (feature.Metadata, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.Metadata{}, err
+	}
+	return feature.Load(root, name)
+}
+
+// ---- Agent ----
+
+// AgentPrepare builds (or rebuilds) the sanitized agent workspace for a
+// feature. When backup is true an existing workspace is preserved as a
+// timestamped ".bak-" directory; otherwise it is replaced.
+func (a *App) AgentPrepare(name string, backup bool) (agent.PrepareMetadata, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return agent.PrepareMetadata{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return agent.PrepareMetadata{}, err
+	}
+	if err := agent.Init(root, cfg, name, agent.PrepareOptions{Backup: backup}); err != nil {
+		return agent.PrepareMetadata{}, err
+	}
+	return agent.LoadPrepareMetadata(root, name), nil
+}
+
+// RepoDiff groups agent changes per repository for the frontend.
+type RepoDiff struct {
+	Name    string         `json:"name"`
+	Changes []agent.Change `json:"changes"`
+}
+
+// DiffResult mirrors the CLI's structured diff output.
+type DiffResult struct {
+	Feature      string     `json:"feature"`
+	Repositories []RepoDiff `json:"repositories"`
+}
+
+func (a *App) AgentDiff(name, repoFilter string) (DiffResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return DiffResult{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return DiffResult{}, err
+	}
+	byRepo, err := agent.Diff(root, cfg, name, repoFilter)
+	if err != nil {
+		return DiffResult{}, err
+	}
+	result := DiffResult{Feature: name, Repositories: []RepoDiff{}}
+	repos := make([]string, 0, len(byRepo))
+	for r := range byRepo {
+		repos = append(repos, r)
+	}
+	sort.Strings(repos)
+	for _, r := range repos {
+		changes := byRepo[r]
+		if changes == nil {
+			changes = []agent.Change{}
+		}
+		result.Repositories = append(result.Repositories, RepoDiff{Name: r, Changes: changes})
+	}
+	return result, nil
+}
+
+// SyncOptions is the frontend-facing subset of agent.Options.
+type SyncOptions struct {
+	Repo            string `json:"repo"`
+	DryRun          bool   `json:"dryRun"`
+	IncludeRisky    bool   `json:"includeRisky"`
+	AllowMaskedSync bool   `json:"allowMaskedSync"`
+}
+
+func (a *App) AgentSync(name string, opt SyncOptions) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	// Yes:true — the GUI shows the diff before syncing, so no interactive prompt.
+	return agent.Sync(root, cfg, name, agent.Options{
+		Repo:            opt.Repo,
+		DryRun:          opt.DryRun,
+		IncludeRisky:    opt.IncludeRisky,
+		AllowMaskedSync: opt.AllowMaskedSync,
+		Yes:             true,
+	})
+}
+
+func (a *App) AgentDelete(name string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return agent.Delete(root, name)
+}
+
+// ---- Agent security (ignore / mask) ----
+
+// ignoreFilePath returns the absolute path of the workspace-root ignore file,
+// falling back to ".agentignore" when the config field is empty.
+func (a *App) ignoreFilePath(root string, cfg config.Config) string {
+	name := cfg.Agent.IgnoreFileName
+	if name == "" {
+		name = ".agentignore"
+	}
+	return filepath.Join(root, name)
+}
+
+// maskFilePath returns the absolute path of the workspace-root mask file,
+// falling back to "mask.json" when the config field is empty.
+func (a *App) maskFilePath(root string, cfg config.Config) string {
+	name := cfg.Agent.MaskFileName
+	if name == "" {
+		name = "mask.json"
+	}
+	return filepath.Join(root, name)
+}
+
+// GetAgentIgnore returns the contents of the workspace-root ignore file
+// (gitignore-style patterns, one per line). Returns "" when the file is absent.
+func (a *App) GetAgentIgnore() (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(a.ignoreFilePath(root, cfg))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(b), nil
+}
+
+// SaveAgentIgnore writes the ignore patterns to the workspace-root ignore file.
+func (a *App) SaveAgentIgnore(content string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(a.ignoreFilePath(root, cfg), []byte(content), 0644)
+}
+
+// GetMaskFile returns the parsed masking rules from the workspace-root mask file.
+// Returns an empty rule set when the file is absent.
+func (a *App) GetMaskFile() (agent.MaskFile, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return agent.MaskFile{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return agent.MaskFile{}, err
+	}
+	m, err := agent.LoadMask(a.maskFilePath(root, cfg))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return agent.MaskFile{Rules: []agent.MaskRule{}}, nil
+		}
+		return agent.MaskFile{}, err
+	}
+	if m.Rules == nil {
+		m.Rules = []agent.MaskRule{}
+	}
+	return m, nil
+}
+
+// SaveMaskFile writes the masking rules to the workspace-root mask file as
+// indented JSON.
+func (a *App) SaveMaskFile(m agent.MaskFile) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	if m.Rules == nil {
+		m.Rules = []agent.MaskRule{}
+	}
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(a.maskFilePath(root, cfg), b, 0644)
+}
+
+// AgentSecurityBundle is the export/import format bundling a workspace's ignore
+// patterns and masking rules into a single portable file.
+type AgentSecurityBundle struct {
+	Version int            `json:"version"`
+	Ignore  string         `json:"ignore"`
+	Mask    agent.MaskFile `json:"mask"`
+}
+
+// ExportAgentSecurity writes the workspace's saved ignore patterns and masking
+// rules to a JSON file chosen via a native save dialog. Returns the saved path,
+// or "" when the dialog is cancelled.
+func (a *App) ExportAgentSecurity() (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return "", err
+	}
+	ignore := ""
+	if b, rerr := os.ReadFile(a.ignoreFilePath(root, cfg)); rerr == nil {
+		ignore = string(b)
+	}
+	mask, err := a.GetMaskFile()
+	if err != nil {
+		return "", err
+	}
+	data, err := json.MarshalIndent(AgentSecurityBundle{Version: 1, Ignore: ignore, Mask: mask}, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Export Agent security settings",
+		DefaultFilename: "agentsafe-security.json",
+		Filters:         []runtime.FileFilter{{DisplayName: "JSON", Pattern: "*.json"}},
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ImportAgentSecurity reads a previously exported bundle (chosen via a native
+// open dialog) and overwrites the workspace's ignore patterns and masking
+// rules. Returns the imported path, or "" when the dialog is cancelled.
+func (a *App) ImportAgentSecurity() (string, error) {
+	if _, err := a.requireRoot(); err != nil {
+		return "", err
+	}
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Import Agent security settings",
+		Filters: []runtime.FileFilter{{DisplayName: "JSON", Pattern: "*.json"}},
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var bundle AgentSecurityBundle
+	if err := json.Unmarshal(b, &bundle); err != nil {
+		return "", fmt.Errorf("invalid settings file: %w", err)
+	}
+	if bundle.Version < 1 {
+		return "", fmt.Errorf("unrecognized settings file")
+	}
+	if err := a.SaveAgentIgnore(bundle.Ignore); err != nil {
+		return "", err
+	}
+	if err := a.SaveMaskFile(bundle.Mask); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ---- Backups ----
+
+// backupSuffix separates a repo name from its timestamp in a backup directory
+// name: agent/<feature>/<repo>.bak-<YYYYMMDDHHMMSS>.
+const backupSuffix = ".bak-"
+
+// BackupEntry describes one backed-up agent workspace copy.
+type BackupEntry struct {
+	Feature   string `json:"feature"`
+	Repo      string `json:"repo"`
+	Path      string `json:"path"`      // slash path relative to the workspace root
+	CreatedAt string `json:"createdAt"` // RFC3339 when parseable, else the raw stamp
+	Size      int64  `json:"size"`
+	Files     int    `json:"files"`
+}
+
+// ListBackups scans agent/<feature>/ for ".bak-" directories and returns them
+// newest-first.
+func (a *App) ListBackups() ([]BackupEntry, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	agentDir := filepath.Join(root, "agent")
+	features, err := os.ReadDir(agentDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []BackupEntry{}, nil
+		}
+		return nil, err
+	}
+	out := []BackupEntry{}
+	for _, fe := range features {
+		if !fe.IsDir() {
+			continue
+		}
+		featureName := fe.Name()
+		entries, err := os.ReadDir(filepath.Join(agentDir, featureName))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			idx := strings.LastIndex(e.Name(), backupSuffix)
+			if idx < 0 {
+				continue
+			}
+			repo := e.Name()[:idx]
+			stamp := e.Name()[idx+len(backupSuffix):]
+			created := stamp
+			if ts, perr := time.ParseInLocation("20060102150405", stamp, time.Local); perr == nil {
+				created = ts.Format(time.RFC3339)
+			}
+			abs := filepath.Join(agentDir, featureName, e.Name())
+			size, files := dirStats(abs)
+			rel, _ := filepath.Rel(root, abs)
+			out = append(out, BackupEntry{
+				Feature:   featureName,
+				Repo:      repo,
+				Path:      filepath.ToSlash(rel),
+				CreatedAt: created,
+				Size:      size,
+				Files:     files,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+	return out, nil
+}
+
+// dirStats returns the total byte size and file count under a directory.
+func dirStats(dir string) (int64, int) {
+	var size int64
+	var files int
+	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, ierr := d.Info(); ierr == nil {
+			size += info.Size()
+			files++
+		}
+		return nil
+	})
+	return size, files
+}
+
+// safeBackupPath validates a frontend-supplied relative backup path and returns
+// its absolute form. It rejects paths that escape the workspace's agent/
+// directory or are not ".bak-" backups, guarding against deleting live data.
+func (a *App) safeBackupPath(root, rel string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if clean == "" || strings.Contains(clean, "..") {
+		return "", fmt.Errorf("invalid backup path")
+	}
+	if !strings.HasPrefix(clean, "agent"+string(filepath.Separator)) {
+		return "", fmt.Errorf("backup path must be under agent/")
+	}
+	if !strings.Contains(filepath.Base(clean), backupSuffix) {
+		return "", fmt.Errorf("not a backup directory")
+	}
+	abs := filepath.Join(root, clean)
+	st, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("backup path is not a directory")
+	}
+	return abs, nil
+}
+
+// DeleteAllBackups removes every ".bak-" backup directory in the workspace and
+// returns how many were deleted.
+func (a *App) DeleteAllBackups() (int, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return 0, err
+	}
+	list, err := a.ListBackups()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, b := range list {
+		abs, err := a.safeBackupPath(root, b.Path)
+		if err != nil {
+			continue
+		}
+		if os.RemoveAll(abs) == nil {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// DeleteBackup removes a backup directory.
+func (a *App) DeleteBackup(path string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	abs, err := a.safeBackupPath(root, path)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(abs)
+}
+
+// RestoreBackup promotes a backup to the live agent workspace, replacing the
+// current copy (agent/<feature>/<repo>). The backup directory is consumed.
+func (a *App) RestoreBackup(path string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	abs, err := a.safeBackupPath(root, path)
+	if err != nil {
+		return err
+	}
+	base := filepath.Base(abs)
+	idx := strings.LastIndex(base, backupSuffix)
+	if idx < 0 {
+		return fmt.Errorf("not a backup directory")
+	}
+	live := filepath.Join(filepath.Dir(abs), base[:idx])
+	if err := os.RemoveAll(live); err != nil {
+		return err
+	}
+	return os.Rename(abs, live)
+}
+
+// ---- Commit / Push / MR ----
+
+func (a *App) Commit(name, message string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return feature.Commit(root, name, message)
+}
+
+func (a *App) Push(name string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return feature.Push(root, name)
+}
+
+// RequestResult is the per-repository outcome of creating a merge/pull request.
+type RequestResult struct {
+	Repo     string `json:"repo"`
+	Provider string `json:"provider"` // "github" | "gitlab" | "" (unknown)
+	Method   string `json:"method"`   // "api" | "browser" | "skipped"
+	URL      string `json:"url"`
+	Branch   string `json:"branch"`
+	Target   string `json:"target"`
+	Error    string `json:"error,omitempty"`
+}
+
+// RequestResults groups the per-repo outcomes for a worktree.
+type RequestResults struct {
+	Feature string          `json:"feature"`
+	Items   []RequestResult `json:"items"`
+}
+
+// CreateMergeRequests opens a PR (GitHub) or MR (GitLab) for each repository in
+// the worktree. Provider is detected from each repo's URL. When the provider's
+// env token is set the request is created via API; otherwise a browser URL is
+// returned for the frontend to open.
+func (a *App) CreateMergeRequests(name, title string) (RequestResults, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return RequestResults{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return RequestResults{}, err
+	}
+	meta, err := feature.Load(root, name)
+	if err != nil {
+		return RequestResults{}, err
+	}
+	res := RequestResults{Feature: name, Items: []RequestResult{}}
+	for _, rm := range meta.Repositories {
+		rc, ok := findRepo(cfg, rm.Name)
+		item := RequestResult{Repo: rm.Name, Branch: rm.Branch}
+		if !ok {
+			item.Method = "skipped"
+			item.Error = "repository not found in config"
+			res.Items = append(res.Items, item)
+			continue
+		}
+		kind := forge.Detect(rc.URL)
+		item.Provider = string(kind)
+		target := rc.DefaultBranch
+		if target == "" {
+			target = cfg.Git.DefaultBaseBranch
+		}
+		ttl := title
+		if ttl == "" {
+			ttl = fmt.Sprintf("[%s] %s", name, rm.Name)
+		}
+		item.Target = target
+
+		if kind == forge.Unknown {
+			item.Method = "skipped"
+			item.Error = "unknown provider"
+			res.Items = append(res.Items, item)
+			continue
+		}
+
+		tokenEnv, apiBase := providerSettings(cfg, kind)
+		webURL, _ := forge.NewRequestURL(rc.URL, rm.Branch, target, ttl)
+		token := os.Getenv(tokenEnv)
+		if token != "" {
+			created, cerr := forge.Create(kind, forge.CreateOptions{
+				RepoURL: rc.URL, Source: rm.Branch, Target: target,
+				Title: ttl, Token: token, APIBaseURL: apiBase,
+			})
+			if cerr != nil {
+				item.Method = "browser"
+				item.URL = webURL
+				item.Error = cerr.Error()
+			} else {
+				item.Method = "api"
+				item.URL = created.URL
+			}
+		} else {
+			item.Method = "browser"
+			item.URL = webURL
+		}
+		res.Items = append(res.Items, item)
+	}
+	return res, nil
+}
+
+// OpenURL opens a URL in the user's default browser.
+func (a *App) OpenURL(url string) error {
+	if url == "" {
+		return fmt.Errorf("empty url")
+	}
+	runtime.BrowserOpenURL(a.ctx, url)
+	return nil
+}
+
+// findRepo returns the config entry for a repo by name.
+func findRepo(cfg config.Config, name string) (config.Repository, bool) {
+	for _, r := range cfg.Repositories {
+		if r.Name == name {
+			return r, true
+		}
+	}
+	return config.Repository{}, false
+}
+
+// providerSettings resolves the env-var name and API base URL for a provider,
+// falling back to defaults so configs missing a github/gitlab section still work.
+func providerSettings(cfg config.Config, kind forge.Kind) (tokenEnv, apiBase string) {
+	switch kind {
+	case forge.GitHub:
+		tokenEnv = cfg.GitHub.TokenEnv
+		if tokenEnv == "" {
+			tokenEnv = "GITHUB_TOKEN"
+		}
+		apiBase = "" // derived from host inside forge
+	case forge.GitLab:
+		tokenEnv = cfg.GitLab.TokenEnv
+		if tokenEnv == "" {
+			tokenEnv = "GITLAB_TOKEN"
+		}
+		apiBase = cfg.GitLab.BaseURL
+	}
+	return tokenEnv, apiBase
+}
+
+// ---- Git settings ----
+
+// SaveGitSettings persists Git/GitLab/GitHub configuration for the open
+// workspace. Base URLs are trimmed of trailing slashes; empty provider fields
+// fall back to defaults so a section is never left blank.
+func (a *App) SaveGitSettings(git config.GitConfig, gitlab config.GitLabConfig, github config.GitHubConfig) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	gitlab.BaseURL = strings.TrimRight(strings.TrimSpace(gitlab.BaseURL), "/")
+	github.BaseURL = strings.TrimRight(strings.TrimSpace(github.BaseURL), "/")
+	if github.BaseURL == "" {
+		github.BaseURL = "https://github.com"
+	}
+	if github.TokenEnv == "" {
+		github.TokenEnv = "GITHUB_TOKEN"
+	}
+	if gitlab.TokenEnv == "" {
+		gitlab.TokenEnv = "GITLAB_TOKEN"
+	}
+	cfg.Git = git
+	cfg.GitLab = gitlab
+	cfg.GitHub = github
+	return config.Save(root, cfg)
+}
+
+// RepoDiag is a per-repository diagnostic entry.
+type RepoDiag struct {
+	Name         string   `json:"name"`
+	URL          string   `json:"url"`
+	Provider     string   `json:"provider"`
+	TokenEnvName string   `json:"tokenEnvName"`
+	TokenPresent bool     `json:"tokenPresent"`
+	Issues       []string `json:"issues"`
+}
+
+// GitDiag is the result of DiagnoseGit: global issues plus per-repo findings.
+type GitDiag struct {
+	Issues []string   `json:"issues"`
+	Repos  []RepoDiag `json:"repos"`
+}
+
+// DiagnoseGit runs fast (no network) checks for common Git configuration
+// mistakes: malformed base URLs, missing branch-prefix slash, unknown providers,
+// and missing env tokens.
+func (a *App) DiagnoseGit() (GitDiag, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return GitDiag{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return GitDiag{}, err
+	}
+	diag := GitDiag{Issues: []string{}, Repos: []RepoDiag{}}
+
+	if cfg.Git.BranchPrefix != "" && !strings.HasSuffix(cfg.Git.BranchPrefix, "/") {
+		diag.Issues = append(diag.Issues, "git.branchPrefix should end with '/'")
+	}
+	checkBase := func(label, base string) {
+		if base == "" {
+			return
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			diag.Issues = append(diag.Issues, label+" base URL should start with https://")
+		}
+		if strings.HasSuffix(base, "/") {
+			diag.Issues = append(diag.Issues, label+" base URL should not end with '/'")
+		}
+	}
+	checkBase("GitLab", cfg.GitLab.BaseURL)
+	checkBase("GitHub", cfg.GitHub.BaseURL)
+
+	for _, r := range cfg.Repositories {
+		kind := forge.Detect(r.URL)
+		rd := RepoDiag{Name: r.Name, URL: r.URL, Provider: string(kind), Issues: []string{}}
+		if kind == forge.Unknown {
+			rd.Issues = append(rd.Issues, "unknown provider (not github/gitlab)")
+		} else {
+			tokenEnv, _ := providerSettings(cfg, kind)
+			rd.TokenEnvName = tokenEnv
+			rd.TokenPresent = os.Getenv(tokenEnv) != ""
+			if !rd.TokenPresent {
+				rd.Issues = append(rd.Issues, "env "+tokenEnv+" not set (will use browser)")
+			}
+		}
+		if r.DefaultBranch == "" {
+			rd.Issues = append(rd.Issues, "no default branch (falls back to git.defaultBaseBranch)")
+		}
+		diag.Repos = append(diag.Repos, rd)
+	}
+	return diag, nil
+}
+
+// ---- Editor ----
+
+// OpenInEditor opens the agent workspace for a feature in the given editor
+// (e.g. "code" or "cursor"). When editor is empty it returns the path only.
+func (a *App) OpenInEditor(name, editor string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(root, "agent", name)
+	if editor == "" {
+		return p, nil
+	}
+	// A program picked via SelectProgram is an absolute path (a .app bundle on
+	// macOS); launch it with `open -a`. A bare command (e.g. "code") is run
+	// directly from PATH.
+	var e *exec.Cmd
+	if goruntime.GOOS == "darwin" && (strings.HasSuffix(editor, ".app") || strings.Contains(editor, "/")) {
+		e = exec.Command("open", "-a", editor, p)
+	} else {
+		e = exec.Command(editor, p)
+	}
+	e.Stdout, e.Stderr, e.Stdin = os.Stdout, os.Stderr, os.Stdin
+	if err := e.Start(); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// OpenInTerminal opens the agent workspace for a feature in the system terminal.
+func (a *App) OpenInTerminal(name string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, "agent", name)
+
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", "-a", "Terminal", dir)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "cmd", "/k", "cd", "/d", dir)
+	default:
+		cmd = exec.Command("x-terminal-emulator", "--working-directory="+dir)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	return dir, nil
+}

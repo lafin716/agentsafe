@@ -22,6 +22,7 @@ type Config struct {
 	Repositories []Repository `yaml:"repositories"`
 	Agent        AgentConfig  `yaml:"agent"`
 	GitLab       GitLabConfig `yaml:"gitlab"`
+	GitHub       GitHubConfig `yaml:"github"`
 }
 
 type Workspace struct {
@@ -49,6 +50,11 @@ type GitLabConfig struct {
 	TokenEnv     string `yaml:"tokenEnv"`
 	TargetBranch string `yaml:"targetBranch"`
 }
+type GitHubConfig struct {
+	BaseURL      string `yaml:"baseUrl"`
+	TokenEnv     string `yaml:"tokenEnv"`
+	TargetBranch string `yaml:"targetBranch"`
+}
 
 func Default(root, name string) Config {
 	if name == "" {
@@ -65,6 +71,7 @@ func Default(root, name string) Config {
 			DefaultExclude: []string{".git", "node_modules", "build", "dist", "target", ".gradle", ".idea", ".vscode", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.jks", "application-local.yml", "application-secret.yml", "application-dev.yml", "secrets.yml", "credentials.yml"},
 		},
 		GitLab: GitLabConfig{BaseURL: "https://gitlab.example.com", TokenEnv: "GITLAB_TOKEN", TargetBranch: "develop"},
+		GitHub: GitHubConfig{BaseURL: "https://github.com", TokenEnv: "GITHUB_TOKEN", TargetBranch: "main"},
 	}
 }
 
@@ -193,6 +200,24 @@ func AddRepository(root string, cfg Config, r Repository) (Config, error) {
 	return cfg, Save(root, cfg)
 }
 
+// RemoveRepository drops the named repository from the config and persists it.
+// It only edits config.yaml; cloned directories under main/ and any feature
+// worktrees are left untouched.
+func RemoveRepository(root string, cfg Config, name string) (Config, error) {
+	idx := -1
+	for i, existing := range cfg.Repositories {
+		if existing.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return cfg, fmt.Errorf("repository %q not found", name)
+	}
+	cfg.Repositories = append(cfg.Repositories[:idx], cfg.Repositories[idx+1:]...)
+	return cfg, Save(root, cfg)
+}
+
 const SampleAgentIgnore = `# secrets
 .env
 .env.*
@@ -214,4 +239,4 @@ node_modules/
 .git/
 `
 
-const SampleMaskJSON = `{"rules":[{"name":"AWS Access Key","type":"regex","pattern":"AKIA[0-9A-Z]{16}","replacement":"__MASKED_AWS_ACCESS_KEY__"},{"name":"JWT Token","type":"regex","pattern":"eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+","replacement":"__MASKED_JWT__"},{"name":"Internal Domain","type":"plain","pattern":"internal.company.local","replacement":"__MASKED_INTERNAL_DOMAIN__"}]}`
+const SampleMaskJSON = `{"rules":[{"name":"AWS Access Key","type":"regex","pattern":"AKIA[0-9A-Z]{16}","replacement":"__MASKED_AWS_ACCESS_KEY__"},{"name":"JWT Token","type":"regex","pattern":"eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+","replacement":"__MASKED_JWT__"},{"name":"Internal Domain","type":"plain","pattern":"internal.company.local","replacement":"__MASKED_INTERNAL_DOMAIN__"},{"name":"DB Password","type":"keypath","pattern":"spring.datasource.password","replacement":"__MASKED__"}]}`
