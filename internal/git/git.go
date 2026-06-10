@@ -50,6 +50,7 @@ func Run(dir string, args ...string) (Result, error) {
 		"GIT_TERMINAL_PROMPT=0",
 		"GCM_INTERACTIVE=never",
 	)
+	hideWindow(cmd) // suppress the per-process console window on Windows GUI apps
 	var out, er bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &er
@@ -70,6 +71,14 @@ func Output(dir string, args ...string) (string, error) {
 }
 
 func Fetch(repoPath string) error { _, err := Run(repoPath, "fetch", "origin"); return err }
+
+// FetchBranch fetches just one branch from origin (updating FETCH_HEAD and the
+// matching origin/<branch> ref). Cheaper than a full fetch when only the base
+// branch is needed.
+func FetchBranch(repoPath, branch string) error {
+	_, err := Run(repoPath, "fetch", "origin", branch)
+	return err
+}
 func FetchAll(repoPath string) error {
 	_, err := Run(repoPath, "fetch", "--all", "--prune")
 	return err

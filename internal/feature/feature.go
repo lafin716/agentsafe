@@ -73,13 +73,16 @@ func Create(root string, cfg config.Config, name, base string, force bool) error
 			repoBase = cur
 		}
 
-		output.Printf("  fetch origin (non-interactive, timeout controlled by AGENTSAFE_GIT_TIMEOUT_SECONDS)...\n")
-		if err := aggit.Fetch(repoPath); err != nil {
-			output.Printf("  warning: fetch failed, continuing with local refs: %v\n", err)
-		}
-		output.Printf("  fast-forward pull %s/%s...\n", "origin", repoBase)
-		if err := aggit.Pull(repoPath, "origin", repoBase); err != nil {
-			output.Printf("  warning: pull failed, continuing with local %s: %v\n", repoBase, err)
+		// Fetch only the base branch and create the worktree directly from the
+		// freshly fetched tip (FETCH_HEAD). This avoids a full fetch and the
+		// extra checkout that `pull` performs on the main clone; the main clone
+		// itself is kept current by `agentsafe pull`.
+		start := repoBase
+		output.Printf("  fetch origin %s (non-interactive, timeout controlled by AGENTSAFE_GIT_TIMEOUT_SECONDS)...\n", repoBase)
+		if err := aggit.FetchBranch(repoPath, repoBase); err != nil {
+			output.Printf("  warning: fetch failed, using local %s: %v\n", repoBase, err)
+		} else {
+			start = "FETCH_HEAD"
 		}
 
 		if _, err := os.Stat(dest); err == nil {
@@ -105,7 +108,7 @@ func Create(root string, cfg config.Config, name, base string, force bool) error
 			}
 
 			output.Printf("  creating new branch %s from %s\n", branch, repoBase)
-			if err := aggit.AddWorktree(repoPath, dest, branch, repoBase, true); err != nil {
+			if err := aggit.AddWorktree(repoPath, dest, branch, start, true); err != nil {
 				return fmt.Errorf("failed to create worktree for repository %s: %w", r.Name, err)
 			}
 		}
