@@ -10,6 +10,7 @@ import (
 	goruntime "runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -19,6 +20,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/forge"
+	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/registry"
 	"github.com/agentsafe/agentsafe/internal/repo"
 )
@@ -29,9 +31,40 @@ import (
 type App struct {
 	ctx  context.Context
 	root string // currently opened workspace root ("" when none)
+
+	taskMu  sync.Mutex // serializes tracked tasks so their output never interleaves
+	taskSeq int        // monotonic id for progress tasks
 }
 
 func NewApp() *App { return &App{} }
+
+// runTask runs a long-running operation while streaming its output to the
+// frontend progress box. It emits "task:start" before, forwards each output
+// chunk as "task:log", and emits "task:end" (status done|error) after. Tracked
+// tasks are serialized so their log streams never interleave; Wails dispatches
+// each binding call on its own goroutine, so this does not freeze the UI.
+func (a *App) runTask(label string, fn func() error) error {
+	a.taskMu.Lock()
+	defer a.taskMu.Unlock()
+	a.taskSeq++
+	id := a.taskSeq
+	runtime.EventsEmit(a.ctx, "task:start", map[string]any{
+		"id":        id,
+		"label":     label,
+		"startedAt": time.Now().UnixMilli(),
+	})
+	output.SetSink(func(chunk string) {
+		runtime.EventsEmit(a.ctx, "task:log", map[string]any{"id": id, "chunk": chunk})
+	})
+	err := fn()
+	output.SetSink(nil)
+	status, msg := "done", ""
+	if err != nil {
+		status, msg = "error", err.Error()
+	}
+	runtime.EventsEmit(a.ctx, "task:end", map[string]any{"id": id, "status": status, "error": msg})
+	return err
+}
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
@@ -188,7 +221,7 @@ func (a *App) Pull() error {
 	if err != nil {
 		return err
 	}
-	return repo.PullAll(root, cfg)
+	return a.runTask("Pull repositories", func() error { return repo.PullAll(root, cfg) })
 }
 
 // ---- Features ----
@@ -210,7 +243,9 @@ func (a *App) CreateFeature(name, base string, force bool) error {
 	if err != nil {
 		return err
 	}
-	return feature.Create(root, cfg, name, base, force)
+	return a.runTask("Create feature: "+name, func() error {
+		return feature.Create(root, cfg, name, base, force)
+	})
 }
 
 // RebaseFeature rebases the feature's worktrees onto their base branch.
@@ -224,7 +259,13 @@ func (a *App) RebaseFeature(name, repoFilter string) (feature.RebaseResult, erro
 	if err != nil {
 		return feature.RebaseResult{}, err
 	}
-	return feature.Rebase(root, cfg, name, repoFilter)
+	var res feature.RebaseResult
+	err = a.runTask("Rebase: "+name, func() error {
+		var e error
+		res, e = feature.Rebase(root, cfg, name, repoFilter)
+		return e
+	})
+	return res, err
 }
 
 func (a *App) FeatureStatus(name string) (feature.FeatureStatusResult, error) {
@@ -257,10 +298,15 @@ func (a *App) AgentPrepare(name string, backup bool) (agent.PrepareMetadata, err
 	if err != nil {
 		return agent.PrepareMetadata{}, err
 	}
-	if err := agent.Init(root, cfg, name, agent.PrepareOptions{Backup: backup}); err != nil {
-		return agent.PrepareMetadata{}, err
-	}
-	return agent.LoadPrepareMetadata(root, name), nil
+	var meta agent.PrepareMetadata
+	err = a.runTask("Prepare agent: "+name, func() error {
+		if e := agent.Init(root, cfg, name, agent.PrepareOptions{Backup: backup}); e != nil {
+			return e
+		}
+		meta = agent.LoadPrepareMetadata(root, name)
+		return nil
+	})
+	return meta, err
 }
 
 // RepoDiff groups agent changes per repository for the frontend.
@@ -322,12 +368,14 @@ func (a *App) AgentSync(name string, opt SyncOptions) error {
 		return err
 	}
 	// Yes:true — the GUI shows the diff before syncing, so no interactive prompt.
-	return agent.Sync(root, cfg, name, agent.Options{
-		Repo:            opt.Repo,
-		DryRun:          opt.DryRun,
-		IncludeRisky:    opt.IncludeRisky,
-		AllowMaskedSync: opt.AllowMaskedSync,
-		Yes:             true,
+	return a.runTask("Sync: "+name, func() error {
+		return agent.Sync(root, cfg, name, agent.Options{
+			Repo:            opt.Repo,
+			DryRun:          opt.DryRun,
+			IncludeRisky:    opt.IncludeRisky,
+			AllowMaskedSync: opt.AllowMaskedSync,
+			Yes:             true,
+		})
 	})
 }
 
@@ -805,7 +853,7 @@ func (a *App) Commit(name, message string) error {
 	if err != nil {
 		return err
 	}
-	return feature.Commit(root, name, message)
+	return a.runTask("Commit: "+name, func() error { return feature.Commit(root, name, message) })
 }
 
 func (a *App) Push(name string) error {
@@ -813,7 +861,7 @@ func (a *App) Push(name string) error {
 	if err != nil {
 		return err
 	}
-	return feature.Push(root, name)
+	return a.runTask("Push: "+name, func() error { return feature.Push(root, name) })
 }
 
 // RequestResult is the per-repository outcome of creating a merge/pull request.
@@ -851,57 +899,61 @@ func (a *App) CreateMergeRequests(name, title string) (RequestResults, error) {
 		return RequestResults{}, err
 	}
 	res := RequestResults{Feature: name, Items: []RequestResult{}}
-	for _, rm := range meta.Repositories {
-		rc, ok := findRepo(cfg, rm.Name)
-		item := RequestResult{Repo: rm.Name, Branch: rm.Branch}
-		if !ok {
-			item.Method = "skipped"
-			item.Error = "repository not found in config"
-			res.Items = append(res.Items, item)
-			continue
-		}
-		kind := forge.Detect(rc.URL)
-		item.Provider = string(kind)
-		target := rc.DefaultBranch
-		if target == "" {
-			target = cfg.Git.DefaultBaseBranch
-		}
-		ttl := title
-		if ttl == "" {
-			ttl = fmt.Sprintf("[%s] %s", name, rm.Name)
-		}
-		item.Target = target
+	err = a.runTask("Create merge requests: "+name, func() error {
+		for _, rm := range meta.Repositories {
+			output.Printf("[%s] creating request...\n", rm.Name)
+			rc, ok := findRepo(cfg, rm.Name)
+			item := RequestResult{Repo: rm.Name, Branch: rm.Branch}
+			if !ok {
+				item.Method = "skipped"
+				item.Error = "repository not found in config"
+				res.Items = append(res.Items, item)
+				continue
+			}
+			kind := forge.Detect(rc.URL)
+			item.Provider = string(kind)
+			target := rc.DefaultBranch
+			if target == "" {
+				target = cfg.Git.DefaultBaseBranch
+			}
+			ttl := title
+			if ttl == "" {
+				ttl = fmt.Sprintf("[%s] %s", name, rm.Name)
+			}
+			item.Target = target
 
-		if kind == forge.Unknown {
-			item.Method = "skipped"
-			item.Error = "unknown provider"
-			res.Items = append(res.Items, item)
-			continue
-		}
+			if kind == forge.Unknown {
+				item.Method = "skipped"
+				item.Error = "unknown provider"
+				res.Items = append(res.Items, item)
+				continue
+			}
 
-		tokenEnv, apiBase := providerSettings(cfg, kind)
-		webURL, _ := forge.NewRequestURL(rc.URL, rm.Branch, target, ttl)
-		token := os.Getenv(tokenEnv)
-		if token != "" {
-			created, cerr := forge.Create(kind, forge.CreateOptions{
-				RepoURL: rc.URL, Source: rm.Branch, Target: target,
-				Title: ttl, Token: token, APIBaseURL: apiBase,
-			})
-			if cerr != nil {
+			tokenEnv, apiBase := providerSettings(cfg, kind)
+			webURL, _ := forge.NewRequestURL(rc.URL, rm.Branch, target, ttl)
+			token := os.Getenv(tokenEnv)
+			if token != "" {
+				created, cerr := forge.Create(kind, forge.CreateOptions{
+					RepoURL: rc.URL, Source: rm.Branch, Target: target,
+					Title: ttl, Token: token, APIBaseURL: apiBase,
+				})
+				if cerr != nil {
+					item.Method = "browser"
+					item.URL = webURL
+					item.Error = cerr.Error()
+				} else {
+					item.Method = "api"
+					item.URL = created.URL
+				}
+			} else {
 				item.Method = "browser"
 				item.URL = webURL
-				item.Error = cerr.Error()
-			} else {
-				item.Method = "api"
-				item.URL = created.URL
 			}
-		} else {
-			item.Method = "browser"
-			item.URL = webURL
+			res.Items = append(res.Items, item)
 		}
-		res.Items = append(res.Items, item)
-	}
-	return res, nil
+		return nil
+	})
+	return res, err
 }
 
 // OpenURL opens a URL in the user's default browser.

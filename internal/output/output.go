@@ -18,6 +18,14 @@ const (
 
 var current Format = FormatText
 
+// sink, when set, receives the same text chunks written to stdout by Printf and
+// Println. The desktop app uses it to stream progress to the UI; it is nil for
+// the CLI.
+var sink func(string)
+
+// SetSink installs (or clears, with nil) the progress output sink.
+func SetSink(s func(string)) { sink = s }
+
 func Set(f Format)       { current = f }
 func Get() Format        { return current }
 func IsStructured() bool { return current != FormatText }
@@ -33,14 +41,22 @@ func Validate(s string) (Format, error) {
 // Printf is a drop-in for fmt.Printf that no-ops in structured mode.
 func Printf(format string, args ...any) {
 	if current == FormatText {
-		fmt.Printf(format, args...)
+		s := fmt.Sprintf(format, args...)
+		fmt.Print(s)
+		if sink != nil {
+			sink(s)
+		}
 	}
 }
 
 // Println is a drop-in for fmt.Println that no-ops in structured mode.
 func Println(args ...any) {
 	if current == FormatText {
-		fmt.Println(args...)
+		s := fmt.Sprintln(args...)
+		fmt.Print(s)
+		if sink != nil {
+			sink(s)
+		}
 	}
 }
 

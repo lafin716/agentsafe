@@ -1,12 +1,12 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/agentsafe/agentsafe/internal/fsutil"
+	"github.com/agentsafe/agentsafe/internal/output"
 )
 
 type ChangeType string
@@ -105,17 +105,17 @@ func Compare(repoName, source, target string, matcher IgnoreMatcher, masked map[
 }
 
 func PrintChanges(feature string, byRepo map[string][]Change) {
-	fmt.Printf("Feature: %s\n\n", feature)
+	output.Printf("Feature: %s\n\n", feature)
 	repos := make([]string, 0, len(byRepo))
 	for r := range byRepo {
 		repos = append(repos, r)
 	}
 	sort.Strings(repos)
 	for _, r := range repos {
-		fmt.Printf("[%s]\n", r)
+		output.Printf("[%s]\n", r)
 		if len(byRepo[r]) == 0 {
-			fmt.Println("NO CHANGES")
-			fmt.Println()
+			output.Println("NO CHANGES")
+			output.Println()
 			continue
 		}
 		for _, c := range byRepo[r] {
@@ -126,9 +126,9 @@ func PrintChanges(feature string, byRepo map[string][]Change) {
 			if c.Masked {
 				flags += " MASKED"
 			}
-			fmt.Printf("%-8s %s%s\n", c.Type, c.Path, flags)
+			output.Printf("%-8s %s%s\n", c.Type, c.Path, flags)
 		}
-		fmt.Println()
+		output.Println()
 	}
 }
 

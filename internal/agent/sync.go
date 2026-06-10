@@ -8,6 +8,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/fsutil"
+	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/ui"
 )
 
@@ -62,18 +63,18 @@ func Sync(root string, cfg config.Config, featureName string, opt Options) error
 	}
 	PrintChanges(featureName, byRepo)
 	if opt.DryRun {
-		fmt.Println("dry-run: no files changed")
+		output.Println("dry-run: no files changed")
 		return nil
 	}
 	blocked := false
 	for _, changes := range byRepo {
 		for _, c := range changes {
 			if c.Risky && !opt.IncludeRisky {
-				fmt.Printf("blocked risky file: [%s] %s\n", c.Repo, c.Path)
+				output.Printf("blocked risky file: [%s] %s\n", c.Repo, c.Path)
 				blocked = true
 			}
 			if c.Masked && !opt.AllowMaskedSync {
-				fmt.Printf("blocked masked file: [%s] %s\n", c.Repo, c.Path)
+				output.Printf("blocked masked file: [%s] %s\n", c.Repo, c.Path)
 				blocked = true
 			}
 		}
@@ -122,6 +123,6 @@ func Sync(root string, cfg config.Config, featureName string, opt Options) error
 			applied++
 		}
 	}
-	fmt.Printf("synced %d change(s)\n", applied)
+	output.Printf("synced %d change(s)\n", applied)
 	return nil
 }
