@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -64,6 +65,7 @@ func cwdConfig() (string, config.Config, error) {
 
 func initCmd() *cobra.Command {
 	var name, root string
+	var templates []string
 	c := &cobra.Command{Use: "init", Short: "Initialize an agentsafe workspace", RunE: func(cmd *cobra.Command, args []string) error {
 		if root == "" {
 			root, _ = os.Getwd()
@@ -72,14 +74,23 @@ func initCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		if len(templates) > 0 {
+			if _, err := agent.ApplyTemplates(cfg, cfg.Workspace.Root, templates, false); err != nil {
+				return err
+			}
+		}
 		if output.IsStructured() {
 			return output.Emit(simpleResult{Status: "ok", Message: "Initialized agentsafe workspace: " + cfg.Workspace.Root})
 		}
 		fmt.Printf("Initialized agentsafe workspace: %s\n", cfg.Workspace.Root)
+		if len(templates) > 0 {
+			fmt.Printf("Applied security templates: %s\n", strings.Join(templates, ", "))
+		}
 		return nil
 	}}
 	c.Flags().StringVar(&name, "name", "", "workspace name")
 	c.Flags().StringVar(&root, "root", "", "workspace root (default: current directory)")
+	c.Flags().StringSliceVar(&templates, "template", nil, "security templates to apply (e.g. spring,react)")
 	return c
 }
 
@@ -298,7 +309,42 @@ func agentCmd() *cobra.Command {
 		return e.Start()
 	}}
 	open.Flags().StringVar(&editor, "editor", "", "editor command (code/cursor)")
-	c.AddCommand(agentInit, del, diff, sync, open)
+	c.AddCommand(agentInit, del, diff, sync, open, templateCmd())
+	return c
+}
+
+func templateCmd() *cobra.Command {
+	c := &cobra.Command{Use: "template", Short: "Manage agent security templates (agentsafe.yaml presets)"}
+	list := &cobra.Command{Use: "list", Short: "List available security templates", RunE: func(cmd *cobra.Command, args []string) error {
+		templates := agent.TemplateList()
+		if output.IsStructured() {
+			return output.Emit(struct {
+				Templates []agent.TemplateInfo `json:"templates" yaml:"templates"`
+			}{Templates: templates})
+		}
+		for _, t := range templates {
+			fmt.Printf("%-8s %s (ignore: %d, mask: %d)\n          %s\n", t.Key, t.Label, t.IgnoreCount, t.MaskCount, t.Description)
+		}
+		return nil
+	}}
+	var replace bool
+	apply := &cobra.Command{Use: "apply STACK [STACK...]", Short: "Apply security templates to the workspace agentsafe.yaml", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, cfg, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		merged, err := agent.ApplyTemplates(cfg, root, args, replace)
+		if err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(merged)
+		}
+		fmt.Printf("Applied templates %s: %d ignore patterns, %d mask rules\n", strings.Join(args, ", "), len(merged.Ignore), len(merged.Mask))
+		return nil
+	}}
+	apply.Flags().BoolVar(&replace, "replace", false, "replace existing agentsafe.yaml instead of merging")
+	c.AddCommand(list, apply)
 	return c
 }
 

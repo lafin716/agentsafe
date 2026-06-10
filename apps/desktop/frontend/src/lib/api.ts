@@ -16,6 +16,7 @@ import type {
   PrepareMetadata,
   Repository,
   RequestResults,
+  SecurityTemplate,
   SyncOptions,
   WorkspaceEntry,
 } from "./types";
@@ -53,6 +54,8 @@ type AppBindings = {
   SaveAgentIgnore(content: string): Promise<void>;
   GetMaskFile(): Promise<MaskFile>;
   SaveMaskFile(m: MaskFile): Promise<void>;
+  ListSecurityTemplates(): Promise<SecurityTemplate[]>;
+  ApplySecurityTemplates(keys: string[], replace: boolean): Promise<void>;
   ExportAgentSecurity(): Promise<string>;
   ImportAgentSecurity(): Promise<string>;
   ListBackups(): Promise<BackupEntry[]>;

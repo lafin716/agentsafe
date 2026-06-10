@@ -1,0 +1,53 @@
+label: Java / Spring Boot
+description: Spring Boot secrets, keystores, build outputs, and common credential keys.
+
+ignore:
+  # local / secret configs
+  - application-local.yml
+  - application-local.yaml
+  - application-local.properties
+  - application-secret.yml
+  - application-secret.yaml
+  - application-secret.properties
+  - application-dev.yml
+  - application-dev.yaml
+  - application-dev.properties
+  - .env
+  - .env.*
+  # keystores / certs
+  - "*.jks"
+  - "*.p12"
+  - "*.keystore"
+  - "*.pem"
+  - "*.key"
+  # build outputs
+  - target/
+  - build/
+  - .gradle/
+  - out/
+
+mask:
+  - name: Spring datasource password
+    type: keypath
+    pattern: spring.datasource.password
+    replacement: __MASKED_DB_PASSWORD__
+  - name: Spring mail password
+    type: keypath
+    pattern: spring.mail.password
+    replacement: __MASKED_MAIL_PASSWORD__
+  - name: JWT secret
+    type: keypath
+    pattern: jwt.secret
+    replacement: __MASKED_JWT_SECRET__
+  - name: AWS secret key (Spring Cloud)
+    type: keypath
+    pattern: cloud.aws.credentials.secret-key
+    replacement: __MASKED_AWS_SECRET_KEY__
+  - name: AWS Access Key
+    type: regex
+    pattern: AKIA[0-9A-Z]{16}
+    replacement: __MASKED_AWS_ACCESS_KEY__
+  - name: JWT Token
+    type: regex
+    pattern: eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+
+    replacement: __MASKED_JWT__

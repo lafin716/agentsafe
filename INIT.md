@@ -345,6 +345,20 @@ mask:
     replacement: __MASKED_INTERNAL_DOMAIN__
 ```
 
+### 7.4 기술스택 템플릿
+
+자주 쓰는 스택별로 보안이 필요한 파일·마스킹 규칙을 미리 정의한 템플릿을 제공한다. 템플릿은 현재 `agentsafe.yaml`에 **병합**된다(중복 제거).
+
+지원 템플릿: `spring`, `react`, `vue`, `next`, `nuxt`, `k8s`.
+
+```bash
+agentsafe agent template list                 # 템플릿 목록
+agentsafe agent template apply spring react   # 병합 적용 (--replace 로 교체)
+agentsafe init --template spring,react        # 초기화 시 바로 적용
+```
+
+데스크톱 앱의 Agent Security 페이지에서도 동일한 템플릿을 선택·적용할 수 있다.
+
 ## 9. 주요 명령어
 
 ## 9.1 `agentsafe init`

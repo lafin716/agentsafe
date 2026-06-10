@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Download,
   FileX2,
+  LayoutTemplate,
   Plus,
   Save,
   Trash2,
@@ -23,7 +24,7 @@ import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
 import { api, errMessage } from "@/lib/api";
-import type { Config, MaskRule } from "@/lib/types";
+import type { Config, MaskRule, SecurityTemplate } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -96,9 +97,111 @@ export function AgentSecurityPage({ config }: Props) {
           </Button>
         </CardContent>
       </Card>
+      <TemplatesCard onApplied={() => setReloadToken((n) => n + 1)} />
       <IgnoreCard key={`ig-${reloadToken}`} />
       <MaskCard key={`mk-${reloadToken}`} />
     </div>
+  );
+}
+
+function TemplatesCard({ onApplied }: { onApplied: () => void }) {
+  const { t } = useI18n();
+  const { notify } = useToast();
+  const confirm = useConfirm();
+  const [templates, setTemplates] = useState<SecurityTemplate[]>([]);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setTemplates(await api.ListSecurityTemplates());
+    } catch (e) {
+      notify(errMessage(e), "error");
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  function toggle(key: string) {
+    setSelected((s) => ({ ...s, [key]: !s[key] }));
+  }
+
+  async function apply(replace: boolean) {
+    const keys = templates.map((t) => t.key).filter((k) => selected[k]);
+    if (keys.length === 0) {
+      notify(t("agentsec.tplNoSelection"), "error");
+      return;
+    }
+    if (
+      replace &&
+      !(await confirm({ message: t("agentsec.tplReplaceConfirm"), danger: true }))
+    )
+      return;
+    try {
+      setBusy(true);
+      await api.ApplySecurityTemplates(keys, replace);
+      setSelected({});
+      onApplied();
+      notify(t("agentsec.tplApplied"), "success");
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <LayoutTemplate className="size-5" /> {t("agentsec.tplTitle")}
+        </CardTitle>
+        <CardDescription>{t("agentsec.tplDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {templates.map((tpl) => (
+            <button
+              key={tpl.key}
+              onClick={() => toggle(tpl.key)}
+              className={cn(
+                "rounded-md border p-3 text-left transition-colors",
+                selected[tpl.key]
+                  ? "border-primary bg-primary/5"
+                  : "bg-card hover:bg-muted/50"
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{tpl.label}</span>
+                <span className="text-xs text-muted-foreground">
+                  {t("agentsec.tplCounts", {
+                    ignore: tpl.ignoreCount,
+                    mask: tpl.maskCount,
+                  })}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {tpl.description}
+              </p>
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => apply(false)} disabled={busy}>
+            <Plus className="size-4" /> {t("agentsec.tplApply")}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => apply(true)}
+            disabled={busy}
+          >
+            {t("agentsec.tplReplace")}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

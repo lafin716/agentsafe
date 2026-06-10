@@ -94,6 +94,14 @@ export interface MaskFile {
   rules: MaskRule[] | null;
 }
 
+export interface SecurityTemplate {
+  key: string;
+  label: string;
+  description: string;
+  ignoreCount: number;
+  maskCount: number;
+}
+
 export interface RepoMeta {
   name: string;
   worktreePath: string;

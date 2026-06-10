@@ -195,6 +195,16 @@ const en: Dict = {
     "Dotted path to the value in a JSON/YAML file, e.g. main.sub",
   "agentsec.jsonInvalid": "Invalid JSON: expected an array of rules.",
   "agentsec.save": "Save",
+  "agentsec.tplTitle": "Templates",
+  "agentsec.tplDesc":
+    "Load preset exclusion and masking rules for your tech stack. Selected templates are merged into the current settings (duplicates removed).",
+  "agentsec.tplCounts": "ignore {ignore} · mask {mask}",
+  "agentsec.tplApply": "Merge selected",
+  "agentsec.tplReplace": "Replace with selected",
+  "agentsec.tplNoSelection": "Select at least one template.",
+  "agentsec.tplReplaceConfirm":
+    "Replacing overwrites the current exclusion and masking settings with the selected templates. Continue?",
+  "agentsec.tplApplied": "Templates applied",
 
   // backups
   "backups.title": "Backups",
@@ -435,6 +445,16 @@ const ko: Dict = {
   "agentsec.keyPathHint": "JSON/YAML 파일에서 값까지의 점 경로, 예: main.sub",
   "agentsec.jsonInvalid": "잘못된 JSON: 규칙 배열이어야 합니다.",
   "agentsec.save": "저장",
+  "agentsec.tplTitle": "템플릿",
+  "agentsec.tplDesc":
+    "기술 스택별 제외·마스킹 규칙 프리셋을 불러옵니다. 선택한 템플릿은 현재 설정에 병합됩니다(중복 제거).",
+  "agentsec.tplCounts": "제외 {ignore} · 마스킹 {mask}",
+  "agentsec.tplApply": "선택 항목 병합",
+  "agentsec.tplReplace": "선택 항목으로 교체",
+  "agentsec.tplNoSelection": "템플릿을 하나 이상 선택하세요.",
+  "agentsec.tplReplaceConfirm":
+    "교체하면 현재 제외·마스킹 설정이 선택한 템플릿으로 덮어써집니다. 계속할까요?",
+  "agentsec.tplApplied": "템플릿을 적용했습니다",
 
   // backups
   "backups.title": "백업 관리",

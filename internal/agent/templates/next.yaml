@@ -1,0 +1,39 @@
+label: Next.js
+description: Next.js env files, build/output dirs, and auth/API secrets.
+
+ignore:
+  # env files
+  - .env
+  - .env.*
+  - .env.local
+  - .env.development.local
+  - .env.production.local
+  # dependencies / build outputs
+  - node_modules/
+  - .next/
+  - out/
+  - dist/
+  - coverage/
+  - .vercel/
+
+mask:
+  - name: NextAuth secret
+    type: plain
+    pattern: NEXTAUTH_SECRET
+    replacement: __MASKED_NEXTAUTH_SECRET__
+  - name: AWS Access Key
+    type: regex
+    pattern: AKIA[0-9A-Z]{16}
+    replacement: __MASKED_AWS_ACCESS_KEY__
+  - name: JWT Token
+    type: regex
+    pattern: eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+
+    replacement: __MASKED_JWT__
+  - name: Google API Key
+    type: regex
+    pattern: AIza[0-9A-Za-z_-]{35}
+    replacement: __MASKED_GOOGLE_API_KEY__
+  - name: Stripe Secret Key
+    type: regex
+    pattern: sk_(live|test)_[0-9A-Za-z]{16,}
+    replacement: __MASKED_STRIPE_KEY__

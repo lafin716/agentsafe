@@ -475,6 +475,45 @@ func (a *App) SaveMaskFile(m agent.MaskFile) error {
 	return agent.WriteSecurity(cfg, root, sf)
 }
 
+// SecurityTemplate is a stack-specific agentsafe.yaml preset surfaced in the UI.
+type SecurityTemplate struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	IgnoreCount int    `json:"ignoreCount"`
+	MaskCount   int    `json:"maskCount"`
+}
+
+// ListSecurityTemplates returns the available stack templates.
+func (a *App) ListSecurityTemplates() ([]SecurityTemplate, error) {
+	out := []SecurityTemplate{}
+	for _, t := range agent.TemplateList() {
+		out = append(out, SecurityTemplate{
+			Key:         t.Key,
+			Label:       t.Label,
+			Description: t.Description,
+			IgnoreCount: t.IgnoreCount,
+			MaskCount:   t.MaskCount,
+		})
+	}
+	return out, nil
+}
+
+// ApplySecurityTemplates merges (or replaces) the named templates into the
+// workspace's agentsafe.yaml.
+func (a *App) ApplySecurityTemplates(keys []string, replace bool) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	_, err = agent.ApplyTemplates(cfg, root, keys, replace)
+	return err
+}
+
 // splitLines splits textarea content into trimmed-of-CR lines, dropping a single
 // trailing empty line so a round-trip through the editor is stable.
 func splitLines(content string) []string {

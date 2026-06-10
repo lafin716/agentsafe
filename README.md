@@ -56,6 +56,16 @@ agentsafe push coupon-v2
 
 Agent security is configured by a single `agentsafe.yaml` file at the workspace root (and optionally per repository). It has two sections: `ignore` (gitignore-style patterns for files excluded from agent workspaces — `.git`, `.env`, secret key files, local application configs, build outputs and dependency folders) and `mask` (content masking rules for text files, supporting `plain`, `regex`, and `keypath` types). Risky and masked files are blocked during sync unless explicit override flags are used. Legacy `.agentignore` + `mask.json` files are still read and are automatically migrated to `agentsafe.yaml`.
 
+### Templates
+
+Stack-specific presets (Spring, React, Vue, Next, Nuxt, Kubernetes) seed `agentsafe.yaml` with sensible exclusion and masking rules. Templates are merged into the current settings (duplicates removed):
+
+- `agentsafe agent template list` — list available templates
+- `agentsafe agent template apply spring react` — merge templates (add `--replace` to overwrite)
+- `agentsafe init --template spring,react` — apply at workspace init
+
+The desktop app exposes the same templates on the Agent Security page.
+
 ## Git command timeout
 
 agentsafe runs Git commands non-interactively to avoid hanging on credential prompts. The default Git timeout is 120 seconds and can be changed with:

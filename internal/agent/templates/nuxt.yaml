@@ -1,0 +1,37 @@
+label: Nuxt
+description: Nuxt env files, build/output dirs, and common API secrets.
+
+ignore:
+  # env files
+  - .env
+  - .env.*
+  - .env.local
+  # dependencies / build outputs
+  - node_modules/
+  - .nuxt/
+  - .output/
+  - .nitro/
+  - dist/
+  - coverage/
+
+mask:
+  - name: Nuxt session password
+    type: plain
+    pattern: NUXT_SESSION_PASSWORD
+    replacement: __MASKED_NUXT_SESSION_PASSWORD__
+  - name: AWS Access Key
+    type: regex
+    pattern: AKIA[0-9A-Z]{16}
+    replacement: __MASKED_AWS_ACCESS_KEY__
+  - name: JWT Token
+    type: regex
+    pattern: eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+
+    replacement: __MASKED_JWT__
+  - name: Google API Key
+    type: regex
+    pattern: AIza[0-9A-Za-z_-]{35}
+    replacement: __MASKED_GOOGLE_API_KEY__
+  - name: Stripe Secret Key
+    type: regex
+    pattern: sk_(live|test)_[0-9A-Za-z]{16,}
+    replacement: __MASKED_STRIPE_KEY__

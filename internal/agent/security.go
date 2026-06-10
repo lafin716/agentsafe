@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/agentsafe/agentsafe/internal/config"
 	"gopkg.in/yaml.v3"
@@ -80,6 +81,68 @@ func WriteSecurity(cfg config.Config, dir string, sf SecurityFile) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, securityName(cfg)), b, 0644)
+}
+
+// MergeSecurity merges adds into base in order, removing duplicates.
+//   - ignore: exact (trimmed) string duplicates are dropped, first occurrence
+//     order is preserved (comments are kept).
+//   - mask: rules with the same (Type, Pattern) are deduped, the first rule
+//     wins so existing/manual rules take priority over templates.
+func MergeSecurity(base SecurityFile, adds ...SecurityFile) SecurityFile {
+	out := SecurityFile{}
+	seenIgnore := map[string]bool{}
+	addIgnore := func(patterns []string) {
+		for _, p := range patterns {
+			key := strings.TrimSpace(p)
+			if key == "" || seenIgnore[key] {
+				continue
+			}
+			seenIgnore[key] = true
+			out.Ignore = append(out.Ignore, key)
+		}
+	}
+	seenMask := map[string]bool{}
+	addMask := func(rules []MaskRule) {
+		for _, r := range rules {
+			key := strings.ToLower(r.Type) + "\x00" + r.Pattern
+			if seenMask[key] {
+				continue
+			}
+			seenMask[key] = true
+			out.Mask = append(out.Mask, r)
+		}
+	}
+	addIgnore(base.Ignore)
+	addMask(base.Mask)
+	for _, a := range adds {
+		addIgnore(a.Ignore)
+		addMask(a.Mask)
+	}
+	return out
+}
+
+// ApplyTemplates merges the named stack templates into root's agentsafe.yaml
+// (replace=false) or replaces its content with them (replace=true), writes the
+// result, and returns it. Unknown template keys return an error.
+func ApplyTemplates(cfg config.Config, root string, keys []string, replace bool) (SecurityFile, error) {
+	tmpls := make([]SecurityFile, 0, len(keys))
+	for _, k := range keys {
+		t, err := GetTemplate(k)
+		if err != nil {
+			return SecurityFile{}, err
+		}
+		tmpls = append(tmpls, t.Security())
+	}
+	base := SecurityFile{}
+	if !replace {
+		_ = EnsureSecurityFile(cfg, root)
+		base = LoadSecurity(cfg, root)
+	}
+	merged := MergeSecurity(base, tmpls...)
+	if err := WriteSecurity(cfg, root, merged); err != nil {
+		return SecurityFile{}, err
+	}
+	return merged, nil
 }
 
 // EnsureSecurityFile migrates legacy ignore/mask files into a unified

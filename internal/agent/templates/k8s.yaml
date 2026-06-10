@@ -1,0 +1,41 @@
+label: Kubernetes
+description: Kubernetes Secret manifests, kubeconfigs, and Secret value masking.
+
+ignore:
+  # secret manifests / dirs
+  - "*secret*.yaml"
+  - "*secret*.yml"
+  - secrets/
+  # kubeconfig / cluster creds
+  - kubeconfig
+  - "*.kubeconfig"
+  - .kube/
+  # env files
+  - .env
+  - "*.env"
+
+mask:
+  - name: Secret stringData password
+    type: keypath
+    pattern: stringData.password
+    replacement: __MASKED_K8S_PASSWORD__
+  - name: Secret stringData username
+    type: keypath
+    pattern: stringData.username
+    replacement: __MASKED_K8S_USERNAME__
+  - name: Secret data password
+    type: keypath
+    pattern: data.password
+    replacement: __MASKED_K8S_PASSWORD__
+  - name: Secret data token
+    type: keypath
+    pattern: data.token
+    replacement: __MASKED_K8S_TOKEN__
+  - name: AWS Access Key
+    type: regex
+    pattern: AKIA[0-9A-Z]{16}
+    replacement: __MASKED_AWS_ACCESS_KEY__
+  - name: JWT Token
+    type: regex
+    pattern: eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+
+    replacement: __MASKED_JWT__
