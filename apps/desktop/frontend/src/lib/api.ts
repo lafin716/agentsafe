@@ -14,6 +14,7 @@ import type {
   GitLabConfig,
   MaskFile,
   PrepareMetadata,
+  RebaseResult,
   Repository,
   RequestResults,
   SecurityTemplate,
@@ -42,6 +43,7 @@ type AppBindings = {
   ListFeatures(): Promise<FeatureListResult>;
   CreateFeature(name: string, base: string, force: boolean): Promise<void>;
   FeatureStatus(name: string): Promise<FeatureStatusResult>;
+  RebaseFeature(name: string, repoFilter: string): Promise<RebaseResult>;
   LoadFeature(name: string): Promise<FeatureMetadata>;
   AgentPrepare(name: string, backup: boolean): Promise<PrepareMetadata>;
   AgentDiff(name: string, repoFilter: string): Promise<DiffResult>;

@@ -213,6 +213,20 @@ func (a *App) CreateFeature(name, base string, force bool) error {
 	return feature.Create(root, cfg, name, base, force)
 }
 
+// RebaseFeature rebases the feature's worktrees onto their base branch.
+// repoFilter, when non-empty, limits the operation to one repository.
+func (a *App) RebaseFeature(name, repoFilter string) (feature.RebaseResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.RebaseResult{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return feature.RebaseResult{}, err
+	}
+	return feature.Rebase(root, cfg, name, repoFilter)
+}
+
 func (a *App) FeatureStatus(name string) (feature.FeatureStatusResult, error) {
 	root, err := a.requireRoot()
 	if err != nil {

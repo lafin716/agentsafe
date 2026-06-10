@@ -213,6 +213,25 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       notify(t("toast.pushed"), "success");
     });
 
+  const rebase = () =>
+    run(async () => {
+      const res = await api.RebaseFeature(name, "");
+      const repos = res.repositories ?? [];
+      const failed = repos.filter((r) => r.status === "failed");
+      const rebased = repos.filter((r) => r.status === "rebased");
+      if (failed.length > 0) {
+        notify(
+          t("toast.rebaseConflict", {
+            repos: failed.map((r) => r.name).join(", "),
+          }),
+          "error"
+        );
+      } else {
+        notify(t("toast.rebased", { count: rebased.length }), "success");
+      }
+      await loadStatus();
+    });
+
   const sendRequests = () =>
     run(async () => {
       const res = await api.CreateMergeRequests(name, mrTitle.trim());
@@ -267,9 +286,19 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                 {t("feature.branchLabel", { branch: status?.branch ?? "—" })}
               </CardDescription>
             </div>
-            <Button variant="outline" size="sm" onClick={loadStatus}>
-              <RefreshCw className="size-4" /> {t("common.refresh")}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={rebase}
+                disabled={busy}
+              >
+                <GitMerge className="size-4" /> {t("feature.rebase")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={loadStatus}>
+                <RefreshCw className="size-4" /> {t("common.refresh")}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             {(status?.repositories ?? []).map((r) => (

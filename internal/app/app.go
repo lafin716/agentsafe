@@ -197,7 +197,31 @@ the local branch and recreate it from the base.`,
 		}
 		return feature.List(root)
 	}}
-	c.AddCommand(create, list)
+	var rebaseRepo string
+	rebase := &cobra.Command{Use: "rebase NAME", Short: "Rebase feature worktrees onto their base branch", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, cfg, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		res, err := feature.Rebase(root, cfg, args[0], rebaseRepo)
+		if err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(res)
+		}
+		fmt.Printf("Feature: %s\n\n", res.Feature)
+		for _, r := range res.Repositories {
+			fmt.Printf("[%s] %s", r.Name, r.Status)
+			if r.Detail != "" {
+				fmt.Printf(" — %s", r.Detail)
+			}
+			fmt.Println()
+		}
+		return nil
+	}}
+	rebase.Flags().StringVar(&rebaseRepo, "repo", "", "limit to repository")
+	c.AddCommand(create, list, rebase)
 	return c
 }
 

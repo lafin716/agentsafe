@@ -252,6 +252,79 @@ func Commit(root, name, message string) error {
 	return nil
 }
 
+type RebaseRepoResult struct {
+	Name       string `json:"name"       yaml:"name"`
+	Branch     string `json:"branch"     yaml:"branch"`
+	BaseBranch string `json:"baseBranch" yaml:"baseBranch"`
+	Status     string `json:"status"     yaml:"status"` // rebased | up-to-date | skipped | failed
+	Detail     string `json:"detail"     yaml:"detail"`
+}
+type RebaseResult struct {
+	Feature      string             `json:"feature"      yaml:"feature"`
+	Repositories []RebaseRepoResult `json:"repositories" yaml:"repositories"`
+}
+
+// Rebase replays each feature worktree's branch onto the latest base branch
+// (origin/<base> when available). Worktrees with uncommitted changes are
+// skipped, and a rebase that hits conflicts is aborted so the worktree is left
+// untouched. repoFilter, when non-empty, limits the operation to one repository.
+func Rebase(root string, cfg config.Config, name, repoFilter string) (RebaseResult, error) {
+	m, err := Load(root, name)
+	if err != nil {
+		return RebaseResult{}, err
+	}
+	result := RebaseResult{Feature: m.Name}
+	for _, r := range m.Repositories {
+		if repoFilter != "" && r.Name != repoFilter {
+			continue
+		}
+		base := r.BaseBranch
+		if base == "" {
+			base = cfg.Git.DefaultBaseBranch
+		}
+		rr := RebaseRepoResult{Name: r.Name, Branch: r.Branch, BaseBranch: base}
+		p := filepath.Join(root, r.WorktreePath)
+
+		if aggit.HasChanges(p) {
+			rr.Status = "skipped"
+			rr.Detail = "uncommitted changes; commit or stash first"
+			result.Repositories = append(result.Repositories, rr)
+			continue
+		}
+
+		_ = aggit.Fetch(p) // best-effort; rebase falls back to local refs
+
+		upstream := base
+		if aggit.RemoteBranchExists(p, base) {
+			upstream = "origin/" + base
+		} else if !aggit.LocalBranchExists(p, base) {
+			rr.Status = "skipped"
+			rr.Detail = fmt.Sprintf("base branch %q not found", base)
+			result.Repositories = append(result.Repositories, rr)
+			continue
+		}
+
+		before, _ := aggit.HeadSHA(p)
+		if err := aggit.RebaseOnto(p, upstream); err != nil {
+			_ = aggit.RebaseAbort(p)
+			rr.Status = "failed"
+			rr.Detail = fmt.Sprintf("rebase onto %s failed (conflict); aborted, resolve manually", upstream)
+			result.Repositories = append(result.Repositories, rr)
+			continue
+		}
+		after, _ := aggit.HeadSHA(p)
+		if before == after {
+			rr.Status = "up-to-date"
+			rr.Detail = fmt.Sprintf("already based on %s", upstream)
+		} else {
+			rr.Status = "rebased"
+			rr.Detail = fmt.Sprintf("rebased onto %s", upstream)
+		}
+		result.Repositories = append(result.Repositories, rr)
+	}
+	return result, nil
+}
+
 func Push(root, name string) error {
 	m, err := Load(root, name)
 	if err != nil {

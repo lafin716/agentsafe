@@ -30,12 +30,26 @@ func PullAll(root string, cfg config.Config) error {
 				output.Println("cloned")
 			}
 		} else {
-			output.Println("fetching...")
+			output.Printf("fetching...")
 			if err := aggit.FetchAll(dest); err != nil {
 				failed++
-				output.Printf("failed: %v\n", err)
+				output.Printf(" failed: %v\n", err)
+				continue
+			}
+			branch := r.DefaultBranch
+			if branch == "" {
+				branch = cfg.Git.DefaultBaseBranch
+			}
+			cur, _ := aggit.CurrentBranch(dest)
+			if cur == branch && !aggit.HasChanges(dest) {
+				if err := aggit.Pull(dest, "origin", branch); err != nil {
+					failed++
+					output.Printf(" fetched, but pull failed: %v\n", err)
+				} else {
+					output.Printf(" pulled (ff) %s\n", branch)
+				}
 			} else {
-				output.Println("fetched")
+				output.Printf(" fetched (skipped pull: not on %s or has local changes)\n", branch)
 			}
 		}
 	}

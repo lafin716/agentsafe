@@ -102,6 +102,15 @@ func DeleteLocalBranch(repoPath, branch string) error {
 	_, err := Run(repoPath, "branch", "-D", branch)
 	return err
 }
+func RebaseOnto(worktreePath, upstream string) error {
+	_, err := Run(worktreePath, "rebase", upstream)
+	return err
+}
+func RebaseAbort(worktreePath string) error {
+	_, err := Run(worktreePath, "rebase", "--abort")
+	return err
+}
+func HeadSHA(path string) (string, error) { return Output(path, "rev-parse", "HEAD") }
 func AddWorktree(repoPath, dest, branch, start string, create bool) error {
 	if create {
 		_, err := Run(repoPath, "worktree", "add", dest, "-b", branch, start)

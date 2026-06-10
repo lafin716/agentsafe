@@ -81,6 +81,26 @@ export interface FeatureStatusResult {
   repositories: RepoStatus[] | null;
 }
 
+export type RebaseStatus =
+  | "rebased"
+  | "up-to-date"
+  | "skipped"
+  | "failed"
+  | string;
+
+export interface RebaseRepoResult {
+  name: string;
+  branch: string;
+  baseBranch: string;
+  status: RebaseStatus;
+  detail: string;
+}
+
+export interface RebaseResult {
+  feature: string;
+  repositories: RebaseRepoResult[] | null;
+}
+
 export type MaskRuleType = "plain" | "regex" | "keypath" | string;
 
 export interface MaskRule {

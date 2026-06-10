@@ -42,8 +42,10 @@ agentsafe push coupon-v2
 - `agentsafe repo add NAME URL --type TYPE`
 - `agentsafe repo list`
 - `agentsafe clone`
+- `agentsafe pull` (clones missing repos, fast-forwards the rest)
 - `agentsafe feature create NAME --base develop`
 - `agentsafe feature list`
+- `agentsafe feature rebase NAME [--repo NAME]`
 - `agentsafe status FEATURE`
 - `agentsafe agent prepare FEATURE`
 - `agentsafe agent diff FEATURE [--repo NAME]`
