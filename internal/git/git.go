@@ -120,6 +120,18 @@ func RebaseAbort(worktreePath string) error {
 	return err
 }
 func HeadSHA(path string) (string, error) { return Output(path, "rev-parse", "HEAD") }
+func RemoveWorktree(repoPath, dest string, force bool) error {
+	args := []string{"worktree", "remove"}
+	if force {
+		args = append(args, "--force")
+	}
+	_, err := Run(repoPath, append(args, dest)...)
+	return err
+}
+func WorktreePrune(repoPath string) error {
+	_, err := Run(repoPath, "worktree", "prune")
+	return err
+}
 func AddWorktree(repoPath, dest, branch, start string, create bool) error {
 	if create {
 		_, err := Run(repoPath, "worktree", "add", dest, "-b", branch, start)

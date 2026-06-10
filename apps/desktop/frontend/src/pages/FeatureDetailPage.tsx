@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
 
 interface Props {
@@ -46,8 +47,10 @@ type Tab = "status" | "agent" | "deliver";
 export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   const { notify } = useToast();
   const { t } = useI18n();
+  const confirm = useConfirm();
   const [tab, setTab] = useState<Tab>("status");
   const [busy, setBusy] = useState(false);
+  const [deleteBranch, setDeleteBranch] = useState(false);
 
   const [status, setStatus] = useState<FeatureStatusResult | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
@@ -166,6 +169,36 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       setPrepared(false);
       notify(t("toast.agentDeleted"), "success");
       await loadStatus();
+    });
+
+  const deleteFeature = () =>
+    run(async () => {
+      if (
+        !(await confirm({
+          message: t("feature.deleteConfirm", { name }),
+          danger: true,
+        }))
+      )
+        return;
+      try {
+        await api.FeatureDelete(name, deleteBranch, false);
+      } catch (e) {
+        // Offer a force delete when a worktree has uncommitted changes.
+        if (/uncommitted|changes/i.test(errMessage(e))) {
+          if (
+            !(await confirm({
+              message: t("feature.deleteForceConfirm"),
+              danger: true,
+            }))
+          )
+            return;
+          await api.FeatureDelete(name, deleteBranch, true);
+        } else {
+          throw e;
+        }
+      }
+      notify(t("toast.featureDeleted"), "success");
+      onBack();
     });
 
   // Display name for a program command/path (drop directories and ".app").
@@ -327,6 +360,27 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
             {(status?.repositories ?? []).length === 0 && (
               <p className="text-sm text-muted-foreground">{t("feature.noRepos")}</p>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "status" && (
+        <Card className="border-destructive/40">
+          <CardHeader>
+            <CardTitle className="text-destructive">
+              {t("feature.dangerZone")}
+            </CardTitle>
+            <CardDescription>{t("feature.deleteDesc")}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Toggle
+              checked={deleteBranch}
+              onChange={setDeleteBranch}
+              label={t("feature.deleteBranch")}
+            />
+            <Button variant="destructive" onClick={deleteFeature} disabled={busy}>
+              <Trash2 className="size-4" /> {t("feature.delete")}
+            </Button>
           </CardContent>
         </Card>
       )}

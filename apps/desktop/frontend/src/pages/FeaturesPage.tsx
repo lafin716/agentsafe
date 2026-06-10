@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, Code2, Plus, RefreshCw, Terminal } from "lucide-react";
+import { ChevronRight, Code2, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
+import { useConfirm } from "@/components/ui/confirm";
 import type { FeatureEntry } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +32,7 @@ interface Props {
 export function FeaturesPage({ onOpen }: Props) {
   const { notify } = useToast();
   const { t } = useI18n();
+  const confirm = useConfirm();
   const [features, setFeatures] = useState<FeatureEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
@@ -65,6 +67,38 @@ export function FeaturesPage({ onOpen }: Props) {
       notify(t("toast.openedVSCode", { name }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
+    }
+  }
+
+  async function deleteFeature(name: string) {
+    if (!(await confirm({ message: t("feature.deleteConfirm", { name }), danger: true })))
+      return;
+    try {
+      setBusy(true);
+      try {
+        await api.FeatureDelete(name, false, false);
+      } catch (e) {
+        const msg = errMessage(e);
+        // Offer a force delete when the worktree has uncommitted changes.
+        if (/uncommitted|changes/i.test(msg)) {
+          if (
+            !(await confirm({
+              message: t("feature.deleteForceConfirm"),
+              danger: true,
+            }))
+          )
+            return;
+          await api.FeatureDelete(name, false, true);
+        } else {
+          throw e;
+        }
+      }
+      notify(t("toast.featureDeleted"), "success");
+      await load();
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -155,6 +189,18 @@ export function FeaturesPage({ onOpen }: Props) {
                           }}
                         >
                           <Code2 className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title={t("feature.delete")}
+                          disabled={busy}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteFeature(f.name);
+                          }}
+                        >
+                          <Trash2 className="size-4 text-destructive" />
                         </Button>
                         <ChevronRight className="size-4 text-muted-foreground" />
                       </div>

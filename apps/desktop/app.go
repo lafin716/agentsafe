@@ -268,6 +268,19 @@ func (a *App) RebaseFeature(name, repoFilter string) (feature.RebaseResult, erro
 	return res, err
 }
 
+// FeatureDelete removes a feature's worktrees and artifacts. deleteBranch also
+// removes the local feature branch; force removes worktrees with uncommitted
+// changes (otherwise refused).
+func (a *App) FeatureDelete(name string, deleteBranch, force bool) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return a.runTask("Delete feature: "+name, func() error {
+		return feature.Delete(root, name, feature.DeleteOptions{DeleteBranch: deleteBranch, Force: force})
+	})
+}
+
 func (a *App) FeatureStatus(name string) (feature.FeatureStatusResult, error) {
 	root, err := a.requireRoot()
 	if err != nil {

@@ -221,7 +221,24 @@ the local branch and recreate it from the base.`,
 		return nil
 	}}
 	rebase.Flags().StringVar(&rebaseRepo, "repo", "", "limit to repository")
-	c.AddCommand(create, list, rebase)
+	var deleteBranch, deleteForce bool
+	del := &cobra.Command{Use: "delete NAME", Short: "Delete a feature's worktrees and artifacts", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, _, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		if err := feature.Delete(root, args[0], feature.DeleteOptions{DeleteBranch: deleteBranch, Force: deleteForce}); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok", Message: "deleted feature " + args[0]})
+		}
+		fmt.Printf("Deleted feature: %s\n", args[0])
+		return nil
+	}}
+	del.Flags().BoolVar(&deleteBranch, "delete-branch", false, "also delete the local feature branch in each repo")
+	del.Flags().BoolVar(&deleteForce, "force", false, "remove worktrees even with uncommitted changes")
+	c.AddCommand(create, list, rebase, del)
 	return c
 }
 

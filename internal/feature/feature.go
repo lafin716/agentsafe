@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/agentsafe/agentsafe/internal/config"
@@ -120,6 +121,68 @@ func Create(root string, cfg config.Config, name, base string, force bool) error
 		})
 	}
 	return Save(root, meta)
+}
+
+// DeleteOptions controls feature deletion. DeleteBranch also removes the local
+// feature branch in each repository; Force removes worktrees that have
+// uncommitted changes (otherwise deletion is refused).
+type DeleteOptions struct {
+	DeleteBranch bool
+	Force        bool
+}
+
+// Delete removes a feature's worktrees and all of its artifacts: the feature
+// metadata, the agent workspace, session metadata, and sync history. When
+// DeleteBranch is set, the local feature branch is removed from each repo too.
+// Unless Force is set, deletion is refused if any worktree has uncommitted
+// changes (nothing is removed in that case, to avoid a partial delete).
+func Delete(root, name string, opt DeleteOptions) error {
+	m, err := Load(root, name)
+	if err != nil {
+		return err
+	}
+
+	if !opt.Force {
+		var dirty []string
+		for _, r := range m.Repositories {
+			dest := filepath.Join(root, filepath.FromSlash(r.WorktreePath))
+			if st, e := os.Stat(dest); e == nil && st.IsDir() && aggit.HasChanges(dest) {
+				dirty = append(dirty, r.Name)
+			}
+		}
+		if len(dirty) > 0 {
+			return fmt.Errorf("worktree(s) have uncommitted changes: %s; commit/stash or use force", strings.Join(dirty, ", "))
+		}
+	}
+
+	for _, r := range m.Repositories {
+		repoPath := config.RepoPath(root, r.Name)
+		dest := filepath.Join(root, filepath.FromSlash(r.WorktreePath))
+		output.Printf("[%s] removing worktree %s\n", r.Name, r.WorktreePath)
+		if _, e := os.Stat(dest); e == nil {
+			if err := aggit.RemoveWorktree(repoPath, dest, opt.Force); err != nil {
+				return fmt.Errorf("[%s] failed to remove worktree: %w", r.Name, err)
+			}
+		} else {
+			_ = aggit.WorktreePrune(repoPath)
+			_ = os.RemoveAll(dest)
+		}
+		if opt.DeleteBranch {
+			output.Printf("[%s] deleting local branch %s\n", r.Name, r.Branch)
+			if err := aggit.DeleteLocalBranch(repoPath, r.Branch); err != nil {
+				output.Printf("  warning: could not delete branch %s: %v\n", r.Branch, err)
+			}
+		}
+	}
+
+	// Clean up all feature artifacts (best-effort; missing paths are ignored).
+	output.Printf("removing feature metadata and agent artifacts for %s\n", name)
+	_ = os.RemoveAll(filepath.Join(root, "feature", name))
+	_ = os.Remove(config.FeatureMetaPath(root, name))
+	_ = os.RemoveAll(filepath.Join(root, "agent", name))
+	_ = os.Remove(config.SessionMetaPath(root, name))
+	_ = os.RemoveAll(filepath.Join(config.HistoryDir(root), name))
+	return nil
 }
 
 type FeatureListResult struct {

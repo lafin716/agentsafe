@@ -102,6 +102,15 @@ const en: Dict = {
   "feature.branchLabel": "Branch: {branch}",
   "feature.clean": "clean",
   "feature.rebase": "Rebase onto base",
+  "feature.delete": "Delete feature",
+  "feature.dangerZone": "Danger zone",
+  "feature.deleteDesc":
+    "Remove this feature's worktrees and all artifacts (agent workspace, sessions, sync history).",
+  "feature.deleteBranch": "Also delete the local feature branch",
+  "feature.deleteConfirm":
+    "Delete feature \"{name}\"? Its worktrees and artifacts will be removed.",
+  "feature.deleteForceConfirm":
+    "A worktree has uncommitted changes. Force delete and discard them?",
   "feature.noRepos": "No repositories.",
   "feature.agentTitle": "Sanitized agent workspace",
   "feature.agentDesc": "Prepare a masked copy for the agent, review the diff, then sync approved changes back to the worktrees.",
@@ -259,6 +268,7 @@ const en: Dict = {
   "toast.committed": "Committed",
   "toast.pushed": "Pushed",
   "toast.rebased": "Rebased {count} repository(ies) onto base",
+  "toast.featureDeleted": "Feature deleted",
   "toast.rebaseConflict": "Rebase conflict in: {repos} (aborted, resolve manually)",
   "toast.requestsSent": "Merge requests processed",
   "toast.gitSettingsSaved": "Git settings saved",
@@ -362,6 +372,15 @@ const ko: Dict = {
   "feature.branchLabel": "브랜치: {branch}",
   "feature.clean": "변경 없음",
   "feature.rebase": "base 브랜치로 rebase",
+  "feature.delete": "피처 삭제",
+  "feature.dangerZone": "위험 구역",
+  "feature.deleteDesc":
+    "이 피처의 워크트리와 모든 산출물(agent 워크스페이스, 세션, 싱크 히스토리)을 제거합니다.",
+  "feature.deleteBranch": "로컬 피처 브랜치도 함께 삭제",
+  "feature.deleteConfirm":
+    "피처 \"{name}\"을(를) 삭제할까요? 워크트리와 산출물이 제거됩니다.",
+  "feature.deleteForceConfirm":
+    "워크트리에 커밋되지 않은 변경이 있습니다. 강제로 삭제(변경 폐기)할까요?",
   "feature.noRepos": "리포지토리가 없습니다.",
   "feature.agentTitle": "정제된 에이전트 워크스페이스",
   "feature.agentDesc": "에이전트용 마스킹된 사본을 준비하고, 변경 내역을 검토한 뒤 승인된 변경을 worktree로 동기화합니다.",
@@ -515,6 +534,7 @@ const ko: Dict = {
   "toast.committed": "커밋됨",
   "toast.pushed": "푸시됨",
   "toast.rebased": "{count}개 리포지토리를 base로 rebase했습니다",
+  "toast.featureDeleted": "피처를 삭제했습니다",
   "toast.rebaseConflict": "rebase 충돌: {repos} (중단됨, 수동 해결 필요)",
   "toast.requestsSent": "병합 요청 처리 완료",
   "toast.gitSettingsSaved": "Git 설정 저장됨",

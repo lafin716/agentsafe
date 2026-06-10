@@ -44,6 +44,11 @@ type AppBindings = {
   CreateFeature(name: string, base: string, force: boolean): Promise<void>;
   FeatureStatus(name: string): Promise<FeatureStatusResult>;
   RebaseFeature(name: string, repoFilter: string): Promise<RebaseResult>;
+  FeatureDelete(
+    name: string,
+    deleteBranch: boolean,
+    force: boolean
+  ): Promise<void>;
   LoadFeature(name: string): Promise<FeatureMetadata>;
   AgentPrepare(name: string, backup: boolean): Promise<PrepareMetadata>;
   AgentDiff(name: string, repoFilter: string): Promise<DiffResult>;
