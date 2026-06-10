@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { DownloadCloud, FolderOpen, Plus, Sparkles, Trash2 } from "lucide-react";
+import {
+  Code2,
+  DownloadCloud,
+  FolderOpen,
+  Plus,
+  Sparkles,
+  Terminal,
+  Trash2,
+} from "lucide-react";
 import { api, errMessage } from "@/lib/api";
 import type { Config } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -131,6 +139,21 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
     }
   }
 
+  async function openWorkspace(
+    action: () => Promise<string>,
+    successKey: string
+  ) {
+    try {
+      setBusy(true);
+      const path = await action();
+      notify(t(successKey, { path }), "success");
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!config) {
     return (
       <div className="mx-auto max-w-2xl space-y-4">
@@ -175,9 +198,55 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader>
-          <CardTitle>{config.Workspace.Name}</CardTitle>
-          <CardDescription className="break-all">{root}</CardDescription>
+        <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
+          <div className="min-w-0">
+            <CardTitle>{config.Workspace.Name}</CardTitle>
+            <CardDescription className="break-all">{root}</CardDescription>
+          </div>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                openWorkspace(
+                  () => api.OpenWorkspaceFolder(),
+                  "toast.openedWorkspaceFolder"
+                )
+              }
+            >
+              <FolderOpen className="size-4" />
+              {t("workspace.openFolder")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                openWorkspace(
+                  () => api.OpenWorkspaceTerminal(),
+                  "toast.openedWorkspaceTerminal"
+                )
+              }
+            >
+              <Terminal className="size-4" />
+              {t("workspace.openTerminal")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                openWorkspace(
+                  () => api.OpenWorkspaceVSCode(),
+                  "toast.openedWorkspaceVSCode"
+                )
+              }
+            >
+              <Code2 className="size-4" />
+              {t("workspace.openVSCode")}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <Info label={t("workspace.baseBranch")} value={config.Git.DefaultBaseBranch} />

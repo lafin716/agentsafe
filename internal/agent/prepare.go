@@ -20,13 +20,28 @@ type PrepareMetadata struct {
 	Repositories []PrepareRepo `json:"repositories" yaml:"repositories"`
 }
 type PrepareRepo struct {
-	Name           string            `json:"name"                     yaml:"name"`
-	Source         string            `json:"source"                   yaml:"source"`
-	Agent          string            `json:"agent"                    yaml:"agent"`
-	CopiedFiles    int               `json:"copiedFiles"              yaml:"copiedFiles"`
-	IgnoredFiles   int               `json:"ignoredFiles"             yaml:"ignoredFiles"`
-	MaskedFiles    []string          `json:"maskedFiles"              yaml:"maskedFiles"`
-	PreparedHashes map[string]string `json:"preparedHashes,omitempty" yaml:"preparedHashes,omitempty"`
+	Name           string                    `json:"name"                     yaml:"name"`
+	Source         string                    `json:"source"                   yaml:"source"`
+	Agent          string                    `json:"agent"                    yaml:"agent"`
+	CopiedFiles    int                       `json:"copiedFiles"              yaml:"copiedFiles"`
+	IgnoredFiles   int                       `json:"ignoredFiles"             yaml:"ignoredFiles"`
+	MaskedFiles    []string                  `json:"maskedFiles"              yaml:"maskedFiles"`
+	PreparedHashes map[string]string         `json:"preparedHashes,omitempty" yaml:"preparedHashes,omitempty"`
+	FileIndex      map[string]FileIndexEntry `json:"fileIndex,omitempty" yaml:"fileIndex,omitempty"`
+}
+
+// FileSnapshot is the stat/hash information captured at prepare time. Diff
+// uses the cheap stat fields as an index and hashes only files whose metadata
+// may have changed.
+type FileSnapshot struct {
+	Size        int64  `json:"size"        yaml:"size"`
+	ModTimeNano int64  `json:"modTimeNano" yaml:"modTimeNano"`
+	Hash        string `json:"hash"        yaml:"hash"`
+}
+
+type FileIndexEntry struct {
+	Agent    FileSnapshot `json:"agent"    yaml:"agent"`
+	Worktree FileSnapshot `json:"worktree" yaml:"worktree"`
 }
 
 func LoadPrepareMetadata(root, featureName string) PrepareMetadata {
@@ -55,6 +70,15 @@ func preparedHashes(pm PrepareMetadata, repoName string) map[string]string {
 	for _, r := range pm.Repositories {
 		if r.Name == repoName {
 			return r.PreparedHashes
+		}
+	}
+	return nil
+}
+
+func preparedFileIndex(pm PrepareMetadata, repoName string) map[string]FileIndexEntry {
+	for _, r := range pm.Repositories {
+		if r.Name == repoName {
+			return r.FileIndex
 		}
 	}
 	return nil
@@ -93,7 +117,13 @@ func Init(root string, cfg config.Config, featureName string, opt PrepareOptions
 		if len(mask.Rules) == 0 {
 			mask = MaskFile{Rules: secRoot.Mask}
 		}
-		pr := PrepareRepo{Name: r.Name, Source: r.WorktreePath, Agent: filepath.ToSlash(filepath.Join("agent", featureName, r.Name)), PreparedHashes: map[string]string{}}
+		pr := PrepareRepo{
+			Name:           r.Name,
+			Source:         r.WorktreePath,
+			Agent:          filepath.ToSlash(filepath.Join("agent", featureName, r.Name)),
+			PreparedHashes: map[string]string{},
+			FileIndex:      map[string]FileIndexEntry{},
+		}
 		err := filepath.WalkDir(source, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -140,8 +170,30 @@ func Init(root string, cfg config.Config, featureName string, opt PrepareOptions
 			} else if err := fsutil.CopyFile(path, dst, info.Mode().Perm()); err != nil {
 				return err
 			}
-			if h, err := fsutil.SHA256File(dst); err == nil {
-				pr.PreparedHashes[rel] = h
+			worktreeHash, err := fsutil.SHA256File(path)
+			if err != nil {
+				return err
+			}
+			agentHash, err := fsutil.SHA256File(dst)
+			if err != nil {
+				return err
+			}
+			dstInfo, err := os.Stat(dst)
+			if err != nil {
+				return err
+			}
+			pr.PreparedHashes[rel] = agentHash
+			pr.FileIndex[rel] = FileIndexEntry{
+				Agent: FileSnapshot{
+					Size:        dstInfo.Size(),
+					ModTimeNano: dstInfo.ModTime().UnixNano(),
+					Hash:        agentHash,
+				},
+				Worktree: FileSnapshot{
+					Size:        info.Size(),
+					ModTimeNano: info.ModTime().UnixNano(),
+					Hash:        worktreeHash,
+				},
 			}
 			pr.CopiedFiles++
 			return nil

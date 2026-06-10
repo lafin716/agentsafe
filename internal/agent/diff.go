@@ -26,11 +26,14 @@ type Change struct {
 }
 
 type fileInfo struct {
-	size int64
-	hash string
+	size        int64
+	modTimeNano int64
+	hash        string
 }
 
-func scanFiles(root string, matcher IgnoreMatcher) (map[string]fileInfo, error) {
+type hashFileFunc func(string) (string, error)
+
+func scanFiles(root string, matcher IgnoreMatcher, withHashes bool, hashFile hashFileFunc) (map[string]fileInfo, error) {
 	out := map[string]fileInfo{}
 	if _, err := os.Stat(root); err != nil {
 		return out, nil
@@ -57,22 +60,40 @@ func scanFiles(root string, matcher IgnoreMatcher) (map[string]fileInfo, error) 
 		if err != nil {
 			return err
 		}
-		h, err := fsutil.SHA256File(path)
-		if err != nil {
-			return err
+		h := ""
+		if withHashes {
+			h, err = hashFile(path)
+			if err != nil {
+				return err
+			}
 		}
-		out[rel] = fileInfo{size: info.Size(), hash: h}
+		out[rel] = fileInfo{size: info.Size(), modTimeNano: info.ModTime().UnixNano(), hash: h}
 		return nil
 	})
 	return out, err
 }
 
 func Compare(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool) ([]Change, error) {
-	s, err := scanFiles(source, matcher)
+	return compare(repoName, source, target, matcher, masked, nil, fsutil.SHA256File)
+}
+
+// CompareIndexed uses prepare-time stat metadata as a Git-like index. Files
+// whose size and modification time still match both snapshots need no content
+// reads; only possible changes are hashed for confirmation.
+func CompareIndexed(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool, index map[string]FileIndexEntry) ([]Change, error) {
+	if len(index) == 0 {
+		return Compare(repoName, source, target, matcher, masked)
+	}
+	return compare(repoName, source, target, matcher, masked, index, fsutil.SHA256File)
+}
+
+func compare(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool, index map[string]FileIndexEntry, hashFile hashFileFunc) ([]Change, error) {
+	withHashes := len(index) == 0
+	s, err := scanFiles(source, matcher, withHashes, hashFile)
 	if err != nil {
 		return nil, err
 	}
-	t, err := scanFiles(target, matcher)
+	t, err := scanFiles(target, matcher, withHashes, hashFile)
 	if err != nil {
 		return nil, err
 	}
@@ -92,14 +113,66 @@ func Compare(repoName, source, target string, matcher IgnoreMatcher, masked map[
 	for _, k := range sorted {
 		si, sok := s[k]
 		ti, tok := t[k]
+		var change *Change
 		switch {
 		case sok && !tok:
-			changes = append(changes, Change{Repo: repoName, Type: Added, Path: k, Risky: IsRisky(k), Masked: masked[k]})
+			c := Change{Repo: repoName, Type: Added, Path: k, Risky: IsRisky(k), Masked: masked[k]}
+			change = &c
 		case !sok && tok:
-			changes = append(changes, Change{Repo: repoName, Type: Deleted, Path: k, Risky: IsRisky(k), Masked: masked[k]})
-		case si.size != ti.size || si.hash != ti.hash:
-			changes = append(changes, Change{Repo: repoName, Type: Modified, Path: k, Risky: IsRisky(k), Masked: masked[k]})
+			c := Change{Repo: repoName, Type: Deleted, Path: k, Risky: IsRisky(k), Masked: masked[k]}
+			change = &c
+		case withHashes:
+			if si.size != ti.size || si.hash != ti.hash {
+				c := Change{Repo: repoName, Type: Modified, Path: k, Risky: IsRisky(k), Masked: masked[k]}
+				change = &c
+			}
+		default:
+			baseline, indexed := index[k]
+			if indexed &&
+				si.size == baseline.Agent.Size &&
+				si.modTimeNano == baseline.Agent.ModTimeNano &&
+				ti.size == baseline.Worktree.Size &&
+				ti.modTimeNano == baseline.Worktree.ModTimeNano &&
+				(baseline.Agent.Hash == baseline.Worktree.Hash || masked[k]) {
+				continue
+			}
+			if si.size != ti.size {
+				c := Change{Repo: repoName, Type: Modified, Path: k, Risky: IsRisky(k), Masked: masked[k]}
+				change = &c
+				break
+			}
+			sourceHash, err := hashFile(filepath.Join(source, filepath.FromSlash(k)))
+			if err != nil {
+				return nil, err
+			}
+			targetHash, err := hashFile(filepath.Join(target, filepath.FromSlash(k)))
+			if err != nil {
+				return nil, err
+			}
+			si.hash, ti.hash = sourceHash, targetHash
+			if sourceHash != targetHash {
+				c := Change{Repo: repoName, Type: Modified, Path: k, Risky: IsRisky(k), Masked: masked[k]}
+				change = &c
+			}
 		}
+		if change == nil {
+			continue
+		}
+		// Preserve the existing masking rule: an unchanged prepared agent copy
+		// is not a user edit, even when it differs from the live worktree.
+		if change.Masked && sok {
+			currentHash := si.hash
+			if currentHash == "" {
+				currentHash, err = hashFile(filepath.Join(source, filepath.FromSlash(k)))
+				if err != nil {
+					return nil, err
+				}
+			}
+			if baseline, ok := index[k]; ok && baseline.Agent.Hash == currentHash {
+				continue
+			}
+		}
+		changes = append(changes, *change)
 	}
 	return changes, nil
 }

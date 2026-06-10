@@ -18,6 +18,12 @@ type Result struct {
 	Stderr  string
 }
 
+type FileStatus struct {
+	Code string
+	Type string
+	Path string
+}
+
 type Error struct {
 	Result  Result
 	Err     error
@@ -99,6 +105,60 @@ func RemoteBranchExists(repoPath, branch string) bool {
 func StatusShort(path string) (string, error)   { return Output(path, "status", "--short") }
 func CurrentBranch(path string) (string, error) { return Output(path, "branch", "--show-current") }
 func HasChanges(path string) bool               { s, err := StatusShort(path); return err == nil && s != "" }
+
+// StatusFiles returns both the porcelain output and a structured representation
+// for UI consumers. Unlike Output, it preserves the leading status columns.
+func StatusFiles(path string) (string, []FileStatus, error) {
+	r, err := Run(path, "status", "--porcelain=v1")
+	if err != nil {
+		return "", nil, err
+	}
+	raw := strings.TrimRight(r.Stdout, "\r\n")
+	return raw, ParseStatusPorcelain(raw), nil
+}
+
+// ParseStatusPorcelain parses `git status --porcelain=v1` output.
+func ParseStatusPorcelain(raw string) []FileStatus {
+	statuses := []FileStatus{}
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		if len(line) < 3 {
+			continue
+		}
+		code := line[:2]
+		path := strings.TrimSpace(line[3:])
+		if i := strings.LastIndex(path, " -> "); i >= 0 {
+			path = path[i+4:]
+		}
+		statuses = append(statuses, FileStatus{
+			Code: code,
+			Type: statusType(code),
+			Path: path,
+		})
+	}
+	return statuses
+}
+
+func statusType(code string) string {
+	switch {
+	case code == "??":
+		return "added"
+	case strings.Contains(code, "U") ||
+		code == "DD" || code == "AU" || code == "UD" || code == "UA" ||
+		code == "DU" || code == "AA":
+		return "conflict"
+	case strings.Contains(code, "R"):
+		return "renamed"
+	case strings.Contains(code, "D"):
+		return "deleted"
+	case strings.Contains(code, "A"):
+		return "added"
+	case strings.Contains(code, "M") || strings.Contains(code, "T"):
+		return "modified"
+	default:
+		return "other"
+	}
+}
+
 func CommitAll(path, message string) error {
 	if _, err := Run(path, "add", "."); err != nil {
 		return err

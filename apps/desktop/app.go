@@ -271,14 +271,18 @@ func (a *App) RebaseFeature(name, repoFilter string) (feature.RebaseResult, erro
 // FeatureDelete removes a feature's worktrees and artifacts. deleteBranch also
 // removes the local feature branch; force removes worktrees with uncommitted
 // changes (otherwise refused).
-func (a *App) FeatureDelete(name string, deleteBranch, force bool) error {
+func (a *App) FeatureDelete(name string, deleteBranch, force bool) (feature.DeleteResult, error) {
 	root, err := a.requireRoot()
 	if err != nil {
-		return err
+		return feature.DeleteResult{}, err
 	}
-	return a.runTask("Delete feature: "+name, func() error {
-		return feature.Delete(root, name, feature.DeleteOptions{DeleteBranch: deleteBranch, Force: force})
+	var result feature.DeleteResult
+	err = a.runTask("Delete feature: "+name, func() error {
+		var deleteErr error
+		result, deleteErr = feature.DeleteWithResult(root, name, feature.DeleteOptions{DeleteBranch: deleteBranch, Force: force})
+		return deleteErr
 	})
+	return result, err
 }
 
 func (a *App) FeatureStatus(name string) (feature.FeatureStatusResult, error) {
@@ -1109,6 +1113,51 @@ func (a *App) DiagnoseGit() (GitDiag, error) {
 
 // ---- Editor ----
 
+// OpenWorkspaceFolder opens the current workspace root in the system file
+// manager.
+func (a *App) OpenWorkspaceFolder() (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", root)
+	case "windows":
+		cmd = exec.Command("explorer.exe", root)
+	default:
+		cmd = exec.Command("xdg-open", root)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
+// OpenWorkspaceTerminal opens the current workspace root in the system
+// terminal.
+func (a *App) OpenWorkspaceTerminal() (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	return openTerminalAt(root)
+}
+
+// OpenWorkspaceVSCode opens the current workspace root in VSCode.
+func (a *App) OpenWorkspaceVSCode() (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command("code", root)
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
 // OpenInEditor opens the agent workspace for a feature in the given editor
 // (e.g. "code" or "cursor"). When editor is empty it returns the path only.
 func (a *App) OpenInEditor(name, editor string) (string, error) {
@@ -1142,8 +1191,10 @@ func (a *App) OpenInTerminal(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(root, "agent", name)
+	return openTerminalAt(filepath.Join(root, "agent", name))
+}
 
+func openTerminalAt(dir string) (string, error) {
 	var cmd *exec.Cmd
 	switch goruntime.GOOS {
 	case "darwin":

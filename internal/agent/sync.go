@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
@@ -27,31 +28,80 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 	}
 	pm := LoadPrepareMetadata(root, featureName)
 	result := map[string][]Change{}
+	type job struct {
+		name         string
+		worktreePath string
+	}
+	jobs := make(chan job)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	workerCount := len(fm.Repositories)
+	if workerCount > 4 {
+		workerCount = 4
+	}
+	if workerCount == 0 {
+		return result, nil
+	}
+	worker := func() {
+		defer wg.Done()
+		for r := range jobs {
+			mu.Lock()
+			failed := firstErr != nil
+			mu.Unlock()
+			if failed {
+				continue
+			}
+			pats := []string{".git/"}
+			pats = append(pats, cfg.Agent.DefaultExclude...)
+			matcher := NewIgnoreMatcher(pats)
+			source := config.AgentPath(root, featureName, r.name)
+			target := filepath.Join(root, r.worktreePath)
+			ch, compareErr := CompareIndexed(
+				r.name,
+				source,
+				target,
+				matcher,
+				maskedMap(pm, r.name),
+				preparedFileIndex(pm, r.name),
+			)
+			if compareErr != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = compareErr
+				}
+				mu.Unlock()
+				continue
+			}
+			hashes := preparedHashes(pm, r.name)
+			filtered := ch[:0]
+			for _, c := range ch {
+				if c.Masked && hashes != nil {
+					if h, hashErr := fsutil.SHA256File(filepath.Join(source, filepath.FromSlash(c.Path))); hashErr == nil && hashes[c.Path] == h {
+						continue
+					}
+				}
+				filtered = append(filtered, c)
+			}
+			mu.Lock()
+			result[r.name] = filtered
+			mu.Unlock()
+		}
+	}
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go worker()
+	}
 	for _, r := range fm.Repositories {
 		if repoFilter != "" && r.Name != repoFilter {
 			continue
 		}
-		pats := []string{".git/"}
-		pats = append(pats, cfg.Agent.DefaultExclude...)
-		matcher := NewIgnoreMatcher(pats)
-		source := config.AgentPath(root, featureName, r.Name)
-		target := filepath.Join(root, r.WorktreePath)
-		ch, err := Compare(r.Name, source, target, matcher, maskedMap(pm, r.Name))
-		if err != nil {
-			return nil, err
-		}
-		hashes := preparedHashes(pm, r.Name)
-		filtered := ch[:0]
-		for _, c := range ch {
-			if c.Masked && hashes != nil {
-				if h, err := fsutil.SHA256File(filepath.Join(source, filepath.FromSlash(c.Path))); err == nil && hashes[c.Path] == h {
-					continue
-				}
-			}
-			filtered = append(filtered, c)
-		}
-		ch = filtered
-		result[r.Name] = ch
+		jobs <- job{name: r.Name, worktreePath: r.WorktreePath}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return result, nil
 }

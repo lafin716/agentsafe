@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronRight, Code2, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
 import { useConfirm } from "@/components/ui/confirm";
-import type { FeatureEntry } from "@/lib/types";
+import type { FeatureDeleteResult, FeatureEntry } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -75,8 +75,9 @@ export function FeaturesPage({ onOpen }: Props) {
       return;
     try {
       setBusy(true);
+      let result: FeatureDeleteResult | undefined;
       try {
-        await api.FeatureDelete(name, false, false);
+        result = await api.FeatureDelete(name, false, false);
       } catch (e) {
         const msg = errMessage(e);
         // Offer a force delete when the worktree has uncommitted changes.
@@ -88,10 +89,13 @@ export function FeaturesPage({ onOpen }: Props) {
             }))
           )
             return;
-          await api.FeatureDelete(name, false, true);
+          result = await api.FeatureDelete(name, false, true);
         } else {
           throw e;
         }
+      }
+      for (const warning of result?.warnings ?? []) {
+        notify(warning, "error");
       }
       notify(t("toast.featureDeleted"), "success");
       await load();

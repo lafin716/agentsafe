@@ -6,6 +6,7 @@ import type {
   DiffResult,
   SyncHistoryEntry,
   FeatureListResult,
+  FeatureDeleteResult,
   FeatureMetadata,
   FeatureStatusResult,
   GitConfig,
@@ -48,7 +49,7 @@ type AppBindings = {
     name: string,
     deleteBranch: boolean,
     force: boolean
-  ): Promise<void>;
+  ): Promise<FeatureDeleteResult>;
   LoadFeature(name: string): Promise<FeatureMetadata>;
   AgentPrepare(name: string, backup: boolean): Promise<PrepareMetadata>;
   AgentDiff(name: string, repoFilter: string): Promise<DiffResult>;
@@ -79,6 +80,9 @@ type AppBindings = {
     github: GitHubConfig
   ): Promise<void>;
   DiagnoseGit(): Promise<GitDiag>;
+  OpenWorkspaceFolder(): Promise<string>;
+  OpenWorkspaceTerminal(): Promise<string>;
+  OpenWorkspaceVSCode(): Promise<string>;
   OpenInEditor(name: string, editor: string): Promise<string>;
   OpenInTerminal(name: string): Promise<string>;
 };

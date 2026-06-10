@@ -72,6 +72,14 @@ export interface FeatureListResult {
 export interface RepoStatus {
   name: string;
   status: string;
+  changes: RepoFileStatus[] | null;
+  error?: string;
+}
+
+export interface RepoFileStatus {
+  code: string;
+  type: "added" | "modified" | "deleted" | "renamed" | "conflict" | "other" | string;
+  path: string;
 }
 
 export interface FeatureStatusResult {
@@ -99,6 +107,10 @@ export interface RebaseRepoResult {
 export interface RebaseResult {
   feature: string;
   repositories: RebaseRepoResult[] | null;
+}
+
+export interface FeatureDeleteResult {
+  warnings: string[] | null;
 }
 
 export type MaskRuleType = "plain" | "regex" | "keypath" | string;

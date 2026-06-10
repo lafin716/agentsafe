@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AlertTriangle,
   AppWindow,
   ArrowLeft,
   Boxes,
+  ChevronDown,
   ExternalLink,
   GitCommit,
   GitMerge,
   History,
+  Loader2,
   RefreshCw,
   Terminal,
   Trash2,
@@ -17,7 +20,9 @@ import { api, errMessage } from "@/lib/api";
 import type {
   Change,
   DiffResult,
+  FeatureDeleteResult,
   FeatureStatusResult,
+  RepoFileStatus,
   RequestResult,
   RequestResults,
 } from "@/lib/types";
@@ -50,7 +55,13 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   const confirm = useConfirm();
   const [tab, setTab] = useState<Tab>("status");
   const [busy, setBusy] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffLoaded, setDiffLoaded] = useState(false);
+  const [diffAutoAttempted, setDiffAutoAttempted] = useState(false);
+  const diffLoadingRef = useRef(false);
   const [deleteBranch, setDeleteBranch] = useState(false);
+  const [dangerOpen, setDangerOpen] = useState(false);
 
   const [status, setStatus] = useState<FeatureStatusResult | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
@@ -97,20 +108,38 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   }
 
   const loadStatus = useCallback(async () => {
+    setStatusLoading(true);
     try {
       setStatus(await api.FeatureStatus(name));
     } catch (e) {
       notify(errMessage(e), "error");
+    } finally {
+      setStatusLoading(false);
     }
   }, [name, notify]);
 
-  const loadDiff = useCallback(async () => {
+  const loadDiff = useCallback(async (showSuccess = false) => {
+    if (diffLoadingRef.current) return;
+    diffLoadingRef.current = true;
+    setDiffLoading(true);
     try {
-      setDiff(await api.AgentDiff(name, ""));
+      const next = await api.AgentDiff(name, "");
+      setDiff(next);
+      setDiffLoaded(true);
+      if (showSuccess) {
+        const count = (next.repositories ?? []).reduce(
+          (total, repo) => total + (repo.changes?.length ?? 0),
+          0
+        );
+        notify(t("toast.diffRefreshed", { count }), "success");
+      }
     } catch (e) {
       notify(errMessage(e), "error");
+    } finally {
+      diffLoadingRef.current = false;
+      setDiffLoading(false);
     }
-  }, [name, notify]);
+  }, [name, notify, t]);
 
   const loadCounts = useCallback(async () => {
     try {
@@ -121,9 +150,39 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   }, [name]);
 
   useEffect(() => {
+    setStatus(null);
+    setDiff(null);
+    setDiffLoaded(false);
+    setDiffAutoAttempted(false);
+    setPrepared(null);
+  }, [name]);
+
+  useEffect(() => {
     loadStatus();
     loadCounts();
   }, [loadStatus, loadCounts]);
+
+  const agentReady = prepared ?? (status?.agentReady ?? false);
+
+  useEffect(() => {
+    if (
+      tab === "agent" &&
+      agentReady &&
+      !diffLoaded &&
+      !diffLoading &&
+      !diffAutoAttempted
+    ) {
+      setDiffAutoAttempted(true);
+      void loadDiff();
+    }
+  }, [
+    agentReady,
+    diffAutoAttempted,
+    diffLoaded,
+    diffLoading,
+    loadDiff,
+    tab,
+  ]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -143,7 +202,10 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       const copied = repos.reduce((n, r) => n + r.copiedFiles, 0);
       notify(t("toast.agentPrepared", { count: copied }), "success");
       setPrepared(true);
+      setDiffLoaded(false);
+      setDiffAutoAttempted(true);
       await Promise.all([loadDiff(), loadStatus()]);
+      setDiffLoaded(true);
       setTab("agent");
     });
 
@@ -166,6 +228,8 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     run(async () => {
       await api.AgentDelete(name);
       setDiff(null);
+      setDiffLoaded(false);
+      setDiffAutoAttempted(false);
       setPrepared(false);
       notify(t("toast.agentDeleted"), "success");
       await loadStatus();
@@ -180,8 +244,9 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
         }))
       )
         return;
+      let result: FeatureDeleteResult | undefined;
       try {
-        await api.FeatureDelete(name, deleteBranch, false);
+        result = await api.FeatureDelete(name, deleteBranch, false);
       } catch (e) {
         // Offer a force delete when a worktree has uncommitted changes.
         if (/uncommitted|changes/i.test(errMessage(e))) {
@@ -192,10 +257,13 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
             }))
           )
             return;
-          await api.FeatureDelete(name, deleteBranch, true);
+          result = await api.FeatureDelete(name, deleteBranch, true);
         } else {
           throw e;
         }
+      }
+      for (const warning of result?.warnings ?? []) {
+        notify(warning, "error");
       }
       notify(t("toast.featureDeleted"), "success");
       onBack();
@@ -284,8 +352,6 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     { id: "deliver", label: t("feature.tabDeliver") },
   ];
 
-  const agentReady = prepared ?? (status?.agentReady ?? false);
-
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
@@ -324,17 +390,29 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                 variant="outline"
                 size="sm"
                 onClick={rebase}
-                disabled={busy}
+                disabled={busy || statusLoading}
               >
                 <GitMerge className="size-4" /> {t("feature.rebase")}
               </Button>
-              <Button variant="outline" size="sm" onClick={loadStatus}>
-                <RefreshCw className="size-4" /> {t("common.refresh")}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadStatus}
+                disabled={statusLoading}
+              >
+                {statusLoading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                {statusLoading ? t("common.loading") : t("common.refresh")}
               </Button>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            {(status?.repositories ?? []).map((r) => (
+            {statusLoading && !status ? (
+              <LoadingState label={t("feature.loadingStatus")} />
+            ) : (status?.repositories ?? []).map((r) => (
               <div key={r.name}>
                 <div className="mb-1 flex items-center gap-2">
                   <Boxes className="size-4 text-muted-foreground" />
@@ -350,14 +428,25 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                     </Badge>
                   )}
                 </div>
-                {r.status.trim() !== "" && (
-                  <pre className="overflow-auto rounded-md border bg-muted/40 p-3 text-xs">
-                    {r.status}
-                  </pre>
+                {r.error ? (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
+                    {r.error}
+                  </div>
+                ) : (
+                  (r.changes ?? []).length > 0 && (
+                    <ul className="divide-y rounded-md border">
+                      {(r.changes ?? []).map((change, i) => (
+                        <RepoStatusRow
+                          key={`${change.code}-${change.path}-${i}`}
+                          change={change}
+                        />
+                      ))}
+                    </ul>
+                  )
                 )}
               </div>
             ))}
-            {(status?.repositories ?? []).length === 0 && (
+            {!statusLoading && (status?.repositories ?? []).length === 0 && (
               <p className="text-sm text-muted-foreground">{t("feature.noRepos")}</p>
             )}
           </CardContent>
@@ -365,23 +454,53 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       )}
 
       {tab === "status" && (
-        <Card className="border-destructive/40">
-          <CardHeader>
-            <CardTitle className="text-destructive">
-              {t("feature.dangerZone")}
-            </CardTitle>
-            <CardDescription>{t("feature.deleteDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Toggle
-              checked={deleteBranch}
-              onChange={setDeleteBranch}
-              label={t("feature.deleteBranch")}
+        <Card className={dangerOpen ? "border-destructive/40" : "border-amber-300/60"}>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-4 p-6 text-left"
+            aria-expanded={dangerOpen}
+            onClick={() => {
+              setDangerOpen((open) => {
+                if (open) setDeleteBranch(false);
+                return !open;
+              });
+            }}
+          >
+            <div className="flex min-w-0 items-start gap-3">
+              <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600" />
+              <div>
+                <CardTitle className={dangerOpen ? "text-destructive" : ""}>
+                  {t("feature.dangerZone")}
+                </CardTitle>
+                <CardDescription className="mt-1">
+                  {dangerOpen
+                    ? t("feature.deleteDesc")
+                    : t("feature.dangerCollapsed")}
+                </CardDescription>
+              </div>
+            </div>
+            <ChevronDown
+              className={
+                "size-5 shrink-0 text-muted-foreground transition-transform " +
+                (dangerOpen ? "rotate-180" : "")
+              }
             />
-            <Button variant="destructive" onClick={deleteFeature} disabled={busy}>
-              <Trash2 className="size-4" /> {t("feature.delete")}
-            </Button>
-          </CardContent>
+          </button>
+          {dangerOpen && (
+            <CardContent className="space-y-4 border-t pt-5">
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                {t("feature.deleteDesc")}
+              </div>
+              <Toggle
+                checked={deleteBranch}
+                onChange={setDeleteBranch}
+                label={t("feature.deleteBranch")}
+              />
+              <Button variant="destructive" onClick={deleteFeature} disabled={busy}>
+                <Trash2 className="size-4" /> {t("feature.delete")}
+              </Button>
+            </CardContent>
+          )}
         </Card>
       )}
 
@@ -393,15 +512,30 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
               <CardDescription>{t("feature.agentDesc")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {statusLoading && !status ? (
+                <LoadingState label={t("feature.loadingAgent")} />
+              ) : (
+                <>
               <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={prepare} disabled={busy}>
+              <Button onClick={prepare} disabled={busy || diffLoading}>
                 <Wand2 className="size-4" />{" "}
                 {agentReady ? t("feature.regenerate") : t("feature.prepare")}
               </Button>
               {agentReady && (
                 <>
-                  <Button variant="outline" onClick={loadDiff} disabled={busy}>
-                    <RefreshCw className="size-4" /> {t("feature.refreshDiff")}
+                  <Button
+                    variant="outline"
+                    onClick={() => loadDiff(true)}
+                    disabled={busy || diffLoading}
+                  >
+                    {diffLoading ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="size-4" />
+                    )}
+                    {diffLoading
+                      ? t("feature.refreshingDiff")
+                      : t("feature.refreshDiff")}
                   </Button>
                   <Button
                     variant="secondary"
@@ -444,6 +578,8 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                 onChange={changeBackupOnPrepare}
                 label={t("feature.backupOnPrepare")}
               />
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -453,7 +589,9 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
             <CardHeader>
               <CardTitle>{t("feature.diffTitle")}</CardTitle>
               <CardDescription>
-                {diff
+                {diffLoading && !diff
+                  ? t("feature.loadingDiff")
+                  : diff
                   ? t("feature.changeCount", {
                       count: (diff.repositories ?? []).reduce(
                         (n, r) => n + (r.changes?.length ?? 0),
@@ -464,7 +602,9 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {(diff?.repositories ?? []).map((r) => (
+              {diffLoading && !diff ? (
+                <LoadingState label={t("feature.loadingDiff")} />
+              ) : (diff?.repositories ?? []).map((r) => (
                 <div key={r.name}>
                   <div className="mb-1 flex items-center gap-2 font-medium">
                     {r.name}
@@ -611,6 +751,35 @@ function ChangeRow({ change }: { change: Change }) {
         {change.masked && <Badge variant="destructive">{t("feature.masked")}</Badge>}
       </div>
     </li>
+  );
+}
+
+function RepoStatusRow({ change }: { change: RepoFileStatus }) {
+  const { t } = useI18n();
+  const variant =
+    change.type === "added"
+      ? "success"
+      : change.type === "deleted" || change.type === "conflict"
+        ? "destructive"
+        : change.type === "modified" || change.type === "renamed"
+          ? "warning"
+          : "outline";
+  return (
+    <li className="flex items-center gap-3 px-3 py-2 text-sm">
+      <Badge variant={variant} title={change.code} className="w-16 justify-center">
+        {t(`feature.status.${change.type}`)}
+      </Badge>
+      <span className="min-w-0 truncate font-mono text-xs">{change.path}</span>
+    </li>
+  );
+}
+
+function LoadingState({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-28 items-center justify-center gap-2 rounded-md border border-dashed text-sm text-muted-foreground">
+      <Loader2 className="size-5 animate-spin" />
+      <span>{label}</span>
+    </div>
   );
 }
 

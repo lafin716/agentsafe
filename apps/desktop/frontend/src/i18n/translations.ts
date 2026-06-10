@@ -33,6 +33,7 @@ const en: Dict = {
   "common.delete": "Delete",
   "common.confirm": "Confirm",
   "common.cancel": "Cancel",
+  "common.loading": "Loading",
 
   // workspace switcher
   "switcher.select": "Select workspace",
@@ -56,6 +57,9 @@ const en: Dict = {
   "workspace.branchPrefix": "Branch prefix",
   "workspace.gitlab": "GitLab",
   "workspace.target": "Target",
+  "workspace.openFolder": "Folder",
+  "workspace.openTerminal": "Terminal",
+  "workspace.openVSCode": "VSCode",
 
   // repositories
   "repo.title": "Repositories",
@@ -101,9 +105,17 @@ const en: Dict = {
   "feature.tabDeliver": "Commit / Push / Merge request",
   "feature.branchLabel": "Branch: {branch}",
   "feature.clean": "clean",
+  "feature.status.added": "New",
+  "feature.status.modified": "Modified",
+  "feature.status.deleted": "Deleted",
+  "feature.status.renamed": "Renamed",
+  "feature.status.conflict": "Conflict",
+  "feature.status.other": "Other",
   "feature.rebase": "Rebase onto base",
   "feature.delete": "Delete feature",
   "feature.dangerZone": "Danger zone",
+  "feature.dangerCollapsed":
+    "Destructive worktree actions are hidden. Expand only when needed.",
   "feature.deleteDesc":
     "Remove this feature's worktrees and all artifacts (agent workspace, sessions, sync history).",
   "feature.deleteBranch": "Also delete the local feature branch",
@@ -120,6 +132,10 @@ const en: Dict = {
   "feature.syncHistoryBadge": "{count} synced",
   "feature.backupOnPrepare": "Back up existing on re-prepare",
   "feature.refreshDiff": "Refresh diff",
+  "feature.refreshingDiff": "Refreshing",
+  "feature.loadingStatus": "Loading worktree status...",
+  "feature.loadingAgent": "Loading agent workspace...",
+  "feature.loadingDiff": "Loading changes...",
   "feature.terminal": "Terminal",
   "feature.openProgram": "Open in program",
   "feature.selectProgram": "Choose program…",
@@ -247,6 +263,9 @@ const en: Dict = {
   // toasts
   "toast.reloaded": "Reloaded",
   "toast.openedWorkspace": "Opened {name}",
+  "toast.openedWorkspaceFolder": "Opened workspace folder",
+  "toast.openedWorkspaceTerminal": "Opened terminal at {path}",
+  "toast.openedWorkspaceVSCode": "Opened workspace in VSCode",
   "toast.initializedWorkspace": "Initialized {name}",
   "toast.workspaceRemoved": "Workspace removed",
   "toast.repoAdded": "Repository added",
@@ -259,6 +278,7 @@ const en: Dict = {
   "toast.agentPrepared": "Agent workspace prepared ({count} files)",
   "toast.dryRunCompleted": "Dry-run completed",
   "toast.syncCompleted": "Sync completed",
+  "toast.diffRefreshed": "Changes refreshed ({count})",
   "toast.agentDeleted": "Agent workspace deleted",
   "toast.openedPath": "Opened {path}",
   "task.running": "In progress…",
@@ -303,6 +323,7 @@ const ko: Dict = {
   "common.delete": "삭제",
   "common.confirm": "확인",
   "common.cancel": "취소",
+  "common.loading": "불러오는 중",
 
   // workspace switcher
   "switcher.select": "워크스페이스 선택",
@@ -326,6 +347,9 @@ const ko: Dict = {
   "workspace.branchPrefix": "브랜치 접두사",
   "workspace.gitlab": "GitLab",
   "workspace.target": "대상 브랜치",
+  "workspace.openFolder": "폴더",
+  "workspace.openTerminal": "터미널",
+  "workspace.openVSCode": "VSCode",
 
   // repositories
   "repo.title": "리포지토리",
@@ -371,9 +395,17 @@ const ko: Dict = {
   "feature.tabDeliver": "커밋 / 푸시 / 병합 요청",
   "feature.branchLabel": "브랜치: {branch}",
   "feature.clean": "변경 없음",
+  "feature.status.added": "신규",
+  "feature.status.modified": "수정",
+  "feature.status.deleted": "삭제",
+  "feature.status.renamed": "이름 변경",
+  "feature.status.conflict": "충돌",
+  "feature.status.other": "기타",
   "feature.rebase": "base 브랜치로 rebase",
   "feature.delete": "피처 삭제",
   "feature.dangerZone": "위험 구역",
+  "feature.dangerCollapsed":
+    "워크트리 삭제 기능이 숨겨져 있습니다. 필요한 경우에만 펼치세요.",
   "feature.deleteDesc":
     "이 피처의 워크트리와 모든 산출물(agent 워크스페이스, 세션, 싱크 히스토리)을 제거합니다.",
   "feature.deleteBranch": "로컬 피처 브랜치도 함께 삭제",
@@ -390,6 +422,10 @@ const ko: Dict = {
   "feature.syncHistoryBadge": "동기화 {count}",
   "feature.backupOnPrepare": "재준비 시 기존본 백업",
   "feature.refreshDiff": "변경 새로고침",
+  "feature.refreshingDiff": "새로고침 중",
+  "feature.loadingStatus": "워크트리 상태를 불러오는 중...",
+  "feature.loadingAgent": "에이전트 작업공간을 불러오는 중...",
+  "feature.loadingDiff": "변경 내역을 불러오는 중...",
   "feature.terminal": "터미널",
   "feature.openProgram": "프로그램으로 열기",
   "feature.selectProgram": "프로그램 선택…",
@@ -513,6 +549,9 @@ const ko: Dict = {
   // toasts
   "toast.reloaded": "새로고침됨",
   "toast.openedWorkspace": "{name} 열림",
+  "toast.openedWorkspaceFolder": "워크스페이스 폴더를 열었습니다",
+  "toast.openedWorkspaceTerminal": "{path}에서 터미널을 열었습니다",
+  "toast.openedWorkspaceVSCode": "워크스페이스를 VSCode에서 열었습니다",
   "toast.initializedWorkspace": "{name} 초기화됨",
   "toast.workspaceRemoved": "워크스페이스 제거됨",
   "toast.repoAdded": "리포지토리 추가됨",
@@ -525,6 +564,7 @@ const ko: Dict = {
   "toast.agentPrepared": "에이전트 워크스페이스 준비됨 ({count}개 파일)",
   "toast.dryRunCompleted": "모의 실행 완료",
   "toast.syncCompleted": "동기화 완료",
+  "toast.diffRefreshed": "변경 내역을 새로고침했습니다 ({count}건)",
   "toast.agentDeleted": "에이전트 워크스페이스 삭제됨",
   "toast.openedPath": "{path} 열림",
   "task.running": "진행 중…",

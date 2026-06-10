@@ -131,15 +131,30 @@ type DeleteOptions struct {
 	Force        bool
 }
 
+// DeleteResult reports non-fatal cleanup failures. A feature deletion keeps
+// going after these failures so other repositories and feature artifacts are
+// still removed.
+type DeleteResult struct {
+	Warnings []string `json:"warnings" yaml:"warnings"`
+}
+
 // Delete removes a feature's worktrees and all of its artifacts: the feature
 // metadata, the agent workspace, session metadata, and sync history. When
 // DeleteBranch is set, the local feature branch is removed from each repo too.
 // Unless Force is set, deletion is refused if any worktree has uncommitted
 // changes (nothing is removed in that case, to avoid a partial delete).
 func Delete(root, name string, opt DeleteOptions) error {
+	_, err := DeleteWithResult(root, name, opt)
+	return err
+}
+
+// DeleteWithResult performs the same deletion as Delete and returns warnings
+// for cleanup steps that failed without aborting the overall deletion.
+func DeleteWithResult(root, name string, opt DeleteOptions) (DeleteResult, error) {
+	result := DeleteResult{Warnings: []string{}}
 	m, err := Load(root, name)
 	if err != nil {
-		return err
+		return result, err
 	}
 
 	if !opt.Force {
@@ -151,8 +166,13 @@ func Delete(root, name string, opt DeleteOptions) error {
 			}
 		}
 		if len(dirty) > 0 {
-			return fmt.Errorf("worktree(s) have uncommitted changes: %s; commit/stash or use force", strings.Join(dirty, ", "))
+			return result, fmt.Errorf("worktree(s) have uncommitted changes: %s; commit/stash or use force", strings.Join(dirty, ", "))
 		}
+	}
+
+	warn := func(message string) {
+		result.Warnings = append(result.Warnings, message)
+		output.Printf("  warning: %s\n", message)
 	}
 
 	for _, r := range m.Repositories {
@@ -161,28 +181,62 @@ func Delete(root, name string, opt DeleteOptions) error {
 		output.Printf("[%s] removing worktree %s\n", r.Name, r.WorktreePath)
 		if _, e := os.Stat(dest); e == nil {
 			if err := aggit.RemoveWorktree(repoPath, dest, opt.Force); err != nil {
-				return fmt.Errorf("[%s] failed to remove worktree: %w", r.Name, err)
+				warn(fmt.Sprintf("[%s] git worktree remove failed: %v", r.Name, err))
+				if err := os.RemoveAll(dest); err != nil {
+					warn(fmt.Sprintf("[%s] failed to remove worktree directory: %v", r.Name, err))
+				}
+				if err := aggit.WorktreePrune(repoPath); err != nil {
+					warn(fmt.Sprintf("[%s] git worktree prune failed: %v", r.Name, err))
+				}
 			}
 		} else {
-			_ = aggit.WorktreePrune(repoPath)
-			_ = os.RemoveAll(dest)
+			if e != nil && !os.IsNotExist(e) {
+				warn(fmt.Sprintf("[%s] failed to inspect worktree directory: %v", r.Name, e))
+			}
+			if err := aggit.WorktreePrune(repoPath); err != nil {
+				warn(fmt.Sprintf("[%s] git worktree prune failed: %v", r.Name, err))
+			}
+			if err := os.RemoveAll(dest); err != nil {
+				warn(fmt.Sprintf("[%s] failed to remove worktree directory: %v", r.Name, err))
+			}
 		}
 		if opt.DeleteBranch {
 			output.Printf("[%s] deleting local branch %s\n", r.Name, r.Branch)
 			if err := aggit.DeleteLocalBranch(repoPath, r.Branch); err != nil {
-				output.Printf("  warning: could not delete branch %s: %v\n", r.Branch, err)
+				warn(fmt.Sprintf("[%s] could not delete branch %s: %v", r.Name, r.Branch, err))
 			}
 		}
 	}
 
-	// Clean up all feature artifacts (best-effort; missing paths are ignored).
+	// Clean up all feature artifacts. Every path is attempted even if an earlier
+	// removal failed.
 	output.Printf("removing feature metadata and agent artifacts for %s\n", name)
-	_ = os.RemoveAll(filepath.Join(root, "feature", name))
-	_ = os.Remove(config.FeatureMetaPath(root, name))
-	_ = os.RemoveAll(filepath.Join(root, "agent", name))
-	_ = os.Remove(config.SessionMetaPath(root, name))
-	_ = os.RemoveAll(filepath.Join(config.HistoryDir(root), name))
-	return nil
+	cleanup := []struct {
+		label string
+		path  string
+		all   bool
+	}{
+		{"feature directory", filepath.Join(root, "feature", name), true},
+		{"feature metadata", config.FeatureMetaPath(root, name), false},
+		{"agent workspace", filepath.Join(root, "agent", name), true},
+		{"session metadata", config.SessionMetaPath(root, name), false},
+		{"sync history", filepath.Join(config.HistoryDir(root), name), true},
+	}
+	for _, item := range cleanup {
+		var err error
+		if item.all {
+			err = os.RemoveAll(item.path)
+		} else {
+			err = os.Remove(item.path)
+			if os.IsNotExist(err) {
+				err = nil
+			}
+		}
+		if err != nil {
+			warn(fmt.Sprintf("failed to remove %s: %v", item.label, err))
+		}
+	}
+	return result, nil
 }
 
 type FeatureListResult struct {
@@ -205,8 +259,16 @@ type FeatureStatusResult struct {
 }
 
 type RepoStatus struct {
-	Name   string `json:"name"   yaml:"name"`
-	Status string `json:"status" yaml:"status"`
+	Name    string           `json:"name"              yaml:"name"`
+	Status  string           `json:"status"            yaml:"status"`
+	Changes []RepoFileStatus `json:"changes"           yaml:"changes"`
+	Error   string           `json:"error,omitempty"   yaml:"error,omitempty"`
+}
+
+type RepoFileStatus struct {
+	Code string `json:"code" yaml:"code"`
+	Type string `json:"type" yaml:"type"`
+	Path string `json:"path" yaml:"path"`
 }
 
 func ListData(root string) (FeatureListResult, error) {
@@ -267,11 +329,21 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 	}
 	for _, r := range m.Repositories {
 		p := filepath.Join(root, r.WorktreePath)
-		s, err := aggit.StatusShort(p)
+		s, files, err := aggit.StatusFiles(p)
+		repoStatus := RepoStatus{Name: r.Name, Status: s, Changes: []RepoFileStatus{}}
 		if err != nil {
-			s = "ERROR: " + err.Error()
+			repoStatus.Status = "ERROR: " + err.Error()
+			repoStatus.Error = err.Error()
+		} else {
+			for _, file := range files {
+				repoStatus.Changes = append(repoStatus.Changes, RepoFileStatus{
+					Code: file.Code,
+					Type: file.Type,
+					Path: file.Path,
+				})
+			}
 		}
-		result.Repositories = append(result.Repositories, RepoStatus{Name: r.Name, Status: s})
+		result.Repositories = append(result.Repositories, repoStatus)
 	}
 	return result, nil
 }
