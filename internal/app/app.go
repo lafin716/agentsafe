@@ -390,13 +390,13 @@ func templateCmd() *cobra.Command {
 }
 
 func commitCmd() *cobra.Command {
-	var msg string
-	c := &cobra.Command{Use: "commit FEATURE", Short: "Commit changes in all feature worktrees", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	var msg, repoFilter string
+	c := &cobra.Command{Use: "commit FEATURE", Short: "Commit changes in feature worktrees", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
 		if err != nil {
 			return err
 		}
-		if err := feature.Commit(root, args[0], msg); err != nil {
+		if err := feature.Commit(root, args[0], msg, repoFilter); err != nil {
 			return err
 		}
 		if output.IsStructured() {
@@ -405,16 +405,18 @@ func commitCmd() *cobra.Command {
 		return nil
 	}}
 	c.Flags().StringVarP(&msg, "message", "m", "", "commit message")
+	c.Flags().StringVar(&repoFilter, "repo", "", "limit to repository")
 	return c
 }
 
 func pushCmd() *cobra.Command {
-	return &cobra.Command{Use: "push FEATURE", Short: "Push all feature branches", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	var repoFilter string
+	c := &cobra.Command{Use: "push FEATURE", Short: "Push feature branches", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
 		if err != nil {
 			return err
 		}
-		if err := feature.Push(root, args[0]); err != nil {
+		if err := feature.Push(root, args[0], repoFilter); err != nil {
 			return err
 		}
 		if output.IsStructured() {
@@ -422,6 +424,8 @@ func pushCmd() *cobra.Command {
 		}
 		return nil
 	}}
+	c.Flags().StringVar(&repoFilter, "repo", "", "limit to repository")
+	return c
 }
 
 func mrCmd() *cobra.Command {

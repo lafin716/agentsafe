@@ -80,6 +80,11 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
 
   // deliver
   const [commitMsg, setCommitMsg] = useState("");
+  // Per-repository commit messages for the per-repo commit area, keyed by repo name.
+  const [repoMsgs, setRepoMsgs] = useState<Record<string, string>>({});
+  // Repo currently being committed/pushed ("*" for an all-repos action, the repo
+  // name for a single one, null when idle) so only the active row shows a spinner.
+  const [actingRepo, setActingRepo] = useState<string | null>(null);
   const [mrTitle, setMrTitle] = useState("");
   const [requests, setRequests] = useState<RequestResults | null>(null);
   const [program, setProgram] = useState(() => {
@@ -300,18 +305,35 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       notify(t("toast.programSelected", { program: programLabel(sel) }), "success");
     });
 
-  const commit = () =>
+  // doCommit commits a single repo (repoName set) or all repos (repoName "")
+  // with the given message, clearing the relevant input and refreshing status.
+  const doCommit = (repoName: string, message: string) =>
     run(async () => {
-      await api.Commit(name, commitMsg.trim());
-      notify(t("toast.committed"), "success");
-      setCommitMsg("");
-      await loadStatus();
+      setActingRepo(repoName || "*");
+      try {
+        await api.Commit(name, message.trim(), repoName);
+        notify(t("toast.committed"), "success");
+        if (repoName) {
+          setRepoMsgs((m) => ({ ...m, [repoName]: "" }));
+        } else {
+          setCommitMsg("");
+        }
+        await loadStatus();
+      } finally {
+        setActingRepo(null);
+      }
     });
 
-  const push = () =>
+  const push = (repoName = "") =>
     run(async () => {
-      await api.Push(name);
-      notify(t("toast.pushed"), "success");
+      setActingRepo(repoName || "*");
+      try {
+        await api.Push(name, repoName);
+        notify(t("toast.pushed"), "success");
+        await loadStatus();
+      } finally {
+        setActingRepo(null);
+      }
     });
 
   const rebase = () =>
@@ -666,30 +688,161 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
 
       {tab === "deliver" && (
         <div className="space-y-5">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("feature.commitTitle")}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="cm">{t("feature.messageLabel")}</Label>
-                <Input
-                  id="cm"
-                  value={commitMsg}
-                  onChange={(e) => setCommitMsg(e.target.value)}
-                  placeholder="feat: add coupon v2"
-                />
-              </div>
-              <div className="flex gap-2">
-                <Button onClick={commit} disabled={busy || !commitMsg.trim()}>
-                  <GitCommit className="size-4" /> {t("feature.commitAll")}
-                </Button>
-                <Button variant="secondary" onClick={push} disabled={busy}>
-                  <Upload className="size-4" /> {t("feature.pushAll")}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          {(() => {
+            const repos = status?.repositories ?? [];
+            const anyDirty = repos.some((r) => (r.changes ?? []).length > 0);
+            const anyPushable = repos.some((r) => (r.ahead ?? 0) > 0);
+            const actionable = repos.filter(
+              (r) => (r.changes ?? []).length > 0 || (r.ahead ?? 0) > 0 || !!r.error
+            );
+            return (
+              <>
+                {/* Bulk commit / push */}
+                <Card>
+                  <CardHeader className="flex-row items-center justify-between space-y-0">
+                    <div>
+                      <CardTitle>{t("feature.bulkCommitTitle")}</CardTitle>
+                      <CardDescription>{t("feature.bulkCommitDesc")}</CardDescription>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={loadStatus}
+                      disabled={statusLoading || busy}
+                    >
+                      {statusLoading ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="size-4" />
+                      )}
+                      {statusLoading ? t("common.loading") : t("common.refresh")}
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="cm">{t("feature.messageLabel")}</Label>
+                      <Input
+                        id="cm"
+                        value={commitMsg}
+                        onChange={(e) => setCommitMsg(e.target.value)}
+                        placeholder="feat: add coupon v2"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={() => doCommit("", commitMsg)}
+                        disabled={busy || !commitMsg.trim() || !anyDirty}
+                      >
+                        {actingRepo === "*" ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <GitCommit className="size-4" />
+                        )}
+                        {t("feature.commitAll")}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => push()}
+                        disabled={busy || !anyPushable}
+                      >
+                        <Upload className="size-4" /> {t("feature.pushAll")}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Per-repository commit / push */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>{t("feature.perRepoCommitTitle")}</CardTitle>
+                    <CardDescription>{t("feature.perRepoCommitDesc")}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {statusLoading && !status ? (
+                      <LoadingState label={t("feature.loadingStatus")} />
+                    ) : actionable.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        {t("feature.noChangesToCommit")}
+                      </p>
+                    ) : (
+                      actionable.map((r) => {
+                        const changeCount = (r.changes ?? []).length;
+                        const dirty = changeCount > 0;
+                        const ahead = r.ahead ?? 0;
+                        const msg = repoMsgs[r.name] ?? "";
+                        const rowBusy = actingRepo === r.name;
+                        return (
+                          <div key={r.name} className="space-y-2 rounded-md border p-3">
+                            <div className="flex items-center gap-2">
+                              <Boxes className="size-4 text-muted-foreground" />
+                              <span className="font-medium">{r.name}</span>
+                              {dirty && (
+                                <Badge variant="warning">
+                                  {t("feature.repoChanges", { count: changeCount })}
+                                </Badge>
+                              )}
+                              {ahead > 0 && (
+                                <Badge variant="secondary">
+                                  {t("feature.repoAhead", { count: ahead })}
+                                </Badge>
+                              )}
+                            </div>
+                            {r.error ? (
+                              <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
+                                {r.error}
+                              </div>
+                            ) : dirty ? (
+                              <ul className="divide-y rounded-md border">
+                                {(r.changes ?? []).map((change, i) => (
+                                  <RepoStatusRow
+                                    key={`${change.code}-${change.path}-${i}`}
+                                    change={change}
+                                  />
+                                ))}
+                              </ul>
+                            ) : null}
+                            <div className="flex items-end gap-2">
+                              <div className="flex-1 space-y-1.5">
+                                <Label htmlFor={`cm-${r.name}`}>
+                                  {t("feature.messageLabel")}
+                                </Label>
+                                <Input
+                                  id={`cm-${r.name}`}
+                                  value={msg}
+                                  onChange={(e) =>
+                                    setRepoMsgs((m) => ({ ...m, [r.name]: e.target.value }))
+                                  }
+                                  placeholder="feat: ..."
+                                />
+                              </div>
+                              <Button
+                                onClick={() => doCommit(r.name, msg)}
+                                disabled={busy || !dirty || !msg.trim()}
+                              >
+                                {rowBusy ? (
+                                  <Loader2 className="size-4 animate-spin" />
+                                ) : (
+                                  <GitCommit className="size-4" />
+                                )}
+                                {t("feature.commitRepo")}
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                onClick={() => push(r.name)}
+                                disabled={busy || ahead === 0}
+                              >
+                                <Upload className="size-4" /> {t("feature.pushRepo")}
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </CardContent>
+                </Card>
+              </>
+            );
+          })()}
 
           <Card>
             <CardHeader>

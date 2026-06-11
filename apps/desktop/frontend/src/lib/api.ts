@@ -70,8 +70,8 @@ type AppBindings = {
   DeleteBackup(path: string): Promise<void>;
   DeleteAllBackups(): Promise<number>;
   RestoreBackup(path: string): Promise<void>;
-  Commit(name: string, message: string): Promise<void>;
-  Push(name: string): Promise<void>;
+  Commit(name: string, message: string, repoFilter: string): Promise<void>;
+  Push(name: string, repoFilter: string): Promise<void>;
   CreateMergeRequests(name: string, title: string): Promise<RequestResults>;
   OpenURL(url: string): Promise<void>;
   SaveGitSettings(

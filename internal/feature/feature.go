@@ -262,7 +262,33 @@ type RepoStatus struct {
 	Name    string           `json:"name"              yaml:"name"`
 	Status  string           `json:"status"            yaml:"status"`
 	Changes []RepoFileStatus `json:"changes"           yaml:"changes"`
-	Error   string           `json:"error,omitempty"   yaml:"error,omitempty"`
+	// Ahead is the number of commits the feature branch has that are not yet
+	// pushed (to origin/<branch> when it exists, otherwise relative to the base
+	// branch). It is what a push would publish.
+	Ahead int    `json:"ahead"             yaml:"ahead"`
+	Error string `json:"error,omitempty"   yaml:"error,omitempty"`
+}
+
+// unpushedCount returns how many commits on the feature branch are not yet
+// pushed. When origin/<branch> exists it counts commits ahead of it; otherwise
+// (branch never pushed) it counts the commits the branch adds over its base.
+func unpushedCount(path, branch, base string) int {
+	if branch == "" {
+		return 0
+	}
+	if aggit.RemoteBranchExists(path, branch) {
+		n, _ := aggit.RevListCount(path, "origin/"+branch+"..HEAD")
+		return n
+	}
+	baseRef := base
+	if base != "" && aggit.RemoteBranchExists(path, base) {
+		baseRef = "origin/" + base
+	}
+	if baseRef == "" {
+		return 0
+	}
+	n, _ := aggit.RevListCount(path, baseRef+"..HEAD")
+	return n
 }
 
 type RepoFileStatus struct {
@@ -342,6 +368,7 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 					Path: file.Path,
 				})
 			}
+			repoStatus.Ahead = unpushedCount(p, r.Branch, r.BaseBranch)
 		}
 		result.Repositories = append(result.Repositories, repoStatus)
 	}
@@ -366,7 +393,9 @@ func Status(root, name string) error {
 	return nil
 }
 
-func Commit(root, name, message string) error {
+// Commit commits the worktree changes in each repository. When repoFilter is
+// non-empty, only that repository is committed; otherwise every repository is.
+func Commit(root, name, message, repoFilter string) error {
 	if message == "" {
 		return fmt.Errorf("commit message is required (-m)")
 	}
@@ -375,6 +404,9 @@ func Commit(root, name, message string) error {
 		return err
 	}
 	for _, r := range m.Repositories {
+		if repoFilter != "" && r.Name != repoFilter {
+			continue
+		}
 		p := filepath.Join(root, r.WorktreePath)
 		output.Printf("[%s] ", r.Name)
 		if !aggit.HasChanges(p) {
@@ -463,13 +495,22 @@ func Rebase(root string, cfg config.Config, name, repoFilter string) (RebaseResu
 	return result, nil
 }
 
-func Push(root, name string) error {
+// Push pushes each repository's feature branch to origin. When repoFilter is
+// non-empty, only that repository is pushed; otherwise every repository is.
+func Push(root, name, repoFilter string) error {
 	m, err := Load(root, name)
 	if err != nil {
 		return err
 	}
 	for _, r := range m.Repositories {
+		if repoFilter != "" && r.Name != repoFilter {
+			continue
+		}
 		p := filepath.Join(root, r.WorktreePath)
+		if unpushedCount(p, r.Branch, r.BaseBranch) == 0 {
+			output.Printf("[%s] nothing to push, skipped\n", r.Name)
+			continue
+		}
 		output.Printf("[%s] pushing %s\n", r.Name, r.Branch)
 		if err := aggit.Push(p, r.Branch); err != nil {
 			output.Printf("failed: %v\n", err)

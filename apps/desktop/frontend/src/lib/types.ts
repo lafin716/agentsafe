@@ -73,6 +73,8 @@ export interface RepoStatus {
   name: string;
   status: string;
   changes: RepoFileStatus[] | null;
+  // Number of commits not yet pushed (what a push would publish).
+  ahead?: number;
   error?: string;
 }
 

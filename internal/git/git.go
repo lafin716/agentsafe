@@ -180,6 +180,16 @@ func RebaseAbort(worktreePath string) error {
 	return err
 }
 func HeadSHA(path string) (string, error) { return Output(path, "rev-parse", "HEAD") }
+
+// RevListCount returns the number of commits in the given range expression
+// (e.g. "origin/main..HEAD"), used to detect how many commits are unpushed.
+func RevListCount(path, rangeExpr string) (int, error) {
+	out, err := Output(path, "rev-list", "--count", rangeExpr)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(out))
+}
 func RemoveWorktree(repoPath, dest string, force bool) error {
 	args := []string{"worktree", "remove"}
 	if force {

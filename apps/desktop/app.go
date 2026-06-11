@@ -865,20 +865,37 @@ func (a *App) RestoreBackup(path string) error {
 
 // ---- Commit / Push / MR ----
 
-func (a *App) Commit(name, message string) error {
+// Commit commits the worktree changes for a feature. When repoFilter is
+// non-empty, only that repository is committed; otherwise every repository is.
+func (a *App) Commit(name, message, repoFilter string) error {
 	root, err := a.requireRoot()
 	if err != nil {
 		return err
 	}
-	return a.runTask("Commit: "+name, func() error { return feature.Commit(root, name, message) })
+	return a.runTask("Commit: "+taskTarget(name, repoFilter), func() error {
+		return feature.Commit(root, name, message, repoFilter)
+	})
 }
 
-func (a *App) Push(name string) error {
+// Push pushes a feature's branches. When repoFilter is non-empty, only that
+// repository is pushed; otherwise every repository is.
+func (a *App) Push(name, repoFilter string) error {
 	root, err := a.requireRoot()
 	if err != nil {
 		return err
 	}
-	return a.runTask("Push: "+name, func() error { return feature.Push(root, name) })
+	return a.runTask("Push: "+taskTarget(name, repoFilter), func() error {
+		return feature.Push(root, name, repoFilter)
+	})
+}
+
+// taskTarget formats a progress-task label target as "<feature>/<repo>" when a
+// repo filter is set, or just "<feature>" for an all-repos operation.
+func taskTarget(name, repoFilter string) string {
+	if repoFilter != "" {
+		return name + "/" + repoFilter
+	}
+	return name
 }
 
 // RequestResult is the per-repository outcome of creating a merge/pull request.
