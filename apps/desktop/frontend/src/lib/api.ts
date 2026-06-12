@@ -40,7 +40,7 @@ type AppBindings = {
     typ: string,
     defaultBranch: string
   ): Promise<void>;
-  RemoveRepo(name: string): Promise<void>;
+  RemoveRepo(name: string, deleteFiles: boolean): Promise<void>;
   Pull(): Promise<void>;
   PullRepo(name: string): Promise<void>;
   RepoLocalStates(): Promise<Record<string, boolean>>;
@@ -50,7 +50,8 @@ type AppBindings = {
   FeatureRepoAdd(
     name: string,
     repoName: string,
-    existingBranch: string
+    existingBranch: string,
+    force: boolean
   ): Promise<RepoMeta>;
   FeatureRepoRecreate(
     name: string,

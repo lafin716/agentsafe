@@ -21,6 +21,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/forge"
+	"github.com/agentsafe/agentsafe/internal/fsutil"
 	aggit "github.com/agentsafe/agentsafe/internal/git"
 	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/registry"
@@ -206,9 +207,11 @@ func (a *App) AddRepo(name, url, typ, defaultBranch string) error {
 	return err
 }
 
-// RemoveRepo drops a repository from the open workspace's config. It only edits
-// config.yaml; cloned directories and worktrees are left in place.
-func (a *App) RemoveRepo(name string) error {
+// RemoveRepo drops a repository from the open workspace's config. When
+// deleteFiles is true it also deletes the cloned files (main/<repo> and the
+// repo's feature worktrees, agent copies and sync history); otherwise only
+// config.yaml is edited and cloned directories are left in place.
+func (a *App) RemoveRepo(name string, deleteFiles bool) error {
 	root, err := a.requireRoot()
 	if err != nil {
 		return err
@@ -217,7 +220,7 @@ func (a *App) RemoveRepo(name string) error {
 	if err != nil {
 		return err
 	}
-	_, err = config.RemoveRepository(root, cfg, name)
+	_, _, err = repo.Remove(root, cfg, name, deleteFiles)
 	return err
 }
 
@@ -247,8 +250,18 @@ func (a *App) RepoLocalStates() (map[string]bool, error) {
 	}
 	states := make(map[string]bool, len(cfg.Repositories))
 	for _, r := range cfg.Repositories {
-		_, statErr := os.Stat(config.RepoPath(root, r.Name))
-		states[r.Name] = !os.IsNotExist(statErr)
+		path := config.RepoPath(root, r.Name)
+		st, statErr := os.Stat(path)
+		present := statErr == nil
+		// An empty leftover directory is treated as not cloned so the UI shows
+		// the Clone action; non-empty non-Git paths stay "present" so PullRepo
+		// can surface a Git error without overwriting user files.
+		if present && st.IsDir() {
+			if empty, e := fsutil.IsEmptyDir(path); e == nil && empty {
+				present = false
+			}
+		}
+		states[r.Name] = present
 	}
 	return states, nil
 }
@@ -353,8 +366,8 @@ func (a *App) CreateFeature(name, base, existingBranch string) error {
 	})
 }
 
-func (a *App) FeatureRepoAdd(name, repoName, existingBranch string) (feature.RepoMeta, error) {
-	return a.configureFeatureRepo(name, repoName, existingBranch, false, false)
+func (a *App) FeatureRepoAdd(name, repoName, existingBranch string, force bool) (feature.RepoMeta, error) {
+	return a.configureFeatureRepo(name, repoName, existingBranch, false, force)
 }
 
 func (a *App) FeatureRepoRecreate(name, repoName, existingBranch string, force bool) (feature.RepoMeta, error) {

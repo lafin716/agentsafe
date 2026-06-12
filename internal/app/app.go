@@ -129,7 +129,27 @@ func repoCmd() *cobra.Command {
 		repo.List(cfg)
 		return nil
 	}}
-	c.AddCommand(add, list)
+	var deleteFiles bool
+	remove := &cobra.Command{Use: "remove NAME", Short: "Remove a repository from the workspace", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, cfg, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		_, res, err := repo.Remove(root, cfg, args[0], deleteFiles)
+		if err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(res)
+		}
+		fmt.Printf("Removed repository %s\n", args[0])
+		for _, w := range res.Warnings {
+			fmt.Printf("  warning: %s\n", w)
+		}
+		return nil
+	}}
+	remove.Flags().BoolVar(&deleteFiles, "delete-files", false, "also delete cloned files (main/<repo> and feature worktrees)")
+	c.AddCommand(add, list, remove)
 	return c
 }
 
@@ -253,6 +273,7 @@ whether to error, reuse it, or recreate the local branch from the base.`,
 
 	repoWorktree := &cobra.Command{Use: "repo", Short: "Manage one repository in a feature"}
 	var addPolicy string
+	var addForce bool
 	addRepo := &cobra.Command{
 		Use: "add FEATURE REPO", Short: "Add a configured repository to an existing feature", Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -265,7 +286,7 @@ whether to error, reuse it, or recreate the local branch from the base.`,
 				return err
 			}
 			rm, err := feature.ConfigureRepositoryWorktree(root, cfg, args[0], args[1], feature.RepositoryWorktreeOptions{
-				ExistingBranch: policy,
+				ExistingBranch: policy, Force: addForce,
 			})
 			if err != nil {
 				return err
@@ -278,6 +299,7 @@ whether to error, reuse it, or recreate the local branch from the base.`,
 		},
 	}
 	addRepo.Flags().StringVar(&addPolicy, "existing-branch", "reuse", "existing branch policy: error, reuse, or recreate")
+	addRepo.Flags().BoolVar(&addForce, "force", false, "delete an existing worktree directory and recreate")
 
 	var recreatePolicy string
 	var recreateForce bool

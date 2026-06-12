@@ -8,6 +8,11 @@ export type ConfirmOptions = {
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
+  checkbox?: {
+    label: string;
+    defaultChecked?: boolean;
+    onChange?: (checked: boolean) => void;
+  };
 };
 
 type State = ConfirmOptions & { resolve: (ok: boolean) => void };
@@ -21,12 +26,28 @@ const ConfirmContext = React.createContext<ConfirmContextValue | null>(null);
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
   const [state, setState] = React.useState<State | null>(null);
+  const [checked, setChecked] = React.useState(false);
 
   const confirm = React.useCallback<ConfirmContextValue>((opts) => {
     return new Promise<boolean>((resolve) => {
+      const initial = opts.checkbox?.defaultChecked ?? false;
+      setChecked(initial);
+      // Sync the caller's initial checkbox value before any toggle.
+      opts.checkbox?.onChange?.(initial);
       setState({ ...opts, resolve });
     });
   }, []);
+
+  const toggleChecked = React.useCallback(
+    (next: boolean) => {
+      setChecked(next);
+      setState((s) => {
+        s?.checkbox?.onChange?.(next);
+        return s;
+      });
+    },
+    []
+  );
 
   const close = React.useCallback(
     (ok: boolean) => {
@@ -64,6 +85,16 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
               <h2 className="mb-1.5 text-base font-semibold">{state.title}</h2>
             )}
             <p className="text-sm text-muted-foreground">{state.message}</p>
+            {state.checkbox && (
+              <label className="mt-3 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => toggleChecked(e.target.checked)}
+                />
+                <span>{state.checkbox.label}</span>
+              </label>
+            )}
             <div className="mt-5 flex justify-end gap-2">
               <Button variant="outline" onClick={() => close(false)}>
                 {state.cancelLabel ?? t("common.cancel")}

@@ -290,6 +290,34 @@ func ConfigureRepositoryWorktree(root string, cfg config.Config, featureName, re
 	if branch == "" {
 		branch = BranchName(cfg, featureName)
 	}
+
+	if !opt.Recreate {
+		// Adding a repository that is not yet part of the feature. A worktree
+		// folder may still linger on disk from a repository created earlier with
+		// the same name; git worktree add would then fail with "already exists".
+		// A folder that is the feature branch's own worktree is adoptable, so
+		// only block leftover/foreign folders.
+		repoPath := config.RepoPath(root, repoName)
+		dest := config.WorktreePath(root, featureName, repoName)
+		if st, statErr := os.Stat(dest); statErr == nil && st.IsDir() {
+			adoptable := samePath(aggit.WorktreeForBranch(repoPath, branch), dest)
+			if adoptable {
+				if current, cerr := aggit.CurrentBranch(dest); cerr != nil || current != branch {
+					adoptable = false
+				}
+			}
+			if !adoptable {
+				if !opt.Force {
+					return RepoMeta{}, fmt.Errorf("worktree directory already exists for repository %s at %s; delete it and recreate", repoName, dest)
+				}
+				_ = aggit.WorktreePrune(repoPath)
+				if err := aggit.RemoveWorktree(repoPath, dest, true); err != nil {
+					_ = os.RemoveAll(dest)
+				}
+			}
+		}
+	}
+
 	rm, err := createRepositoryWorktree(root, featureName, repoCfg, branch, base, policy)
 	if err != nil {
 		return RepoMeta{}, err

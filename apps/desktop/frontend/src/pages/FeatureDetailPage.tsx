@@ -399,7 +399,22 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
 
   const addFeatureRepo = (repoName: string) =>
     run(async () => {
-      await api.FeatureRepoAdd(name, repoName, repoPolicy);
+      try {
+        await api.FeatureRepoAdd(name, repoName, repoPolicy, false);
+      } catch (e) {
+        if (/already exists/i.test(errMessage(e))) {
+          if (
+            !(await confirm({
+              message: t("feature.repoAddForceConfirm", { repo: repoName }),
+              danger: true,
+            }))
+          )
+            return;
+          await api.FeatureRepoAdd(name, repoName, repoPolicy, true);
+        } else {
+          throw e;
+        }
+      }
       notify(t("toast.featureRepoAdded", { repo: repoName }), "success");
       await Promise.all([loadStatus(), loadRepoManager()]);
     });

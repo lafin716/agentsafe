@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/agentsafe/agentsafe/internal/config"
+	"github.com/agentsafe/agentsafe/internal/fsutil"
 	aggit "github.com/agentsafe/agentsafe/internal/git"
 	"github.com/agentsafe/agentsafe/internal/output"
 )
@@ -56,7 +57,17 @@ func pullRepository(root string, cfg config.Config, r config.Repository, usernam
 		return err
 	}
 	output.Printf("[%s] ", r.Name)
-	if _, err := os.Stat(dest); os.IsNotExist(err) {
+	st, statErr := os.Stat(dest)
+	// An empty leftover directory (e.g. from a failed clone or partial removal)
+	// is treated as "not cloned" so the pull action clones into it. git clone
+	// accepts an existing empty target directory.
+	empty := false
+	if statErr == nil && st.IsDir() {
+		if ok, e := fsutil.IsEmptyDir(dest); e == nil {
+			empty = ok
+		}
+	}
+	if os.IsNotExist(statErr) || empty {
 		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 			return err
 		}
@@ -66,8 +77,8 @@ func pullRepository(root string, cfg config.Config, r config.Repository, usernam
 		}
 		output.Println("cloned")
 		return nil
-	} else if err != nil {
-		return fmt.Errorf("inspect repository path: %w", err)
+	} else if statErr != nil {
+		return fmt.Errorf("inspect repository path: %w", statErr)
 	}
 
 	output.Printf("fetching...")

@@ -153,14 +153,23 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
   }
 
   async function removeRepo(name: string) {
-    if (
-      !(await confirm({ message: t("confirm.removeRepo", { name }), danger: true }))
-    ) {
+    let deleteFiles = false;
+    const ok = await confirm({
+      message: t("confirm.removeRepo", { name }),
+      danger: true,
+      checkbox: {
+        label: t("confirm.removeRepoDeleteFiles", { name }),
+        onChange: (c) => {
+          deleteFiles = c;
+        },
+      },
+    });
+    if (!ok) {
       return;
     }
     try {
       setBusy(true);
-      await api.RemoveRepo(name);
+      await api.RemoveRepo(name, deleteFiles);
       await onChanged();
       notify(t("toast.repoRemoved"), "success");
     } catch (err) {
