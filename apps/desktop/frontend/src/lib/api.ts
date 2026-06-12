@@ -105,6 +105,9 @@ type AppBindings = {
   OpenWorkspaceVSCode(): Promise<string>;
   OpenInEditor(name: string, editor: string): Promise<string>;
   OpenInTerminal(name: string): Promise<string>;
+  OpenFeatureFolder(name: string): Promise<string>;
+  OpenRepoFolder(name: string, repo: string): Promise<string>;
+  OpenRepoInProgram(name: string, repo: string, program: string): Promise<string>;
 };
 
 declare global {

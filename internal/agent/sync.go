@@ -59,7 +59,7 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 			pats := []string{".git/"}
 			pats = append(pats, cfg.Agent.DefaultExclude...)
 			matcher := NewIgnoreMatcher(pats)
-			source := config.AgentPath(root, featureName, r.name)
+			source := config.AgentPath(root, fm.FolderKey(), r.name)
 			target := filepath.Join(root, r.worktreePath)
 			ch, compareErr := CompareIndexed(
 				r.name,
@@ -125,7 +125,7 @@ func validatePreparedRepositories(root, featureName string, fm feature.Metadata,
 			missing = append(missing, r.Name)
 			continue
 		}
-		if st, err := os.Stat(config.AgentPath(root, featureName, r.Name)); err != nil || !st.IsDir() {
+		if st, err := os.Stat(config.AgentPath(root, fm.FolderKey(), r.Name)); err != nil || !st.IsDir() {
 			missing = append(missing, r.Name)
 			continue
 		}
@@ -184,7 +184,7 @@ func Sync(root string, cfg config.Config, featureName string, opt Options) error
 			return err
 		}
 		for _, c := range changes {
-			src := filepath.Join(config.AgentPath(root, featureName, r.Name), filepath.FromSlash(c.Path))
+			src := filepath.Join(config.AgentPath(root, fm.FolderKey(), r.Name), filepath.FromSlash(c.Path))
 			dst := filepath.Join(dstRoot, filepath.FromSlash(c.Path))
 			if err := fsutil.EnsureInside(dstRoot, dst); err != nil {
 				return err

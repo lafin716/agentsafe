@@ -1303,19 +1303,108 @@ func (a *App) OpenWorkspaceFolder() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var cmd *exec.Cmd
-	switch goruntime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", root)
-	case "windows":
-		cmd = exec.Command("explorer.exe", root)
-	default:
-		cmd = exec.Command("xdg-open", root)
-	}
-	if err := cmd.Start(); err != nil {
+	if err := revealInFileManager(root); err != nil {
 		return "", err
 	}
 	return root, nil
+}
+
+// revealInFileManager opens dir in the OS file manager (Finder/Explorer/xdg).
+func revealInFileManager(dir string) error {
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", dir)
+	case "windows":
+		cmd = exec.Command("explorer.exe", dir)
+	default:
+		cmd = exec.Command("xdg-open", dir)
+	}
+	return cmd.Start()
+}
+
+// launchProgram opens path with program. A program picked via SelectProgram is
+// an absolute path (a .app bundle on macOS); launch it with `open -a`. A bare
+// command (e.g. "code") is run directly from PATH.
+func launchProgram(path, program string) error {
+	var e *exec.Cmd
+	if goruntime.GOOS == "darwin" && (strings.HasSuffix(program, ".app") || strings.Contains(program, "/")) {
+		e = exec.Command("open", "-a", program, path)
+	} else {
+		e = exec.Command(program, path)
+	}
+	e.Stdout, e.Stderr, e.Stdin = os.Stdout, os.Stderr, os.Stdin
+	return e.Start()
+}
+
+// featureRepoWorktree resolves the on-disk worktree path for one repository of
+// a feature (feature/<key>/<repo>), using the stored relative WorktreePath.
+func featureRepoWorktree(root, name, repo string) (string, error) {
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range fm.Repositories {
+		if r.Name == repo {
+			return filepath.Join(root, filepath.FromSlash(r.WorktreePath)), nil
+		}
+	}
+	return "", fmt.Errorf("repository %q is not part of feature %q", repo, name)
+}
+
+// OpenFeatureFolder reveals a feature's worktree root (feature/<key>) in the
+// OS file manager.
+func (a *App) OpenFeatureFolder(name string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(root, "feature", fm.FolderKey())
+	if err := revealInFileManager(p); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// OpenRepoFolder reveals one repository's worktree (feature/<key>/<repo>) in
+// the OS file manager.
+func (a *App) OpenRepoFolder(name, repo string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	p, err := featureRepoWorktree(root, name, repo)
+	if err != nil {
+		return "", err
+	}
+	if err := revealInFileManager(p); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// OpenRepoInProgram opens one repository's worktree in the given program. When
+// program is empty it returns the path only.
+func (a *App) OpenRepoInProgram(name, repo, program string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	p, err := featureRepoWorktree(root, name, repo)
+	if err != nil {
+		return "", err
+	}
+	if program == "" {
+		return p, nil
+	}
+	if err := launchProgram(p, program); err != nil {
+		return "", err
+	}
+	return p, nil
 }
 
 // OpenWorkspaceTerminal opens the current workspace root in the system
@@ -1348,21 +1437,15 @@ func (a *App) OpenInEditor(name, editor string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	p := filepath.Join(root, "agent", name)
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return "", err
+	}
+	p := filepath.Join(root, "agent", fm.FolderKey())
 	if editor == "" {
 		return p, nil
 	}
-	// A program picked via SelectProgram is an absolute path (a .app bundle on
-	// macOS); launch it with `open -a`. A bare command (e.g. "code") is run
-	// directly from PATH.
-	var e *exec.Cmd
-	if goruntime.GOOS == "darwin" && (strings.HasSuffix(editor, ".app") || strings.Contains(editor, "/")) {
-		e = exec.Command("open", "-a", editor, p)
-	} else {
-		e = exec.Command(editor, p)
-	}
-	e.Stdout, e.Stderr, e.Stdin = os.Stdout, os.Stderr, os.Stdin
-	if err := e.Start(); err != nil {
+	if err := launchProgram(p, editor); err != nil {
 		return "", err
 	}
 	return p, nil
@@ -1374,7 +1457,11 @@ func (a *App) OpenInTerminal(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return openTerminalAt(filepath.Join(root, "agent", name))
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return "", err
+	}
+	return openTerminalAt(filepath.Join(root, "agent", fm.FolderKey()))
 }
 
 func openTerminalAt(dir string) (string, error) {

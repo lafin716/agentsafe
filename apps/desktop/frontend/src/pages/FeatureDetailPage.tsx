@@ -6,6 +6,7 @@ import {
   Boxes,
   ChevronDown,
   ExternalLink,
+  FolderOpen,
   GitCommit,
   GitMerge,
   History,
@@ -311,6 +312,18 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
+  const openRepoFolder = (repo: string) =>
+    run(async () => {
+      const p = await api.OpenRepoFolder(name, repo);
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  const openRepoProgram = (repo: string) =>
+    run(async () => {
+      const p = await api.OpenRepoInProgram(name, repo, program.trim());
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
   const chooseProgram = () =>
     run(async () => {
       const sel = await api.SelectProgram();
@@ -504,6 +517,16 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={chooseProgram}
+                disabled={busy}
+                title={program}
+              >
+                <AppWindow className="size-4" /> {t("feature.selectProgram")} (
+                {programLabel(program)})
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={rebase}
                 disabled={busy || statusLoading}
               >
@@ -529,19 +552,41 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
               <LoadingState label={t("feature.loadingStatus")} />
             ) : (status?.repositories ?? []).map((r) => (
               <div key={r.name}>
-                <div className="mb-1 flex items-center gap-2">
-                  <Boxes className="size-4 text-muted-foreground" />
-                  <span className="font-medium">{r.name}</span>
-                  {r.status.trim() === "" && (
-                    <Badge variant="outline">{t("feature.clean")}</Badge>
-                  )}
-                  {(histCounts[r.name] ?? 0) > 0 && (
-                    <Badge variant="secondary">
-                      {t("feature.syncHistoryBadge", {
-                        count: histCounts[r.name],
-                      })}
-                    </Badge>
-                  )}
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Boxes className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate font-medium">{r.name}</span>
+                    {r.status.trim() === "" && (
+                      <Badge variant="outline">{t("feature.clean")}</Badge>
+                    )}
+                    {(histCounts[r.name] ?? 0) > 0 && (
+                      <Badge variant="secondary">
+                        {t("feature.syncHistoryBadge", {
+                          count: histCounts[r.name],
+                        })}
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title={t("feature.openFolder")}
+                      disabled={busy}
+                      onClick={() => openRepoFolder(r.name)}
+                    >
+                      <FolderOpen className="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title={`${t("feature.openProgram")} (${programLabel(program)})`}
+                      disabled={busy}
+                      onClick={() => openRepoProgram(r.name)}
+                    >
+                      <ExternalLink className="size-4" />
+                    </Button>
+                  </div>
                 </div>
                 {r.error ? (
                   <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">

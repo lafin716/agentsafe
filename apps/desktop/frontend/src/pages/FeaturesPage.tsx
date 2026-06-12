@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, Code2, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
+import { ChevronRight, Code2, FolderOpen, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
 import { useConfirm } from "@/components/ui/confirm";
 import type { FeatureDeleteResult, FeatureEntry } from "@/lib/types";
@@ -65,6 +65,15 @@ export function FeaturesPage({ onOpen }: Props) {
     try {
       await api.OpenInEditor(name, "code");
       notify(t("toast.openedVSCode", { name }), "success");
+    } catch (e) {
+      notify(errMessage(e), "error");
+    }
+  }
+
+  async function openFolder(name: string) {
+    try {
+      const p = await api.OpenFeatureFolder(name);
+      notify(t("toast.openedPath", { path: p }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
     }
@@ -146,7 +155,6 @@ export function FeaturesPage({ onOpen }: Props) {
                 <TableRow>
                   <TableHead>{t("features.colFeature")}</TableHead>
                   <TableHead>{t("features.colBranch")}</TableHead>
-                  <TableHead>{t("features.colBase")}</TableHead>
                   <TableHead>{t("features.colRepos")}</TableHead>
                   <TableHead>{t("features.colAgent")}</TableHead>
                   <TableHead></TableHead>
@@ -161,7 +169,6 @@ export function FeaturesPage({ onOpen }: Props) {
                   >
                     <TableCell className="font-medium">{f.name}</TableCell>
                     <TableCell>{f.branch}</TableCell>
-                    <TableCell>{f.baseBranch}</TableCell>
                     <TableCell>{f.repoCount}</TableCell>
                     <TableCell>
                       {f.agentReady ? (
@@ -172,6 +179,17 @@ export function FeaturesPage({ onOpen }: Props) {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title={t("features.openFolder")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openFolder(f.name);
+                          }}
+                        >
+                          <FolderOpen className="size-4" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"

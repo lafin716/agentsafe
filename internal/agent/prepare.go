@@ -105,7 +105,7 @@ func Init(root string, cfg config.Config, featureName string, opt PrepareOptions
 	secRoot := LoadSecurity(cfg, root)
 	output.Printf("Agent workspace prepared: agent/%s\n\n", featureName)
 	for _, r := range fm.Repositories {
-		pr, err := prepareRepository(root, cfg, featureName, r, opt, secRoot)
+		pr, err := prepareRepository(root, cfg, fm.FolderKey(), r, opt, secRoot)
 		if err != nil {
 			return err
 		}
@@ -137,7 +137,7 @@ func PrepareRepository(root string, cfg config.Config, featureName, repoName str
 	}
 	_ = EnsureSecurityFile(cfg, root)
 	secRoot := LoadSecurity(cfg, root)
-	pr, err := prepareRepository(root, cfg, featureName, *repoMeta, opt, secRoot)
+	pr, err := prepareRepository(root, cfg, fm.FolderKey(), *repoMeta, opt, secRoot)
 	if err != nil {
 		return PrepareMetadata{}, err
 	}
@@ -167,9 +167,9 @@ func PrepareRepository(root string, cfg config.Config, featureName, repoName str
 	return meta, nil
 }
 
-func prepareRepository(root string, cfg config.Config, featureName string, r feature.RepoMeta, opt PrepareOptions, secRoot SecurityFile) (PrepareRepo, error) {
+func prepareRepository(root string, cfg config.Config, folderKey string, r feature.RepoMeta, opt PrepareOptions, secRoot SecurityFile) (PrepareRepo, error) {
 	source := filepath.Join(root, r.WorktreePath)
-	target := config.AgentPath(root, featureName, r.Name)
+	target := config.AgentPath(root, folderKey, r.Name)
 	resetTarget(target, opt.Backup)
 	secSource := LoadSecurity(cfg, source)
 	pats := []string{".git/"}
@@ -183,7 +183,7 @@ func prepareRepository(root string, cfg config.Config, featureName string, r fea
 	}
 	pr := PrepareRepo{
 		Name: r.Name, Source: r.WorktreePath,
-		Agent:          filepath.ToSlash(filepath.Join("agent", featureName, r.Name)),
+		Agent:          filepath.ToSlash(filepath.Join("agent", folderKey, r.Name)),
 		PreparedHashes: map[string]string{}, FileIndex: map[string]FileIndexEntry{},
 		WorktreeRevision: r.Revision,
 	}

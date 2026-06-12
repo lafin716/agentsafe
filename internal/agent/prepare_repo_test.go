@@ -56,7 +56,7 @@ func TestPrepareRepositoryPreservesOtherRepositoriesAndMetadata(t *testing.T) {
 func TestValidatePreparedRepositoriesRejectsMissingAndStale(t *testing.T) {
 	root := t.TempDir()
 	name := "demo"
-	fm := feature.Metadata{Repositories: []feature.RepoMeta{
+	fm := feature.Metadata{Name: name, Repositories: []feature.RepoMeta{
 		{Name: "one", Revision: 1},
 		{Name: "two", Revision: 2},
 	}}

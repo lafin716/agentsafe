@@ -16,12 +16,27 @@ import (
 )
 
 type Metadata struct {
-	Name         string     `json:"name"`
+	Name string `json:"name"`
+	// Key is the ASCII-safe identifier used for on-disk worktree/agent folders
+	// (root/feature/<key>, root/agent/<key>). It is derived from Name at create
+	// time so folders never contain characters (e.g. Hangul) that break editors
+	// like IntelliJ. Empty for features created before this field existed, in
+	// which case FolderKey falls back to Name.
+	Key          string     `json:"key,omitempty"`
 	Branch       string     `json:"branch"`
 	BaseBranch   string     `json:"baseBranch"`
 	CreatedAt    string     `json:"createdAt"`
 	Revision     int        `json:"revision,omitempty"`
 	Repositories []RepoMeta `json:"repositories"`
+}
+
+// FolderKey returns the ASCII folder key for the feature, falling back to Name
+// for features created before Key was introduced.
+func (m Metadata) FolderKey() string {
+	if m.Key != "" {
+		return m.Key
+	}
+	return m.Name
 }
 type RepoMeta struct {
 	Name         string `json:"name"`
@@ -102,7 +117,8 @@ func CreateWithOptions(root string, cfg config.Config, name string, opt CreateOp
 		return err
 	}
 	branch := BranchName(cfg, name)
-	meta := Metadata{Name: name, Branch: branch, BaseBranch: opt.Base, CreatedAt: time.Now().Format(time.RFC3339), Revision: 1}
+	key := uniqueFeatureKey(root, name)
+	meta := Metadata{Name: name, Key: key, Branch: branch, BaseBranch: opt.Base, CreatedAt: time.Now().Format(time.RFC3339), Revision: 1}
 	for _, r := range cfg.Repositories {
 		repoBase := opt.Base
 		if repoBase == "" {
@@ -112,13 +128,54 @@ func CreateWithOptions(root string, cfg config.Config, name string, opt CreateOp
 			}
 			repoBase = cur
 		}
-		rm, err := createRepositoryWorktree(root, name, r, branch, repoBase, policy)
+		rm, err := createRepositoryWorktree(root, key, r, branch, repoBase, policy)
 		if err != nil {
 			return err
 		}
 		meta.Repositories = append(meta.Repositories, rm)
 	}
 	return Save(root, meta)
+}
+
+// uniqueFeatureKey derives an ASCII folder key from name (config.FeatureKey)
+// and ensures it does not collide with an existing feature's folder by
+// appending a numeric suffix when needed.
+func uniqueFeatureKey(root, name string) string {
+	base := config.FeatureKey(name)
+	candidate := base
+	for i := 2; featureKeyTaken(root, candidate); i++ {
+		candidate = fmt.Sprintf("%s-%d", base, i)
+	}
+	return candidate
+}
+
+// featureKeyTaken reports whether a worktree/agent folder or an existing
+// feature's metadata already uses key as its folder key.
+func featureKeyTaken(root, key string) bool {
+	for _, dir := range []string{"feature", "agent"} {
+		if st, err := os.Stat(filepath.Join(root, dir, key)); err == nil && st.IsDir() {
+			return true
+		}
+	}
+	metaDir := filepath.Join(root, config.DirName, "features")
+	entries, err := os.ReadDir(metaDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		b, readErr := os.ReadFile(filepath.Join(metaDir, e.Name()))
+		if readErr != nil {
+			continue
+		}
+		var m Metadata
+		if json.Unmarshal(b, &m) == nil && m.FolderKey() == key {
+			return true
+		}
+	}
+	return false
 }
 
 func createRepositoryWorktree(root, featureName string, repo config.Repository, branch, base string, policy ExistingBranchPolicy) (RepoMeta, error) {
@@ -298,7 +355,7 @@ func ConfigureRepositoryWorktree(root string, cfg config.Config, featureName, re
 		// A folder that is the feature branch's own worktree is adoptable, so
 		// only block leftover/foreign folders.
 		repoPath := config.RepoPath(root, repoName)
-		dest := config.WorktreePath(root, featureName, repoName)
+		dest := config.WorktreePath(root, meta.FolderKey(), repoName)
 		if st, statErr := os.Stat(dest); statErr == nil && st.IsDir() {
 			adoptable := samePath(aggit.WorktreeForBranch(repoPath, branch), dest)
 			if adoptable {
@@ -318,7 +375,7 @@ func ConfigureRepositoryWorktree(root string, cfg config.Config, featureName, re
 		}
 	}
 
-	rm, err := createRepositoryWorktree(root, featureName, repoCfg, branch, base, policy)
+	rm, err := createRepositoryWorktree(root, meta.FolderKey(), repoCfg, branch, base, policy)
 	if err != nil {
 		return RepoMeta{}, err
 	}
@@ -446,9 +503,9 @@ func DeleteWithResult(root, name string, opt DeleteOptions) (DeleteResult, error
 		path  string
 		all   bool
 	}{
-		{"feature directory", filepath.Join(root, "feature", name), true},
+		{"feature directory", filepath.Join(root, "feature", m.FolderKey()), true},
 		{"feature metadata", config.FeatureMetaPath(root, name), false},
-		{"agent workspace", filepath.Join(root, "agent", name), true},
+		{"agent workspace", filepath.Join(root, "agent", m.FolderKey()), true},
 		{"session metadata", config.SessionMetaPath(root, name), false},
 		{"sync history", filepath.Join(config.HistoryDir(root), name), true},
 	}
@@ -545,7 +602,7 @@ func ListData(root string) (FeatureListResult, error) {
 		var m Metadata
 		if json.Unmarshal(b, &m) == nil {
 			ready := false
-			if st, err := os.Stat(filepath.Join(root, "agent", m.Name)); err == nil && st.IsDir() {
+			if st, err := os.Stat(filepath.Join(root, "agent", m.FolderKey())); err == nil && st.IsDir() {
 				ready = true
 			}
 			features = append(features, FeatureEntry{
@@ -601,7 +658,7 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 		p := filepath.Join(root, r.WorktreePath)
 		s, files, err := aggit.StatusFiles(p)
 		repoStatus := RepoStatus{Name: r.Name, Status: s, Changes: []RepoFileStatus{}}
-		if st, statErr := os.Stat(config.AgentPath(root, name, r.Name)); statErr == nil && st.IsDir() {
+		if st, statErr := os.Stat(config.AgentPath(root, m.FolderKey(), r.Name)); statErr == nil && st.IsDir() {
 			if revision, ok := preparedRepos[r.Name]; ok {
 				repoStatus.AgentReady = true
 				// Legacy metadata has revision 0; it remains valid until this
