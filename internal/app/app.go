@@ -33,8 +33,8 @@ type repoEntry struct {
 }
 
 type diffResult struct {
-	Feature      string       `json:"feature"      yaml:"feature"`
-	Repositories []repoDiff   `json:"repositories" yaml:"repositories"`
+	Feature      string     `json:"feature"      yaml:"feature"`
+	Repositories []repoDiff `json:"repositories" yaml:"repositories"`
 }
 
 type repoDiff struct {
@@ -153,6 +153,7 @@ func featureCmd() *cobra.Command {
 	c := &cobra.Command{Use: "feature", Short: "Manage feature worktrees"}
 	var base string
 	var force bool
+	var existingBranch string
 	create := &cobra.Command{
 		Use:   "create NAME",
 		Short: "Create feature branches and worktrees",
@@ -161,15 +162,25 @@ func featureCmd() *cobra.Command {
 By default, each repository's current branch is used as the base.
 Use --base to specify an explicit base branch for all repositories.
 
-Errors if the feature branch already exists. Use -f to force delete
-the local branch and recreate it from the base.`,
+When the feature branch already exists, use --existing-branch to choose
+whether to error, reuse it, or recreate the local branch from the base.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root, cfg, err := cwdConfig()
 			if err != nil {
 				return err
 			}
-			if err := feature.Create(root, cfg, args[0], base, force); err != nil {
+			policy := existingBranch
+			if force {
+				policy = string(feature.ExistingBranchRecreate)
+			}
+			parsed, err := feature.ParseExistingBranchPolicy(policy)
+			if err != nil {
+				return err
+			}
+			if err := feature.CreateWithOptions(root, cfg, args[0], feature.CreateOptions{
+				Base: base, ExistingBranch: parsed,
+			}); err != nil {
 				return err
 			}
 			if output.IsStructured() {
@@ -182,7 +193,8 @@ the local branch and recreate it from the base.`,
 			return nil
 		}}
 	create.Flags().StringVarP(&base, "base", "b", "", "base branch for all repos (default: each repo's current branch)")
-	create.Flags().BoolVarP(&force, "force", "f", false, "force recreate if local branch already exists")
+	create.Flags().StringVar(&existingBranch, "existing-branch", "error", "existing branch policy: error, reuse, or recreate")
+	create.Flags().BoolVarP(&force, "force", "f", false, "deprecated alias for --existing-branch recreate")
 	list := &cobra.Command{Use: "list", Short: "List feature workspaces", RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
 		if err != nil {
@@ -238,7 +250,66 @@ the local branch and recreate it from the base.`,
 	}}
 	del.Flags().BoolVar(&deleteBranch, "delete-branch", false, "also delete the local feature branch in each repo")
 	del.Flags().BoolVar(&deleteForce, "force", false, "remove worktrees even with uncommitted changes")
-	c.AddCommand(create, list, rebase, del)
+
+	repoWorktree := &cobra.Command{Use: "repo", Short: "Manage one repository in a feature"}
+	var addPolicy string
+	addRepo := &cobra.Command{
+		Use: "add FEATURE REPO", Short: "Add a configured repository to an existing feature", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, cfg, err := cwdConfig()
+			if err != nil {
+				return err
+			}
+			policy, err := feature.ParseExistingBranchPolicy(addPolicy)
+			if err != nil {
+				return err
+			}
+			rm, err := feature.ConfigureRepositoryWorktree(root, cfg, args[0], args[1], feature.RepositoryWorktreeOptions{
+				ExistingBranch: policy,
+			})
+			if err != nil {
+				return err
+			}
+			if output.IsStructured() {
+				return output.Emit(rm)
+			}
+			fmt.Printf("Added repository %s to feature %s\n", args[1], args[0])
+			return nil
+		},
+	}
+	addRepo.Flags().StringVar(&addPolicy, "existing-branch", "reuse", "existing branch policy: error, reuse, or recreate")
+
+	var recreatePolicy string
+	var recreateForce bool
+	recreateRepo := &cobra.Command{
+		Use: "recreate FEATURE REPO", Short: "Recreate one repository worktree", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, cfg, err := cwdConfig()
+			if err != nil {
+				return err
+			}
+			policy, err := feature.ParseExistingBranchPolicy(recreatePolicy)
+			if err != nil {
+				return err
+			}
+			rm, err := feature.ConfigureRepositoryWorktree(root, cfg, args[0], args[1], feature.RepositoryWorktreeOptions{
+				ExistingBranch: policy, Recreate: true, Force: recreateForce,
+			})
+			if err != nil {
+				return err
+			}
+			if output.IsStructured() {
+				return output.Emit(rm)
+			}
+			fmt.Printf("Recreated repository %s in feature %s\n", args[1], args[0])
+			return nil
+		},
+	}
+	recreateRepo.Flags().StringVar(&recreatePolicy, "existing-branch", "reuse", "existing branch policy: error, reuse, or recreate")
+	recreateRepo.Flags().BoolVar(&recreateForce, "force", false, "discard uncommitted worktree changes")
+	repoWorktree.AddCommand(addRepo, recreateRepo)
+
+	c.AddCommand(create, list, rebase, del, repoWorktree)
 	return c
 }
 

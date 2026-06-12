@@ -1,0 +1,208 @@
+package feature
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/agentsafe/agentsafe/internal/config"
+	aggit "github.com/agentsafe/agentsafe/internal/git"
+)
+
+func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
+	t.Run("error", func(t *testing.T) {
+		root, cfg := testWorkspace(t, "repo")
+		repoPath := config.RepoPath(root, "repo")
+		testGit(t, repoPath, "branch", "feature/demo")
+
+		err := CreateWithOptions(root, cfg, "demo", CreateOptions{
+			Base: "main", ExistingBranch: ExistingBranchError,
+		})
+		if err == nil || !strings.Contains(err.Error(), "choose reuse or recreate") {
+			t.Fatalf("expected existing branch error, got %v", err)
+		}
+	})
+
+	t.Run("reuse", func(t *testing.T) {
+		root, cfg := testWorkspace(t, "repo")
+		repoPath := config.RepoPath(root, "repo")
+		testGit(t, repoPath, "branch", "feature/demo")
+
+		if err := CreateWithOptions(root, cfg, "demo", CreateOptions{
+			Base: "main", ExistingBranch: ExistingBranchReuse,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		worktree := config.WorktreePath(root, "demo", "repo")
+		if branch, err := aggit.CurrentBranch(worktree); err != nil || branch != "feature/demo" {
+			t.Fatalf("branch = %q, err = %v", branch, err)
+		}
+	})
+
+	t.Run("recreate", func(t *testing.T) {
+		root, cfg := testWorkspace(t, "repo")
+		repoPath := config.RepoPath(root, "repo")
+		testGit(t, repoPath, "checkout", "-b", "feature/demo")
+		if err := os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("old"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		testGit(t, repoPath, "add", ".")
+		testGit(t, repoPath, "commit", "-m", "feature commit")
+		testGit(t, repoPath, "checkout", "main")
+
+		if err := CreateWithOptions(root, cfg, "demo", CreateOptions{
+			Base: "main", ExistingBranch: ExistingBranchRecreate,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(config.WorktreePath(root, "demo", "repo"), "feature.txt")); !os.IsNotExist(err) {
+			t.Fatalf("recreated branch retained old commit, stat err = %v", err)
+		}
+	})
+}
+
+func TestCreateReusesRemoteOnlyBranch(t *testing.T) {
+	root, cfg := testWorkspace(t, "repo")
+	repoPath := config.RepoPath(root, "repo")
+	testGit(t, repoPath, "checkout", "-b", "feature/demo")
+	if err := os.WriteFile(filepath.Join(repoPath, "remote.txt"), []byte("remote"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, repoPath, "add", ".")
+	testGit(t, repoPath, "commit", "-m", "remote feature")
+	testGit(t, repoPath, "push", "-u", "origin", "feature/demo")
+	testGit(t, repoPath, "checkout", "main")
+	testGit(t, repoPath, "branch", "-D", "feature/demo")
+
+	if err := CreateWithOptions(root, cfg, "demo", CreateOptions{
+		Base: "main", ExistingBranch: ExistingBranchReuse,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(config.WorktreePath(root, "demo", "repo"), "remote.txt")); err != nil {
+		t.Fatalf("remote branch content missing: %v", err)
+	}
+}
+
+func TestConfigureRepositoryWorktreeAddAndRecreate(t *testing.T) {
+	root, firstCfg := testWorkspace(t, "one")
+	secondRoot, secondCfg := testWorkspace(t, "two")
+	if err := os.Rename(config.RepoPath(secondRoot, "two"), config.RepoPath(root, "two")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := firstCfg
+	cfg.Repositories = append(cfg.Repositories, secondCfg.Repositories[0])
+
+	if err := CreateWithOptions(root, firstCfg, "demo", CreateOptions{
+		Base: "main", ExistingBranch: ExistingBranchError,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "agent", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	session := struct {
+		FeatureRevision int `json:"featureRevision"`
+	}{FeatureRevision: 1}
+	b, _ := json.Marshal(session)
+	if err := os.MkdirAll(filepath.Dir(config.SessionMetaPath(root, "demo")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.SessionMetaPath(root, "demo"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ConfigureRepositoryWorktree(root, cfg, "demo", "two", RepositoryWorktreeOptions{
+		ExistingBranch: ExistingBranchReuse,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := Load(root, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Repositories) != 2 || meta.Revision != 2 {
+		t.Fatalf("metadata after add = %+v", meta)
+	}
+	status, err := StatusData(root, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.AgentNeedsPrepare {
+		t.Fatal("expected agent workspace to require prepare after repository add")
+	}
+
+	secondWorktree := config.WorktreePath(root, "demo", "two")
+	if err := os.WriteFile(filepath.Join(secondWorktree, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConfigureRepositoryWorktree(root, cfg, "demo", "two", RepositoryWorktreeOptions{
+		ExistingBranch: ExistingBranchReuse, Recreate: true,
+	}); err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("expected dirty worktree refusal, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(secondWorktree, "dirty.txt")); err != nil {
+		t.Fatalf("dirty worktree changed after refusal: %v", err)
+	}
+	meta, _ = Load(root, "demo")
+	if meta.Revision != 2 {
+		t.Fatalf("revision changed after refused recreate: %d", meta.Revision)
+	}
+
+	if _, err := ConfigureRepositoryWorktree(root, cfg, "demo", "two", RepositoryWorktreeOptions{
+		ExistingBranch: ExistingBranchReuse, Recreate: true, Force: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(secondWorktree, "dirty.txt")); !os.IsNotExist(err) {
+		t.Fatalf("forced recreate retained dirty file, stat err = %v", err)
+	}
+	meta, _ = Load(root, "demo")
+	if meta.Revision != 3 {
+		t.Fatalf("revision = %d, want 3", meta.Revision)
+	}
+}
+
+func testWorkspace(t *testing.T, repoName string) (string, config.Config) {
+	t.Helper()
+	root := t.TempDir()
+	remote := filepath.Join(t.TempDir(), repoName+".git")
+	testGit(t, "", "init", "--bare", remote)
+	seed := filepath.Join(t.TempDir(), "seed")
+	testGit(t, "", "init", "-b", "main", seed)
+	testGit(t, seed, "config", "user.email", "test@example.com")
+	testGit(t, seed, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte(repoName), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, seed, "add", ".")
+	testGit(t, seed, "commit", "-m", "initial")
+	testGit(t, seed, "remote", "add", "origin", remote)
+	testGit(t, seed, "push", "-u", "origin", "main")
+
+	repoPath := config.RepoPath(root, repoName)
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, root, "clone", remote, repoPath)
+	testGit(t, repoPath, "config", "user.email", "test@example.com")
+	testGit(t, repoPath, "config", "user.name", "Test User")
+	testGit(t, repoPath, "checkout", "main")
+
+	cfg := config.Default(root, "test")
+	cfg.Git.DefaultBaseBranch = "main"
+	cfg.Git.BranchPrefix = "feature/"
+	cfg.Repositories = []config.Repository{{
+		Name: repoName, URL: remote, DefaultBranch: "main",
+	}}
+	return root, cfg
+}
+
+func testGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if _, err := aggit.Run(dir, args...); err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+}

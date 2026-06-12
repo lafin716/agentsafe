@@ -234,7 +234,7 @@ func (a *App) ListFeatures() (feature.FeatureListResult, error) {
 	return feature.ListData(root)
 }
 
-func (a *App) CreateFeature(name, base string, force bool) error {
+func (a *App) CreateFeature(name, base, existingBranch string) error {
 	root, err := a.requireRoot()
 	if err != nil {
 		return err
@@ -243,9 +243,49 @@ func (a *App) CreateFeature(name, base string, force bool) error {
 	if err != nil {
 		return err
 	}
+	policy, err := feature.ParseExistingBranchPolicy(existingBranch)
+	if err != nil {
+		return err
+	}
 	return a.runTask("Create feature: "+name, func() error {
-		return feature.Create(root, cfg, name, base, force)
+		return feature.CreateWithOptions(root, cfg, name, feature.CreateOptions{
+			Base: base, ExistingBranch: policy,
+		})
 	})
+}
+
+func (a *App) FeatureRepoAdd(name, repoName, existingBranch string) (feature.RepoMeta, error) {
+	return a.configureFeatureRepo(name, repoName, existingBranch, false, false)
+}
+
+func (a *App) FeatureRepoRecreate(name, repoName, existingBranch string, force bool) (feature.RepoMeta, error) {
+	return a.configureFeatureRepo(name, repoName, existingBranch, true, force)
+}
+
+func (a *App) configureFeatureRepo(name, repoName, existingBranch string, recreate, force bool) (feature.RepoMeta, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.RepoMeta{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return feature.RepoMeta{}, err
+	}
+	policy, err := feature.ParseExistingBranchPolicy(existingBranch)
+	if err != nil {
+		return feature.RepoMeta{}, err
+	}
+	var result feature.RepoMeta
+	err = a.runTask("Configure worktree: "+taskTarget(name, repoName), func() error {
+		var configureErr error
+		result, configureErr = feature.ConfigureRepositoryWorktree(root, cfg, name, repoName, feature.RepositoryWorktreeOptions{
+			ExistingBranch: policy,
+			Recreate:       recreate,
+			Force:          force,
+		})
+		return configureErr
+	})
+	return result, err
 }
 
 // RebaseFeature rebases the feature's worktrees onto their base branch.

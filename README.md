@@ -43,7 +43,9 @@ agentsafe push coupon-v2
 - `agentsafe repo list`
 - `agentsafe clone`
 - `agentsafe pull` (clones missing repos, fast-forwards the rest)
-- `agentsafe feature create NAME --base develop`
+- `agentsafe feature create NAME --base develop [--existing-branch error|reuse|recreate]`
+- `agentsafe feature repo add FEATURE REPO [--existing-branch reuse]`
+- `agentsafe feature repo recreate FEATURE REPO [--existing-branch reuse] [--force]`
 - `agentsafe feature list`
 - `agentsafe feature rebase NAME [--repo NAME]`
 - `agentsafe status FEATURE`

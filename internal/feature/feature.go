@@ -19,6 +19,7 @@ type Metadata struct {
 	Branch       string     `json:"branch"`
 	BaseBranch   string     `json:"baseBranch"`
 	CreatedAt    string     `json:"createdAt"`
+	Revision     int        `json:"revision,omitempty"`
 	Repositories []RepoMeta `json:"repositories"`
 }
 type RepoMeta struct {
@@ -30,6 +31,38 @@ type RepoMeta struct {
 
 func BranchName(cfg config.Config, featureName string) string {
 	return cfg.Git.BranchPrefix + featureName
+}
+
+type ExistingBranchPolicy string
+
+const (
+	ExistingBranchError    ExistingBranchPolicy = "error"
+	ExistingBranchReuse    ExistingBranchPolicy = "reuse"
+	ExistingBranchRecreate ExistingBranchPolicy = "recreate"
+)
+
+func ParseExistingBranchPolicy(raw string) (ExistingBranchPolicy, error) {
+	policy := ExistingBranchPolicy(strings.ToLower(strings.TrimSpace(raw)))
+	if policy == "" {
+		policy = ExistingBranchError
+	}
+	switch policy {
+	case ExistingBranchError, ExistingBranchReuse, ExistingBranchRecreate:
+		return policy, nil
+	default:
+		return "", fmt.Errorf("invalid existing branch policy %q (expected error, reuse, or recreate)", raw)
+	}
+}
+
+type CreateOptions struct {
+	Base           string
+	ExistingBranch ExistingBranchPolicy
+}
+
+type RepositoryWorktreeOptions struct {
+	ExistingBranch ExistingBranchPolicy
+	Recreate       bool
+	Force          bool
 }
 
 func Load(root, name string) (Metadata, error) {
@@ -49,78 +82,195 @@ func Save(root string, m Metadata) error {
 	return os.WriteFile(config.FeatureMetaPath(root, m.Name), b, 0644)
 }
 
+// Create is retained for callers using the former force flag.
 func Create(root string, cfg config.Config, name, base string, force bool) error {
+	policy := ExistingBranchError
+	if force {
+		policy = ExistingBranchRecreate
+	}
+	return CreateWithOptions(root, cfg, name, CreateOptions{Base: base, ExistingBranch: policy})
+}
+
+func CreateWithOptions(root string, cfg config.Config, name string, opt CreateOptions) error {
 	if err := config.ValidateFeatureName(name); err != nil {
 		return err
 	}
+	policy, err := ParseExistingBranchPolicy(string(opt.ExistingBranch))
+	if err != nil {
+		return err
+	}
 	branch := BranchName(cfg, name)
-	meta := Metadata{Name: name, Branch: branch, BaseBranch: base, CreatedAt: time.Now().Format(time.RFC3339)}
+	meta := Metadata{Name: name, Branch: branch, BaseBranch: opt.Base, CreatedAt: time.Now().Format(time.RFC3339), Revision: 1}
 	for _, r := range cfg.Repositories {
-		repoPath := config.RepoPath(root, r.Name)
-		dest := config.WorktreePath(root, name, r.Name)
-		rel, _ := filepath.Rel(root, dest)
-		output.Printf("[%s] creating worktree %s\n", r.Name, rel)
-		if _, err := os.Stat(repoPath); err != nil {
-			return fmt.Errorf("repository %s is not cloned at %s; run `agentsafe pull`", r.Name, repoPath)
-		}
-
-		// determine base for this repo: explicit flag > current branch
-		repoBase := base
+		repoBase := opt.Base
 		if repoBase == "" {
-			cur, err := aggit.CurrentBranch(repoPath)
+			cur, err := aggit.CurrentBranch(config.RepoPath(root, r.Name))
 			if err != nil || cur == "" {
 				return fmt.Errorf("repository %s is in detached HEAD state; use --base to specify a branch", r.Name)
 			}
 			repoBase = cur
 		}
-
-		// Fetch only the base branch and create the worktree directly from the
-		// freshly fetched tip (FETCH_HEAD). This avoids a full fetch and the
-		// extra checkout that `pull` performs on the main clone; the main clone
-		// itself is kept current by `agentsafe pull`.
-		start := repoBase
-		output.Printf("  fetch origin %s (non-interactive, timeout controlled by AGENTSAFE_GIT_TIMEOUT_SECONDS)...\n", repoBase)
-		if err := aggit.FetchBranch(repoPath, repoBase); err != nil {
-			output.Printf("  warning: fetch failed, using local %s: %v\n", repoBase, err)
-		} else {
-			start = "FETCH_HEAD"
+		rm, err := createRepositoryWorktree(root, name, r, branch, repoBase, policy)
+		if err != nil {
+			return err
 		}
-
-		if _, err := os.Stat(dest); err == nil {
-			output.Println("  worktree already exists, skipping")
-		} else {
-			if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-				return err
-			}
-			local := aggit.LocalBranchExists(repoPath, branch)
-			remote := aggit.RemoteBranchExists(repoPath, branch)
-
-			if remote && !local {
-				return fmt.Errorf("remote branch %s already exists; delete it manually and retry", branch)
-			}
-			if local && !force {
-				return fmt.Errorf("branch %s already exists in repository %s; use -f to force recreate", branch, r.Name)
-			}
-			if local && force {
-				output.Printf("  deleting existing local branch %s\n", branch)
-				if err := aggit.DeleteLocalBranch(repoPath, branch); err != nil {
-					return fmt.Errorf("failed to delete branch %s in repository %s: %w", branch, r.Name, err)
-				}
-			}
-
-			output.Printf("  creating new branch %s from %s\n", branch, repoBase)
-			if err := aggit.AddWorktree(repoPath, dest, branch, start, true); err != nil {
-				return fmt.Errorf("failed to create worktree for repository %s: %w", r.Name, err)
-			}
-		}
-		meta.Repositories = append(meta.Repositories, RepoMeta{
-			Name:         r.Name,
-			WorktreePath: filepath.ToSlash(rel),
-			Branch:       branch,
-			BaseBranch:   repoBase,
-		})
+		meta.Repositories = append(meta.Repositories, rm)
 	}
 	return Save(root, meta)
+}
+
+func createRepositoryWorktree(root, featureName string, repo config.Repository, branch, base string, policy ExistingBranchPolicy) (RepoMeta, error) {
+	repoPath := config.RepoPath(root, repo.Name)
+	dest := config.WorktreePath(root, featureName, repo.Name)
+	rel, _ := filepath.Rel(root, dest)
+	output.Printf("[%s] creating worktree %s\n", repo.Name, rel)
+	if _, err := os.Stat(repoPath); err != nil {
+		return RepoMeta{}, fmt.Errorf("repository %s is not cloned at %s; run `agentsafe pull`", repo.Name, repoPath)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return RepoMeta{}, err
+	}
+
+	start := base
+	output.Printf("  fetch origin %s (non-interactive, timeout controlled by AGENTSAFE_GIT_TIMEOUT_SECONDS)...\n", base)
+	if err := aggit.FetchBranch(repoPath, base); err != nil {
+		output.Printf("  warning: fetch failed, using local %s: %v\n", base, err)
+	} else {
+		start = "FETCH_HEAD"
+	}
+
+	local := aggit.LocalBranchExists(repoPath, branch)
+	if !local {
+		// Discover remote-only feature branches before applying the policy.
+		_ = aggit.FetchAll(repoPath)
+	}
+	remote := aggit.RemoteBranchExists(repoPath, branch)
+
+	_ = aggit.WorktreePrune(repoPath)
+	if inUse := aggit.WorktreeForBranch(repoPath, branch); inUse != "" {
+		return RepoMeta{}, fmt.Errorf("branch %s is already checked out in worktree %s", branch, inUse)
+	}
+
+	create := true
+	switch {
+	case local && policy == ExistingBranchError:
+		return RepoMeta{}, fmt.Errorf("branch %s already exists in repository %s; choose reuse or recreate", branch, repo.Name)
+	case (local || remote) && policy == ExistingBranchReuse:
+		if local {
+			output.Printf("  reusing existing local branch %s\n", branch)
+			create = false
+			start = branch
+		} else {
+			output.Printf("  creating tracking branch %s from origin/%s\n", branch, branch)
+			start = "origin/" + branch
+		}
+	case (local || remote) && policy == ExistingBranchRecreate:
+		if local {
+			output.Printf("  deleting existing local branch %s\n", branch)
+			if err := aggit.DeleteLocalBranch(repoPath, branch); err != nil {
+				return RepoMeta{}, fmt.Errorf("failed to delete branch %s in repository %s: %w", branch, repo.Name, err)
+			}
+		}
+		if remote {
+			output.Printf("  warning: remote branch origin/%s is preserved\n", branch)
+		}
+	case remote:
+		return RepoMeta{}, fmt.Errorf("remote branch %s already exists in repository %s; choose reuse or recreate", branch, repo.Name)
+	}
+
+	if create {
+		output.Printf("  creating new branch %s from %s\n", branch, start)
+	}
+	if err := aggit.AddWorktree(repoPath, dest, branch, start, create); err != nil {
+		return RepoMeta{}, fmt.Errorf("failed to create worktree for repository %s: %w", repo.Name, err)
+	}
+	return RepoMeta{
+		Name:         repo.Name,
+		WorktreePath: filepath.ToSlash(rel),
+		Branch:       branch,
+		BaseBranch:   base,
+	}, nil
+}
+
+// ConfigureRepositoryWorktree adds a repository missing from a feature or
+// recreates an existing repository worktree without touching the other repos.
+func ConfigureRepositoryWorktree(root string, cfg config.Config, featureName, repoName string, opt RepositoryWorktreeOptions) (RepoMeta, error) {
+	meta, err := Load(root, featureName)
+	if err != nil {
+		return RepoMeta{}, err
+	}
+	var repoCfg config.Repository
+	foundCfg := false
+	for _, r := range cfg.Repositories {
+		if r.Name == repoName {
+			repoCfg, foundCfg = r, true
+			break
+		}
+	}
+	if !foundCfg {
+		return RepoMeta{}, fmt.Errorf("repository %q is not configured", repoName)
+	}
+	existingIndex := -1
+	for i, r := range meta.Repositories {
+		if r.Name == repoName {
+			existingIndex = i
+			break
+		}
+	}
+	if opt.Recreate && existingIndex < 0 {
+		return RepoMeta{}, fmt.Errorf("repository %q is not part of feature %q", repoName, featureName)
+	}
+	if !opt.Recreate && existingIndex >= 0 {
+		return RepoMeta{}, fmt.Errorf("repository %q is already part of feature %q", repoName, featureName)
+	}
+	policy, err := ParseExistingBranchPolicy(string(opt.ExistingBranch))
+	if err != nil {
+		return RepoMeta{}, err
+	}
+	if opt.Recreate && policy == ExistingBranchError {
+		return RepoMeta{}, fmt.Errorf("repository %q already has a feature branch; choose reuse or recreate", repoName)
+	}
+
+	if opt.Recreate {
+		old := meta.Repositories[existingIndex]
+		dest := filepath.Join(root, filepath.FromSlash(old.WorktreePath))
+		if st, statErr := os.Stat(dest); statErr == nil && st.IsDir() {
+			if !opt.Force && aggit.HasChanges(dest) {
+				return RepoMeta{}, fmt.Errorf("worktree for repository %s has uncommitted changes; commit/stash or use force", repoName)
+			}
+			if err := aggit.RemoveWorktree(config.RepoPath(root, repoName), dest, opt.Force); err != nil {
+				return RepoMeta{}, fmt.Errorf("failed to remove worktree for repository %s: %w", repoName, err)
+			}
+		} else {
+			_ = aggit.WorktreePrune(config.RepoPath(root, repoName))
+			_ = os.RemoveAll(dest)
+		}
+	}
+
+	base := repoCfg.DefaultBranch
+	if existingIndex >= 0 && meta.Repositories[existingIndex].BaseBranch != "" {
+		base = meta.Repositories[existingIndex].BaseBranch
+	}
+	if base == "" {
+		base = cfg.Git.DefaultBaseBranch
+	}
+	rm, err := createRepositoryWorktree(root, featureName, repoCfg, BranchName(cfg, featureName), base, policy)
+	if err != nil {
+		return RepoMeta{}, err
+	}
+	if existingIndex >= 0 {
+		meta.Repositories[existingIndex] = rm
+	} else {
+		meta.Repositories = append(meta.Repositories, rm)
+	}
+	meta.Revision++
+	if meta.Revision == 1 && meta.CreatedAt == "" {
+		meta.CreatedAt = time.Now().Format(time.RFC3339)
+	}
+	if err := Save(root, meta); err != nil {
+		return RepoMeta{}, err
+	}
+	return rm, nil
 }
 
 // DeleteOptions controls feature deletion. DeleteBranch also removes the local
@@ -252,10 +402,11 @@ type FeatureEntry struct {
 }
 
 type FeatureStatusResult struct {
-	Feature      string       `json:"feature"      yaml:"feature"`
-	Branch       string       `json:"branch"       yaml:"branch"`
-	AgentReady   bool         `json:"agentReady"   yaml:"agentReady"`
-	Repositories []RepoStatus `json:"repositories" yaml:"repositories"`
+	Feature           string       `json:"feature"      yaml:"feature"`
+	Branch            string       `json:"branch"       yaml:"branch"`
+	AgentReady        bool         `json:"agentReady"   yaml:"agentReady"`
+	AgentNeedsPrepare bool         `json:"agentNeedsPrepare" yaml:"agentNeedsPrepare"`
+	Repositories      []RepoStatus `json:"repositories" yaml:"repositories"`
 }
 
 type RepoStatus struct {
@@ -352,6 +503,13 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 	result := FeatureStatusResult{Feature: m.Name, Branch: m.Branch}
 	if st, err := os.Stat(filepath.Join(root, "agent", m.Name)); err == nil && st.IsDir() {
 		result.AgentReady = true
+		b, _ := os.ReadFile(config.SessionMetaPath(root, name))
+		var prepared struct {
+			FeatureRevision int `json:"featureRevision"`
+		}
+		if json.Unmarshal(b, &prepared) == nil {
+			result.AgentNeedsPrepare = prepared.FeatureRevision != m.Revision
+		}
 	}
 	for _, r := range m.Repositories {
 		p := filepath.Join(root, r.WorktreePath)

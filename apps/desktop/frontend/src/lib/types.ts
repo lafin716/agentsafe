@@ -88,6 +88,7 @@ export interface FeatureStatusResult {
   feature: string;
   branch: string;
   agentReady?: boolean;
+  agentNeedsPrepare?: boolean;
   repositories: RepoStatus[] | null;
 }
 
@@ -148,6 +149,7 @@ export interface FeatureMetadata {
   branch: string;
   baseBranch: string;
   createdAt: string;
+  revision?: number;
   repositories: RepoMeta[] | null;
 }
 

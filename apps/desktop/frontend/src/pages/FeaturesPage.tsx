@@ -37,7 +37,7 @@ export function FeaturesPage({ onOpen }: Props) {
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
   const [base, setBase] = useState("");
-  const [force, setForce] = useState(false);
+  const [existingBranch, setExistingBranch] = useState("error");
 
   const load = useCallback(async () => {
     try {
@@ -110,11 +110,11 @@ export function FeaturesPage({ onOpen }: Props) {
     e.preventDefault();
     try {
       setBusy(true);
-      await api.CreateFeature(name.trim(), base.trim(), force);
+      await api.CreateFeature(name.trim(), base.trim(), existingBranch);
       notify(t("toast.featureCreated", { name: name.trim() }), "success");
       setName("");
       setBase("");
-      setForce(false);
+      setExistingBranch("error");
       await load();
     } catch (err) {
       notify(errMessage(err), "error");
@@ -243,15 +243,22 @@ export function FeaturesPage({ onOpen }: Props) {
                 placeholder="develop"
               />
             </div>
-            <label className="flex items-center gap-2 text-sm sm:col-span-2">
-              <input
-                type="checkbox"
-                checked={force}
-                onChange={(e) => setForce(e.target.checked)}
-                className="size-4"
-              />
-              {t("features.forceLabel")}
-            </label>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="existingBranch">{t("features.existingBranchLabel")}</Label>
+              <select
+                id="existingBranch"
+                value={existingBranch}
+                onChange={(e) => setExistingBranch(e.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="error">{t("features.existingBranchError")}</option>
+                <option value="reuse">{t("features.existingBranchReuse")}</option>
+                <option value="recreate">{t("features.existingBranchRecreate")}</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {t(`features.existingBranchHint.${existingBranch}`)}
+              </p>
+            </div>
             <div className="sm:col-span-2">
               <Button type="submit" disabled={busy}>
                 <Plus className="size-4" /> {t("features.createButton")}

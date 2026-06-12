@@ -10,7 +10,9 @@ import {
   GitMerge,
   History,
   Loader2,
+  Plus,
   RefreshCw,
+  RotateCcw,
   Terminal,
   Trash2,
   Upload,
@@ -21,10 +23,12 @@ import type {
   Change,
   DiffResult,
   FeatureDeleteResult,
+  FeatureMetadata,
   FeatureStatusResult,
   RepoFileStatus,
   RequestResult,
   RequestResults,
+  Repository,
 } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -62,6 +66,9 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   const diffLoadingRef = useRef(false);
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [dangerOpen, setDangerOpen] = useState(false);
+  const [featureMeta, setFeatureMeta] = useState<FeatureMetadata | null>(null);
+  const [configuredRepos, setConfiguredRepos] = useState<Repository[]>([]);
+  const [repoPolicy, setRepoPolicy] = useState("reuse");
 
   const [status, setStatus] = useState<FeatureStatusResult | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
@@ -154,6 +161,16 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     }
   }, [name]);
 
+  const loadRepoManager = useCallback(async () => {
+    try {
+      const [meta, repos] = await Promise.all([api.LoadFeature(name), api.ListRepos()]);
+      setFeatureMeta(meta);
+      setConfiguredRepos(repos ?? []);
+    } catch (e) {
+      notify(errMessage(e), "error");
+    }
+  }, [name, notify]);
+
   useEffect(() => {
     setStatus(null);
     setDiff(null);
@@ -165,7 +182,8 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   useEffect(() => {
     loadStatus();
     loadCounts();
-  }, [loadStatus, loadCounts]);
+    loadRepoManager();
+  }, [loadStatus, loadCounts, loadRepoManager]);
 
   const agentReady = prepared ?? (status?.agentReady ?? false);
 
@@ -355,6 +373,42 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       await loadStatus();
     });
 
+  const addFeatureRepo = (repoName: string) =>
+    run(async () => {
+      await api.FeatureRepoAdd(name, repoName, repoPolicy);
+      notify(t("toast.featureRepoAdded", { repo: repoName }), "success");
+      await Promise.all([loadStatus(), loadRepoManager()]);
+    });
+
+  const recreateFeatureRepo = (repoName: string) =>
+    run(async () => {
+      if (
+        !(await confirm({
+          message: t("feature.repoRecreateConfirm", { repo: repoName }),
+          danger: repoPolicy === "recreate",
+        }))
+      )
+        return;
+      try {
+        await api.FeatureRepoRecreate(name, repoName, repoPolicy, false);
+      } catch (e) {
+        if (/uncommitted|changes/i.test(errMessage(e))) {
+          if (
+            !(await confirm({
+              message: t("feature.repoRecreateForceConfirm", { repo: repoName }),
+              danger: true,
+            }))
+          )
+            return;
+          await api.FeatureRepoRecreate(name, repoName, repoPolicy, true);
+        } else {
+          throw e;
+        }
+      }
+      notify(t("toast.featureRepoRecreated", { repo: repoName }), "success");
+      await Promise.all([loadStatus(), loadRepoManager()]);
+    });
+
   const sendRequests = () =>
     run(async () => {
       const res = await api.CreateMergeRequests(name, mrTitle.trim());
@@ -476,6 +530,78 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       )}
 
       {tab === "status" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("feature.repoManagerTitle")}</CardTitle>
+            <CardDescription>{t("feature.repoManagerDesc")}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="repoPolicy">{t("features.existingBranchLabel")}</Label>
+              <select
+                id="repoPolicy"
+                value={repoPolicy}
+                onChange={(e) => setRepoPolicy(e.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="error">{t("features.existingBranchError")}</option>
+                <option value="reuse">{t("features.existingBranchReuse")}</option>
+                <option value="recreate">{t("features.existingBranchRecreate")}</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {t(`features.existingBranchHint.${repoPolicy}`)}
+              </p>
+            </div>
+            <div className="divide-y rounded-md border">
+              {configuredRepos.map((repo) => {
+                const included = (featureMeta?.repositories ?? []).some(
+                  (item) => item.name === repo.Name
+                );
+                return (
+                  <div
+                    key={repo.Name}
+                    className="flex items-center justify-between gap-3 p-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium">{repo.Name}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {repo.DefaultBranch}
+                      </div>
+                    </div>
+                    {included ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => recreateFeatureRepo(repo.Name)}
+                      >
+                        <RotateCcw className="size-4" />
+                        {t("feature.repoRecreate")}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => addFeatureRepo(repo.Name)}
+                      >
+                        <Plus className="size-4" />
+                        {t("feature.repoAdd")}
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+              {configuredRepos.length === 0 && (
+                <p className="p-3 text-sm text-muted-foreground">
+                  {t("feature.noRepos")}
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "status" && (
         <Card className={dangerOpen ? "border-destructive/40" : "border-amber-300/60"}>
           <button
             type="button"
@@ -534,6 +660,11 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
               <CardDescription>{t("feature.agentDesc")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {status?.agentNeedsPrepare && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  {t("feature.agentNeedsPrepare")}
+                </div>
+              )}
               {statusLoading && !status ? (
                 <LoadingState label={t("feature.loadingAgent")} />
               ) : (

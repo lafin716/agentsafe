@@ -8,6 +8,7 @@ import type {
   FeatureListResult,
   FeatureDeleteResult,
   FeatureMetadata,
+  RepoMeta,
   FeatureStatusResult,
   GitConfig,
   GitDiag,
@@ -42,7 +43,18 @@ type AppBindings = {
   RemoveRepo(name: string): Promise<void>;
   Pull(): Promise<void>;
   ListFeatures(): Promise<FeatureListResult>;
-  CreateFeature(name: string, base: string, force: boolean): Promise<void>;
+  CreateFeature(name: string, base: string, existingBranch: string): Promise<void>;
+  FeatureRepoAdd(
+    name: string,
+    repoName: string,
+    existingBranch: string
+  ): Promise<RepoMeta>;
+  FeatureRepoRecreate(
+    name: string,
+    repoName: string,
+    existingBranch: string,
+    force: boolean
+  ): Promise<RepoMeta>;
   FeatureStatus(name: string): Promise<FeatureStatusResult>;
   RebaseFeature(name: string, repoFilter: string): Promise<RebaseResult>;
   FeatureDelete(

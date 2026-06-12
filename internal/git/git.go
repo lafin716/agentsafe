@@ -202,6 +202,28 @@ func WorktreePrune(repoPath string) error {
 	_, err := Run(repoPath, "worktree", "prune")
 	return err
 }
+
+// WorktreeForBranch returns the registered worktree path currently checking
+// out branch, or an empty string when the branch is not in use.
+func WorktreeForBranch(repoPath, branch string) string {
+	out, err := Output(repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	var path string
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			path = strings.TrimPrefix(line, "worktree ")
+		case line == "branch refs/heads/"+branch:
+			return path
+		case line == "":
+			path = ""
+		}
+	}
+	return ""
+}
+
 func AddWorktree(repoPath, dest, branch, start string, create bool) error {
 	if create {
 		_, err := Run(repoPath, "worktree", "add", dest, "-b", branch, start)

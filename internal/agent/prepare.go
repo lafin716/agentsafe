@@ -15,9 +15,10 @@ import (
 )
 
 type PrepareMetadata struct {
-	Feature      string        `json:"feature"      yaml:"feature"`
-	PreparedAt   string        `json:"preparedAt"   yaml:"preparedAt"`
-	Repositories []PrepareRepo `json:"repositories" yaml:"repositories"`
+	Feature         string        `json:"feature"      yaml:"feature"`
+	PreparedAt      string        `json:"preparedAt"   yaml:"preparedAt"`
+	FeatureRevision int           `json:"featureRevision,omitempty" yaml:"featureRevision,omitempty"`
+	Repositories    []PrepareRepo `json:"repositories" yaml:"repositories"`
 }
 type PrepareRepo struct {
 	Name           string                    `json:"name"                     yaml:"name"`
@@ -96,7 +97,7 @@ func Init(root string, cfg config.Config, featureName string, opt PrepareOptions
 	if err != nil {
 		return err
 	}
-	meta := PrepareMetadata{Feature: featureName, PreparedAt: time.Now().Format(time.RFC3339)}
+	meta := PrepareMetadata{Feature: featureName, PreparedAt: time.Now().Format(time.RFC3339), FeatureRevision: fm.Revision}
 	// Migrate any legacy .agentignore/mask.json at the workspace root into the
 	// unified agentsafe.yaml before loading security config.
 	_ = EnsureSecurityFile(cfg, root)
