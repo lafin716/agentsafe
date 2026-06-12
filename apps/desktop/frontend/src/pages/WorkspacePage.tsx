@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Code2,
   DownloadCloud,
   FolderOpen,
+  Loader2,
   Plus,
+  RefreshCw,
   Sparkles,
   Terminal,
   Trash2,
@@ -40,11 +42,39 @@ interface Props {
   onChanged: () => void | Promise<void>;
 }
 
+type AuthRequired = {
+  code: "authentication_required";
+  repo: string;
+  host: string;
+  protocol: "https";
+};
+
+type CredentialPrompt = AuthRequired & {
+  resolve: (value: { username: string; secret: string } | null) => void;
+};
+
+function authRequired(error: unknown): AuthRequired | null {
+  const message = errMessage(error);
+  const prefix = "AGENTSAFE_AUTH_REQUIRED:";
+  const index = message.indexOf(prefix);
+  if (index < 0) return null;
+  try {
+    const value = JSON.parse(message.slice(index + prefix.length)) as AuthRequired;
+    return value.code === "authentication_required" && value.host ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
   const { notify } = useToast();
   const confirm = useConfirm();
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
+  const [actingRepo, setActingRepo] = useState<string | null>(null);
+  const [repoLocalStates, setRepoLocalStates] = useState<Record<string, boolean>>({});
+  const [repoStatesLoading, setRepoStatesLoading] = useState(false);
+  const [credentialPrompt, setCredentialPrompt] = useState<CredentialPrompt | null>(null);
   const [initName, setInitName] = useState("");
 
   // Add-repo form
@@ -52,6 +82,19 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
   const [repoUrl, setRepoUrl] = useState("");
   const [repoType, setRepoType] = useState("");
   const [repoBranch, setRepoBranch] = useState("");
+
+  useEffect(() => {
+    if (!config) {
+      setRepoLocalStates({});
+      return;
+    }
+    setRepoStatesLoading(true);
+    void api
+      .RepoLocalStates()
+      .then(setRepoLocalStates)
+      .catch((e) => notify(errMessage(e), "error"))
+      .finally(() => setRepoStatesLoading(false));
+  }, [config, root, notify]);
 
   async function pickAndOpen() {
     try {
@@ -128,15 +171,77 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
   }
 
   async function pull() {
+    if (!config) return;
+    setBusy(true);
+    let failed = 0;
     try {
-      setBusy(true);
-      await api.Pull();
-      notify(t("toast.pullCompleted"), "success");
+      for (const repository of config.Repositories ?? []) {
+        setActingRepo(repository.Name);
+        try {
+          await pullRepoWithAuthentication(repository.Name);
+        } catch (e) {
+          failed++;
+          notify(errMessage(e), "error");
+        }
+      }
+      setRepoLocalStates(await api.RepoLocalStates());
+      if (failed === 0) {
+        notify(t("toast.pullCompleted"), "success");
+      } else {
+        notify(t("toast.pullCompletedWithFailures", { count: failed }), "error");
+      }
+    } finally {
+      setActingRepo(null);
+      setBusy(false);
+    }
+  }
+
+  async function pullRepo(name: string) {
+    try {
+      setActingRepo(name);
+      const cloned = !repoLocalStates[name];
+      await pullRepoWithAuthentication(name);
+      setRepoLocalStates(await api.RepoLocalStates());
+      notify(
+        cloned
+          ? t("toast.repoCloned", { name })
+          : t("toast.repoPulled", { name }),
+        "success"
+      );
     } catch (e) {
       notify(errMessage(e), "error");
     } finally {
-      setBusy(false);
+      setActingRepo(null);
     }
+  }
+
+  async function pullRepoWithAuthentication(name: string) {
+    try {
+      await api.PullRepo(name);
+      return;
+    } catch (error) {
+      const auth = authRequired(error);
+      if (!auth) throw error;
+      const credentials = await requestCredentials(auth);
+      if (!credentials) {
+        throw new Error(t("gitAuth.cancelled", { repo: name }));
+      }
+      await api.SetGitCredentials(auth.host, credentials.username, credentials.secret);
+      try {
+        await api.PullRepo(name);
+      } catch (retryError) {
+        if (authRequired(retryError)) {
+          throw new Error(t("gitAuth.failed", { repo: name }));
+        }
+        throw retryError;
+      }
+    }
+  }
+
+  function requestCredentials(auth: AuthRequired) {
+    return new Promise<{ username: string; secret: string } | null>((resolve) => {
+      setCredentialPrompt({ ...auth, resolve });
+    });
   }
 
   async function openWorkspace(
@@ -196,6 +301,7 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
   const repos = config.Repositories ?? [];
 
   return (
+    <>
     <div className="space-y-6">
       <Card>
         <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
@@ -248,10 +354,9 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+        <CardContent className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
           <Info label={t("workspace.baseBranch")} value={config.Git.DefaultBaseBranch} />
           <Info label={t("workspace.branchPrefix")} value={config.Git.BranchPrefix} />
-          <Info label={t("workspace.gitlab")} value={config.GitLab.BaseURL} />
           <Info label={t("workspace.target")} value={config.GitLab.TargetBranch} />
         </CardContent>
       </Card>
@@ -264,7 +369,12 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
               {t("repo.countConfigured", { count: repos.length })}
             </CardDescription>
           </div>
-          <Button variant="outline" size="sm" onClick={pull} disabled={busy}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={pull}
+            disabled={busy || actingRepo !== null}
+          >
             <DownloadCloud className="size-4" /> {t("repo.pullAll")}
           </Button>
         </CardHeader>
@@ -279,6 +389,7 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
                   <TableHead>{t("repo.colType")}</TableHead>
                   <TableHead>{t("repo.colBranch")}</TableHead>
                   <TableHead>{t("repo.colUrl")}</TableHead>
+                  <TableHead>{t("repo.colAction")}</TableHead>
                   <TableHead className="w-10"></TableHead>
                 </TableRow>
               </TableHeader>
@@ -299,10 +410,29 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
                     </TableCell>
                     <TableCell>
                       <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || repoStatesLoading || actingRepo === r.Name}
+                        onClick={() => pullRepo(r.Name)}
+                      >
+                        {actingRepo === r.Name || repoStatesLoading ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : repoLocalStates[r.Name] ? (
+                          <RefreshCw className="size-4" />
+                        ) : (
+                          <DownloadCloud className="size-4" />
+                        )}
+                        {repoLocalStates[r.Name]
+                          ? t("repo.pullOne")
+                          : t("repo.cloneOne")}
+                      </Button>
+                    </TableCell>
+                    <TableCell>
+                      <Button
                         variant="ghost"
                         size="icon"
                         className="size-8 text-muted-foreground hover:text-destructive"
-                        disabled={busy}
+                        disabled={busy || actingRepo === r.Name}
                         title={t("repo.removeTitle")}
                         onClick={() => removeRepo(r.Name)}
                       >
@@ -372,6 +502,82 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
           </form>
         </CardContent>
       </Card>
+    </div>
+    {credentialPrompt && (
+      <CredentialDialog
+        request={credentialPrompt}
+        onClose={(value) => {
+          credentialPrompt.resolve(value);
+          setCredentialPrompt(null);
+        }}
+      />
+    )}
+    </>
+  );
+}
+
+function CredentialDialog({
+  request,
+  onClose,
+}: {
+  request: CredentialPrompt;
+  onClose: (value: { username: string; secret: string } | null) => void;
+}) {
+  const { t } = useI18n();
+  const [username, setUsername] = useState("");
+  const [secret, setSecret] = useState("");
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+      onClick={() => onClose(null)}
+    >
+      <form
+        className="w-full max-w-md rounded-lg border bg-card p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (username.trim() && secret) {
+            onClose({ username: username.trim(), secret });
+          }
+        }}
+      >
+        <h2 className="text-base font-semibold">{t("gitAuth.title")}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {t("gitAuth.description", { repo: request.repo, host: request.host })}
+        </p>
+        <div className="mt-4 space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="gitAuthUsername">{t("gitAuth.username")}</Label>
+            <Input
+              id="gitAuthUsername"
+              autoFocus
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="gitAuthSecret">{t("gitAuth.secret")}</Label>
+            <Input
+              id="gitAuthSecret"
+              type="password"
+              autoComplete="current-password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">{t("gitAuth.sessionOnly")}</p>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={() => onClose(null)}>
+            {t("common.cancel")}
+          </Button>
+          <Button type="submit" disabled={!username.trim() || !secret}>
+            {t("gitAuth.retry")}
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }

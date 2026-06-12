@@ -3,7 +3,9 @@ package git
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -48,6 +50,26 @@ func timeout() time.Duration {
 }
 
 func Run(dir string, args ...string) (Result, error) {
+	return run(dir, nil, args...)
+}
+
+// RunWithHTTPAuth runs Git with a command-scoped HTTP Basic authorization
+// header. The secret is passed only through the child environment and is never
+// included in Result.Command, stdout, stderr, or task logs.
+func RunWithHTTPAuth(dir, remoteURL, username, secret string, args ...string) (Result, error) {
+	scope := "http"
+	if u, err := url.Parse(remoteURL); err == nil && u.Scheme != "" && u.Host != "" {
+		scope = "http." + u.Scheme + "://" + u.Host + "/"
+	}
+	value := "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+secret))
+	return run(dir, []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=" + scope + ".extraHeader",
+		"GIT_CONFIG_VALUE_0=" + value,
+	}, args...)
+}
+
+func run(dir string, extraEnv []string, args ...string) (Result, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout())
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -56,6 +78,7 @@ func Run(dir string, args ...string) (Result, error) {
 		"GIT_TERMINAL_PROMPT=0",
 		"GCM_INTERACTIVE=never",
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	hideWindow(cmd) // suppress the per-process console window on Windows GUI apps
 	var out, er bytes.Buffer
 	cmd.Stdout = &out
@@ -66,6 +89,33 @@ func Run(dir string, args ...string) (Result, error) {
 		return res, &Error{Result: res, Err: err, Timeout: ctx.Err() == context.DeadlineExceeded}
 	}
 	return res, nil
+}
+
+// IsAuthenticationError reports whether Git failed because an HTTPS remote
+// requires or rejected credentials.
+func IsAuthenticationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	markers := []string{
+		"authentication failed",
+		"could not read username",
+		"could not read password",
+		"terminal prompts disabled",
+		"invalid username or password",
+		"access denied",
+		"http 401",
+		"http 403",
+		"returned error: 401",
+		"returned error: 403",
+	}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func Output(dir string, args ...string) (string, error) {

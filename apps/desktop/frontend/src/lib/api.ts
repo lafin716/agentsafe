@@ -42,6 +42,9 @@ type AppBindings = {
   ): Promise<void>;
   RemoveRepo(name: string): Promise<void>;
   Pull(): Promise<void>;
+  PullRepo(name: string): Promise<void>;
+  RepoLocalStates(): Promise<Record<string, boolean>>;
+  SetGitCredentials(host: string, username: string, secret: string): Promise<void>;
   ListFeatures(): Promise<FeatureListResult>;
   CreateFeature(name: string, base: string, existingBranch: string): Promise<void>;
   FeatureRepoAdd(
@@ -64,6 +67,11 @@ type AppBindings = {
   ): Promise<FeatureDeleteResult>;
   LoadFeature(name: string): Promise<FeatureMetadata>;
   AgentPrepare(name: string, backup: boolean): Promise<PrepareMetadata>;
+  AgentPrepareRepo(
+    name: string,
+    repoName: string,
+    backup: boolean
+  ): Promise<PrepareMetadata>;
   AgentDiff(name: string, repoFilter: string): Promise<DiffResult>;
   AgentSync(name: string, opt: SyncOptions): Promise<void>;
   AgentDelete(name: string): Promise<void>;

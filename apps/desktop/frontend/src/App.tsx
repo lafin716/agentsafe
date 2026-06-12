@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Archive,
   FolderGit2,
-  GitBranch,
   History,
   LayoutGrid,
   RefreshCw,
@@ -23,6 +22,7 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { AgentSecurityPage } from "@/pages/AgentSecurityPage";
 import { BackupsPage } from "@/pages/BackupsPage";
 import { HistoryPage } from "@/pages/HistoryPage";
+import agentsafeLogo from "@/assets/agentsafe-logo.png";
 
 type View =
   | { kind: "workspace" }
@@ -93,7 +93,12 @@ export default function App() {
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <aside className="flex w-56 shrink-0 flex-col border-r bg-card">
         <div className="flex items-center gap-2 px-4 py-4">
-          <GitBranch className="size-5" />
+          <img
+            src={agentsafeLogo}
+            alt=""
+            className="size-7 object-contain"
+            aria-hidden="true"
+          />
           <span className="text-base font-semibold">agentsafe</span>
         </div>
         <div className="pb-3">

@@ -27,6 +27,7 @@ type RepoMeta struct {
 	WorktreePath string `json:"worktreePath"`
 	Branch       string `json:"branch"`
 	BaseBranch   string `json:"baseBranch"`
+	Revision     int    `json:"revision,omitempty"`
 }
 
 func BranchName(cfg config.Config, featureName string) string {
@@ -189,6 +190,7 @@ func createRepositoryWorktree(root, featureName string, repo config.Repository, 
 		WorktreePath: filepath.ToSlash(rel),
 		Branch:       branch,
 		BaseBranch:   base,
+		Revision:     1,
 	}, nil
 }
 
@@ -259,6 +261,10 @@ func ConfigureRepositoryWorktree(root string, cfg config.Config, featureName, re
 		return RepoMeta{}, err
 	}
 	if existingIndex >= 0 {
+		rm.Revision = meta.Repositories[existingIndex].Revision + 1
+		if rm.Revision == 1 {
+			rm.Revision = 2
+		}
 		meta.Repositories[existingIndex] = rm
 	} else {
 		meta.Repositories = append(meta.Repositories, rm)
@@ -410,9 +416,11 @@ type FeatureStatusResult struct {
 }
 
 type RepoStatus struct {
-	Name    string           `json:"name"              yaml:"name"`
-	Status  string           `json:"status"            yaml:"status"`
-	Changes []RepoFileStatus `json:"changes"           yaml:"changes"`
+	Name              string           `json:"name"              yaml:"name"`
+	Status            string           `json:"status"            yaml:"status"`
+	Changes           []RepoFileStatus `json:"changes"           yaml:"changes"`
+	AgentReady        bool             `json:"agentReady"        yaml:"agentReady"`
+	AgentNeedsPrepare bool             `json:"agentNeedsPrepare" yaml:"agentNeedsPrepare"`
 	// Ahead is the number of commits the feature branch has that are not yet
 	// pushed (to origin/<branch> when it exists, otherwise relative to the base
 	// branch). It is what a push would publish.
@@ -501,20 +509,39 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 		return FeatureStatusResult{}, err
 	}
 	result := FeatureStatusResult{Feature: m.Name, Branch: m.Branch}
-	if st, err := os.Stat(filepath.Join(root, "agent", m.Name)); err == nil && st.IsDir() {
-		result.AgentReady = true
-		b, _ := os.ReadFile(config.SessionMetaPath(root, name))
-		var prepared struct {
-			FeatureRevision int `json:"featureRevision"`
-		}
-		if json.Unmarshal(b, &prepared) == nil {
-			result.AgentNeedsPrepare = prepared.FeatureRevision != m.Revision
-		}
+	b, _ := os.ReadFile(config.SessionMetaPath(root, name))
+	var prepared struct {
+		FeatureRevision int `json:"featureRevision"`
+		Repositories    []struct {
+			Name             string `json:"name"`
+			WorktreeRevision int    `json:"worktreeRevision"`
+		} `json:"repositories"`
 	}
+	_ = json.Unmarshal(b, &prepared)
+	preparedRepos := map[string]int{}
+	for _, r := range prepared.Repositories {
+		preparedRepos[r.Name] = r.WorktreeRevision
+	}
+	allReady := len(m.Repositories) > 0
 	for _, r := range m.Repositories {
 		p := filepath.Join(root, r.WorktreePath)
 		s, files, err := aggit.StatusFiles(p)
 		repoStatus := RepoStatus{Name: r.Name, Status: s, Changes: []RepoFileStatus{}}
+		if st, statErr := os.Stat(config.AgentPath(root, name, r.Name)); statErr == nil && st.IsDir() {
+			if revision, ok := preparedRepos[r.Name]; ok {
+				repoStatus.AgentReady = true
+				// Legacy metadata has revision 0; it remains valid until this
+				// repository's worktree receives its first revision.
+				repoStatus.AgentNeedsPrepare = r.Revision > 0 && revision != r.Revision
+			}
+		}
+		if !repoStatus.AgentReady {
+			allReady = false
+			repoStatus.AgentNeedsPrepare = true
+		}
+		if repoStatus.AgentNeedsPrepare {
+			result.AgentNeedsPrepare = true
+		}
 		if err != nil {
 			repoStatus.Status = "ERROR: " + err.Error()
 			repoStatus.Error = err.Error()
@@ -530,6 +557,7 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 		}
 		result.Repositories = append(result.Repositories, repoStatus)
 	}
+	result.AgentReady = allReady
 	return result, nil
 }
 

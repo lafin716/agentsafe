@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/forge"
+	aggit "github.com/agentsafe/agentsafe/internal/git"
 	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/registry"
 	"github.com/agentsafe/agentsafe/internal/repo"
@@ -32,11 +34,18 @@ type App struct {
 	ctx  context.Context
 	root string // currently opened workspace root ("" when none)
 
-	taskMu  sync.Mutex // serializes tracked tasks so their output never interleaves
-	taskSeq int        // monotonic id for progress tasks
+	taskMu       sync.Mutex // serializes tracked tasks so their output never interleaves
+	taskSeq      int        // monotonic id for progress tasks
+	credentialMu sync.Mutex
+	credentials  map[string]gitCredential // HTTPS credentials, memory-only for this app process
 }
 
-func NewApp() *App { return &App{} }
+type gitCredential struct {
+	Username string
+	Secret   string
+}
+
+func NewApp() *App { return &App{credentials: map[string]gitCredential{}} }
 
 // runTask runs a long-running operation while streaming its output to the
 // frontend progress box. It emits "task:start" before, forwards each output
@@ -224,6 +233,96 @@ func (a *App) Pull() error {
 	return a.runTask("Pull repositories", func() error { return repo.PullAll(root, cfg) })
 }
 
+// RepoLocalStates reports whether each configured repository has a path under
+// main/. A present non-Git path is still reported as present so PullRepo can
+// surface the Git error without overwriting user files.
+func (a *App) RepoLocalStates() (map[string]bool, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return nil, err
+	}
+	states := make(map[string]bool, len(cfg.Repositories))
+	for _, r := range cfg.Repositories {
+		_, statErr := os.Stat(config.RepoPath(root, r.Name))
+		states[r.Name] = !os.IsNotExist(statErr)
+	}
+	return states, nil
+}
+
+// PullRepo clones a missing repository or fetches/pulls an existing one.
+func (a *App) PullRepo(name string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	rc, ok := findRepo(cfg, name)
+	if !ok {
+		return fmt.Errorf("repository %q not found", name)
+	}
+	host, https := httpsHost(rc.URL)
+	credential := gitCredential{}
+	if https {
+		a.credentialMu.Lock()
+		credential = a.credentials[host]
+		a.credentialMu.Unlock()
+	}
+	return a.runTask("Pull repository: "+name, func() error {
+		pullErr := repo.PullOneWithCredentials(root, cfg, name, credential.Username, credential.Secret)
+		if pullErr == nil || !https || !aggit.IsAuthenticationError(pullErr) {
+			return pullErr
+		}
+		if credential.Secret != "" {
+			a.credentialMu.Lock()
+			delete(a.credentials, host)
+			a.credentialMu.Unlock()
+		}
+		payload, _ := json.Marshal(map[string]string{
+			"code": "authentication_required", "repo": name, "host": host, "protocol": "https",
+		})
+		return fmt.Errorf("AGENTSAFE_AUTH_REQUIRED:%s", payload)
+	})
+}
+
+// SetGitCredentials stores HTTPS credentials in memory for the current app
+// process. They are never written to config or a credential helper.
+func (a *App) SetGitCredentials(host, username, secret string) error {
+	host = strings.ToLower(strings.TrimSpace(host))
+	username = strings.TrimSpace(username)
+	if host == "" || username == "" || secret == "" {
+		return fmt.Errorf("host, username, and password/token are required")
+	}
+	if strings.ContainsAny(host, `/\@`) {
+		return fmt.Errorf("invalid credential host")
+	}
+	a.credentialMu.Lock()
+	if a.credentials == nil {
+		a.credentials = map[string]gitCredential{}
+	}
+	a.credentials[host] = gitCredential{Username: username, Secret: secret}
+	a.credentialMu.Unlock()
+	return nil
+}
+
+func httpsHost(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Hostname() == "" {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	if u.Port() != "" {
+		host += ":" + u.Port()
+	}
+	return host, true
+}
+
 // ---- Features ----
 
 func (a *App) ListFeatures() (feature.FeatureListResult, error) {
@@ -362,6 +461,25 @@ func (a *App) AgentPrepare(name string, backup bool) (agent.PrepareMetadata, err
 		}
 		meta = agent.LoadPrepareMetadata(root, name)
 		return nil
+	})
+	return meta, err
+}
+
+// AgentPrepareRepo prepares only one repository's sanitized agent folder.
+func (a *App) AgentPrepareRepo(name, repoName string, backup bool) (agent.PrepareMetadata, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return agent.PrepareMetadata{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return agent.PrepareMetadata{}, err
+	}
+	var meta agent.PrepareMetadata
+	err = a.runTask("Prepare agent: "+taskTarget(name, repoName), func() error {
+		var prepareErr error
+		meta, prepareErr = agent.PrepareRepository(root, cfg, name, repoName, agent.PrepareOptions{Backup: backup})
+		return prepareErr
 	})
 	return meta, err
 }

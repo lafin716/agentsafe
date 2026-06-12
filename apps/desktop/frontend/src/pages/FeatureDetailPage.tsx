@@ -79,6 +79,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   // separate from status avoids a status reload clobbering the value right
   // after a successful prepare.
   const [prepared, setPrepared] = useState<boolean | null>(null);
+  const [preparingRepo, setPreparingRepo] = useState<string | null>(null);
 
   // sync options
   const [includeRisky, setIncludeRisky] = useState(false);
@@ -371,6 +372,29 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
         notify(t("toast.rebased", { count: rebased.length }), "success");
       }
       await loadStatus();
+    });
+
+  const prepareRepo = (repoName: string) =>
+    run(async () => {
+      setPreparingRepo(repoName);
+      try {
+        const meta = await api.AgentPrepareRepo(name, repoName, backupOnPrepare);
+        const item = (meta.repositories ?? []).find((r) => r.name === repoName);
+        notify(
+          t("toast.agentRepoPrepared", {
+            repo: repoName,
+            count: item?.copiedFiles ?? 0,
+          }),
+          "success"
+        );
+        setPrepared(null);
+        setDiff(null);
+        setDiffLoaded(false);
+        setDiffAutoAttempted(false);
+        await loadStatus();
+      } finally {
+        setPreparingRepo(null);
+      }
     });
 
   const addFeatureRepo = (repoName: string) =>
@@ -731,6 +755,42 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                 onChange={changeBackupOnPrepare}
                 label={t("feature.backupOnPrepare")}
               />
+              <div className="divide-y rounded-md border">
+                {(status?.repositories ?? []).map((repo) => (
+                  <div
+                    key={repo.name}
+                    className="flex items-center justify-between gap-3 p-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium">{repo.name}</div>
+                      <div className="mt-1">
+                        {!repo.agentReady ? (
+                          <Badge variant="outline">{t("feature.agentRepoMissing")}</Badge>
+                        ) : repo.agentNeedsPrepare ? (
+                          <Badge variant="warning">{t("feature.agentRepoStale")}</Badge>
+                        ) : (
+                          <Badge variant="success">{t("feature.agentRepoReady")}</Badge>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      variant={repo.agentReady ? "outline" : "default"}
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => prepareRepo(repo.name)}
+                    >
+                      {preparingRepo === repo.name ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Wand2 className="size-4" />
+                      )}
+                      {repo.agentReady
+                        ? t("feature.agentRepoRegenerate")
+                        : t("feature.agentRepoPrepare")}
+                    </Button>
+                  </div>
+                ))}
+              </div>
                 </>
               )}
             </CardContent>

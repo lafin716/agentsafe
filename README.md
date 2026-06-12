@@ -25,7 +25,7 @@ agentsafe repo add app-front https://gitlab.example.com/company/app-front.git --
 
 agentsafe clone
 agentsafe feature create coupon-v2 --base develop
-agentsafe agent prepare coupon-v2
+agentsafe agent init coupon-v2
 agentsafe agent open coupon-v2 --editor cursor
 
 # after AI agent work
@@ -49,7 +49,7 @@ agentsafe push coupon-v2
 - `agentsafe feature list`
 - `agentsafe feature rebase NAME [--repo NAME]`
 - `agentsafe status FEATURE`
-- `agentsafe agent prepare FEATURE`
+- `agentsafe agent init FEATURE [--repo NAME] [--no-backup]`
 - `agentsafe agent diff FEATURE [--repo NAME]`
 - `agentsafe agent sync FEATURE [--repo NAME] [--dry-run] [--yes]`
 - `agentsafe commit FEATURE -m "message"`

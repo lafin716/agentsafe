@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/agentsafe/agentsafe/internal/config"
@@ -27,6 +28,9 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 		return nil, err
 	}
 	pm := LoadPrepareMetadata(root, featureName)
+	if err := validatePreparedRepositories(root, featureName, fm, pm, repoFilter); err != nil {
+		return nil, err
+	}
 	result := map[string][]Change{}
 	type job struct {
 		name         string
@@ -104,6 +108,35 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 		return nil, firstErr
 	}
 	return result, nil
+}
+
+func validatePreparedRepositories(root, featureName string, fm feature.Metadata, pm PrepareMetadata, repoFilter string) error {
+	prepared := map[string]PrepareRepo{}
+	for _, r := range pm.Repositories {
+		prepared[r.Name] = r
+	}
+	var missing []string
+	for _, r := range fm.Repositories {
+		if repoFilter != "" && r.Name != repoFilter {
+			continue
+		}
+		pr, ok := prepared[r.Name]
+		if !ok {
+			missing = append(missing, r.Name)
+			continue
+		}
+		if st, err := os.Stat(config.AgentPath(root, featureName, r.Name)); err != nil || !st.IsDir() {
+			missing = append(missing, r.Name)
+			continue
+		}
+		if r.Revision > 0 && pr.WorktreeRevision != r.Revision {
+			missing = append(missing, r.Name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("agent prepare required for repository(s): %s", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func Sync(root string, cfg config.Config, featureName string, opt Options) error {

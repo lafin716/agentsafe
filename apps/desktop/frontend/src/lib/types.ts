@@ -76,6 +76,8 @@ export interface RepoStatus {
   // Number of commits not yet pushed (what a push would publish).
   ahead?: number;
   error?: string;
+  agentReady?: boolean;
+  agentNeedsPrepare?: boolean;
 }
 
 export interface RepoFileStatus {
@@ -142,14 +144,15 @@ export interface RepoMeta {
   worktreePath: string;
   branch: string;
   baseBranch: string;
+  revision?: number;
 }
 
 export interface FeatureMetadata {
   name: string;
   branch: string;
   baseBranch: string;
-  createdAt: string;
   revision?: number;
+  createdAt: string;
   repositories: RepoMeta[] | null;
 }
 
@@ -161,11 +164,13 @@ export interface PrepareRepo {
   ignoredFiles: number;
   maskedFiles: string[] | null;
   preparedHashes?: Record<string, string>;
+  worktreeRevision?: number;
 }
 
 export interface PrepareMetadata {
   feature: string;
   preparedAt: string;
+  featureRevision?: number;
   repositories: PrepareRepo[] | null;
 }
 
