@@ -165,6 +165,85 @@ func TestConfigureRepositoryWorktreeAddAndRecreate(t *testing.T) {
 	}
 }
 
+func TestConfigureRepositoryWorktreeAdoptsExistingTargetWorktree(t *testing.T) {
+	root, cfg := testWorkspace(t, "repo")
+	name := "demo"
+	branch := "custom/demo"
+	if err := Save(root, Metadata{Name: name, Branch: branch, Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	dest := config.WorktreePath(root, name, "repo")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, config.RepoPath(root, "repo"), "worktree", "add", dest, "-b", branch, "main")
+
+	rm, err := ConfigureRepositoryWorktree(root, cfg, name, "repo", RepositoryWorktreeOptions{
+		ExistingBranch: ExistingBranchReuse,
+	})
+	if err != nil {
+		t.Fatalf("retry should adopt the existing target worktree: %v", err)
+	}
+	if rm.Branch != branch {
+		t.Fatalf("branch = %q, want feature metadata branch %q", rm.Branch, branch)
+	}
+	meta, err := Load(root, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Repositories) != 1 || meta.Repositories[0].Name != "repo" {
+		t.Fatalf("repository metadata not saved after adoption: %+v", meta.Repositories)
+	}
+}
+
+func TestConfigureRepositoryWorktreeUsesMetadataBranch(t *testing.T) {
+	root, cfg := testWorkspace(t, "repo")
+	name := "demo"
+	branch := "legacy-prefix/demo"
+	if err := Save(root, Metadata{Name: name, Branch: branch, Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	rm, err := ConfigureRepositoryWorktree(root, cfg, name, "repo", RepositoryWorktreeOptions{
+		ExistingBranch: ExistingBranchReuse,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rm.Branch != branch {
+		t.Fatalf("branch = %q, want %q", rm.Branch, branch)
+	}
+	current, err := aggit.CurrentBranch(config.WorktreePath(root, name, "repo"))
+	if err != nil || current != branch {
+		t.Fatalf("worktree branch = %q, err = %v", current, err)
+	}
+}
+
+func TestConfigureRepositoryWorktreeMovesFeatureBranchOutOfMainClone(t *testing.T) {
+	root, cfg := testWorkspace(t, "repo")
+	name := "demo"
+	branch := "feature/demo"
+	repoPath := config.RepoPath(root, "repo")
+	testGit(t, repoPath, "checkout", "-b", branch)
+	if err := Save(root, Metadata{Name: name, Branch: branch, Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ConfigureRepositoryWorktree(root, cfg, name, "repo", RepositoryWorktreeOptions{
+		ExistingBranch: ExistingBranchReuse,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mainBranch, err := aggit.CurrentBranch(repoPath)
+	if err != nil || mainBranch != "main" {
+		t.Fatalf("main clone branch = %q, err = %v", mainBranch, err)
+	}
+	worktreeBranch, err := aggit.CurrentBranch(config.WorktreePath(root, name, "repo"))
+	if err != nil || worktreeBranch != branch {
+		t.Fatalf("feature worktree branch = %q, err = %v", worktreeBranch, err)
+	}
+}
+
 func testWorkspace(t *testing.T, repoName string) (string, config.Config) {
 	t.Helper()
 	root := t.TempDir()

@@ -33,6 +33,7 @@ const en: Dict = {
   "common.delete": "Delete",
   "common.confirm": "Confirm",
   "common.cancel": "Cancel",
+  "common.close": "Close",
   "common.loading": "Loading",
 
   // workspace switcher
@@ -331,6 +332,9 @@ const en: Dict = {
   "task.done": "Completed",
   "task.failed": "Failed",
   "task.empty": "No output yet.",
+  "task.openDetails": "Open full message",
+  "task.expand": "Expand inline log",
+  "task.collapse": "Collapse inline log",
   "toast.committed": "Committed",
   "toast.pushed": "Pushed",
   "toast.rebased": "Rebased {count} repository(ies) onto base",
@@ -369,6 +373,7 @@ const ko: Dict = {
   "common.delete": "삭제",
   "common.confirm": "확인",
   "common.cancel": "취소",
+  "common.close": "닫기",
   "common.loading": "불러오는 중",
 
   // workspace switcher
@@ -663,6 +668,9 @@ const ko: Dict = {
   "task.done": "완료됨",
   "task.failed": "실패",
   "task.empty": "아직 출력이 없습니다.",
+  "task.openDetails": "전체 메시지 보기",
+  "task.expand": "인라인 로그 펼치기",
+  "task.collapse": "인라인 로그 접기",
   "toast.committed": "커밋됨",
   "toast.pushed": "푸시됨",
   "toast.rebased": "{count}개 리포지토리를 base로 rebase했습니다",

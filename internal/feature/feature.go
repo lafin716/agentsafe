@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -149,7 +150,36 @@ func createRepositoryWorktree(root, featureName string, repo config.Repository, 
 
 	_ = aggit.WorktreePrune(repoPath)
 	if inUse := aggit.WorktreeForBranch(repoPath, branch); inUse != "" {
-		return RepoMeta{}, fmt.Errorf("branch %s is already checked out in worktree %s", branch, inUse)
+		// A previous attempt may have successfully created the target worktree
+		// but failed before feature metadata was saved. Adopt that exact
+		// worktree so retrying the repository add is idempotent.
+		if samePath(inUse, dest) {
+			if current, err := aggit.CurrentBranch(dest); err == nil && current == branch {
+				output.Printf("  worktree already exists at target, adopting branch %s\n", branch)
+				return RepoMeta{
+					Name:         repo.Name,
+					WorktreePath: filepath.ToSlash(rel),
+					Branch:       branch,
+					BaseBranch:   base,
+					Revision:     1,
+				}, nil
+			}
+		}
+		// A newly cloned repository can have the feature branch checked out in
+		// its main clone (for example when the remote HEAD points at it). Move a
+		// clean main clone back to the base branch so the feature branch can be
+		// attached to the requested worktree.
+		if samePath(inUse, repoPath) && policy == ExistingBranchReuse {
+			if aggit.HasChanges(repoPath) {
+				return RepoMeta{}, fmt.Errorf("branch %s is checked out in the main clone %s, which has uncommitted changes; commit or stash them first", branch, inUse)
+			}
+			output.Printf("  switching main clone from %s to base branch %s\n", branch, base)
+			if err := aggit.Checkout(repoPath, base); err != nil {
+				return RepoMeta{}, fmt.Errorf("branch %s is checked out in the main clone and switching it to %s failed: %w", branch, base, err)
+			}
+		} else {
+			return RepoMeta{}, fmt.Errorf("branch %s is already checked out in worktree %s", branch, inUse)
+		}
 	}
 
 	create := true
@@ -256,7 +286,11 @@ func ConfigureRepositoryWorktree(root string, cfg config.Config, featureName, re
 	if base == "" {
 		base = cfg.Git.DefaultBaseBranch
 	}
-	rm, err := createRepositoryWorktree(root, featureName, repoCfg, BranchName(cfg, featureName), base, policy)
+	branch := meta.Branch
+	if branch == "" {
+		branch = BranchName(cfg, featureName)
+	}
+	rm, err := createRepositoryWorktree(root, featureName, repoCfg, branch, base, policy)
 	if err != nil {
 		return RepoMeta{}, err
 	}
@@ -277,6 +311,18 @@ func ConfigureRepositoryWorktree(root string, cfg config.Config, featureName, re
 		return RepoMeta{}, err
 	}
 	return rm, nil
+}
+
+func samePath(a, b string) bool {
+	aa, errA := filepath.Abs(filepath.Clean(a))
+	bb, errB := filepath.Abs(filepath.Clean(b))
+	if errA != nil || errB != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(aa, bb)
+	}
+	return aa == bb
 }
 
 // DeleteOptions controls feature deletion. DeleteBranch also removes the local

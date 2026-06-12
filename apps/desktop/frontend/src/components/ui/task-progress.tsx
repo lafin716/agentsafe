@@ -1,5 +1,13 @@
 import * as React from "react";
-import { ChevronDown, ChevronUp, Loader2, CheckCircle2, AlertCircle, X } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  Maximize2,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n/I18nProvider";
 
@@ -12,8 +20,6 @@ type Task = {
   error: string;
 };
 
-// Minimal shape of the Wails-injected runtime event API. Guarded so the app
-// still renders in a plain browser preview where window.runtime is absent.
 type WailsRuntime = {
   EventsOn: (event: string, cb: (...data: unknown[]) => void) => () => void;
 };
@@ -23,8 +29,6 @@ function runtime(): WailsRuntime | null {
   return rt && typeof rt.EventsOn === "function" ? rt : null;
 }
 
-// lastLine returns the last non-empty line of the accumulated log, used as the
-// collapsed "current step" text.
 function lastLine(log: string): string {
   const lines = log.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -38,15 +42,16 @@ export function TaskProgress() {
   const [task, setTask] = React.useState<Task | null>(null);
   const [log, setLog] = React.useState("");
   const [expanded, setExpanded] = React.useState(false);
+  const [modalOpen, setModalOpen] = React.useState(false);
   const hideTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const logRef = React.useRef<HTMLPreElement | null>(null);
 
-  const clearHideTimer = () => {
+  const clearHideTimer = React.useCallback(() => {
     if (hideTimer.current) {
       clearTimeout(hideTimer.current);
       hideTimer.current = null;
     }
-  };
+  }, []);
 
   React.useEffect(() => {
     const rt = runtime();
@@ -57,6 +62,7 @@ export function TaskProgress() {
       clearHideTimer();
       setLog("");
       setExpanded(false);
+      setModalOpen(false);
       setTask({ id: p.id, label: p.label, status: "running", error: "" });
     });
 
@@ -72,7 +78,6 @@ export function TaskProgress() {
           ? { ...prev, status: p.status, error: p.error ?? "" }
           : prev
       );
-      // Auto-hide on success; keep on error until dismissed.
       if (p.status === "done") {
         clearHideTimer();
         hideTimer.current = setTimeout(() => setTask(null), 4000);
@@ -85,19 +90,28 @@ export function TaskProgress() {
       offEnd();
       clearHideTimer();
     };
-  }, []);
+  }, [clearHideTimer]);
 
-  // Keep the expanded log scrolled to the bottom as it streams.
   React.useEffect(() => {
     if (expanded && logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
   }, [log, expanded]);
 
+  React.useEffect(() => {
+    if (!modalOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setModalOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modalOpen]);
+
   if (!task) return null;
 
   const close = () => {
     clearHideTimer();
+    setModalOpen(false);
     setTask(null);
   };
 
@@ -112,60 +126,115 @@ export function TaskProgress() {
     task.status === "error" && task.error
       ? task.error
       : lastLine(log) || statusText;
+  const fullMessage = [
+    log.trimEnd(),
+    task.error && !log.includes(task.error) ? task.error : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const openModal = () => {
+    clearHideTimer();
+    setModalOpen(true);
+  };
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 w-96 max-w-[90vw]">
-      <div
-        className={cn(
-          "overflow-hidden rounded-lg border shadow-lg",
-          task.status === "error"
-            ? "border-destructive/50 bg-card"
-            : "border-border bg-card"
-        )}
-      >
-        {/* Header row — click to expand/collapse the log. */}
-        <button
-          onClick={() => setExpanded((e) => !e)}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
+    <>
+      <div className="fixed bottom-4 right-4 z-40 w-96 max-w-[90vw]">
+        <div
+          className={cn(
+            "overflow-hidden rounded-lg border shadow-lg",
+            task.status === "error"
+              ? "border-destructive/50 bg-card"
+              : "border-border bg-card"
+          )}
         >
-          {task.status === "running" && (
-            <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
-          )}
-          {task.status === "done" && (
-            <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
-          )}
-          {task.status === "error" && (
-            <AlertCircle className="size-4 shrink-0 text-destructive" />
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">{task.label}</div>
-            <div className="truncate text-xs text-muted-foreground">
-              {current}
+          <div className="flex w-full items-center gap-2 px-3 py-2">
+            {task.status === "running" && (
+              <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+            )}
+            {task.status === "done" && (
+              <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
+            )}
+            {task.status === "error" && (
+              <AlertCircle className="size-4 shrink-0 text-destructive" />
+            )}
+            <div className="min-w-0 flex-1">
+              <button
+                type="button"
+                className="flex max-w-full items-center gap-1.5 text-left hover:text-primary"
+                onClick={openModal}
+                title={t("task.openDetails")}
+              >
+                <span className="truncate text-sm font-medium">{task.label}</span>
+                <Maximize2 className="size-3.5 shrink-0" />
+              </button>
+              <div className="truncate text-xs text-muted-foreground">
+                {current}
+              </div>
             </div>
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => setExpanded((value) => !value)}
+              title={expanded ? t("task.collapse") : t("task.expand")}
+            >
+              {expanded ? (
+                <ChevronDown className="size-4" />
+              ) : (
+                <ChevronUp className="size-4" />
+              )}
+            </button>
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={close}
+              title={t("common.close")}
+            >
+              <X className="size-4" />
+            </button>
           </div>
-          {expanded ? (
-            <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronUp className="size-4 shrink-0 text-muted-foreground" />
-          )}
-          <X
-            className="size-4 shrink-0 text-muted-foreground hover:text-foreground"
-            onClick={(e) => {
-              e.stopPropagation();
-              close();
-            }}
-          />
-        </button>
 
-        {expanded && (
-          <pre
-            ref={logRef}
-            className="max-h-72 overflow-auto border-t bg-muted/40 px-3 py-2 text-xs leading-relaxed"
-          >
-            {log.trimEnd() || t("task.empty")}
-          </pre>
-        )}
+          {expanded && (
+            <pre
+              ref={logRef}
+              className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t bg-muted/40 px-3 py-2 text-xs leading-relaxed"
+            >
+              {fullMessage || t("task.empty")}
+            </pre>
+          )}
+        </div>
       </div>
-    </div>
+
+      {modalOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-4"
+          onClick={() => setModalOpen(false)}
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border bg-card shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 border-b px-5 py-4">
+              <div className="min-w-0 flex-1">
+                <h2 className="truncate text-base font-semibold">{task.label}</h2>
+                <p className="text-xs text-muted-foreground">{statusText}</p>
+              </div>
+              <button
+                type="button"
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={() => setModalOpen(false)}
+                title={t("common.close")}
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+            <pre className="min-h-48 flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/35 p-5 text-xs leading-relaxed">
+              {fullMessage || t("task.empty")}
+            </pre>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
