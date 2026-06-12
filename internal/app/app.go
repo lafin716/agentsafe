@@ -28,7 +28,6 @@ type repoListResult struct {
 
 type repoEntry struct {
 	Name string `json:"name" yaml:"name"`
-	Type string `json:"type" yaml:"type"`
 	URL  string `json:"url"  yaml:"url"`
 }
 
@@ -96,13 +95,13 @@ func initCmd() *cobra.Command {
 
 func repoCmd() *cobra.Command {
 	c := &cobra.Command{Use: "repo", Short: "Manage repositories"}
-	var typ, defaultBranch string
+	var defaultBranch string
 	add := &cobra.Command{Use: "add NAME URL", Short: "Add a repository", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
 		root, cfg, err := cwdConfig()
 		if err != nil {
 			return err
 		}
-		_, err = config.AddRepository(root, cfg, config.Repository{Name: args[0], URL: args[1], Type: typ, DefaultBranch: defaultBranch})
+		_, err = config.AddRepository(root, cfg, config.Repository{Name: args[0], URL: args[1], DefaultBranch: defaultBranch})
 		if err != nil {
 			return err
 		}
@@ -112,7 +111,6 @@ func repoCmd() *cobra.Command {
 		fmt.Printf("Added repository %s\n", args[0])
 		return nil
 	}}
-	add.Flags().StringVar(&typ, "type", "", "repository type")
 	add.Flags().StringVar(&defaultBranch, "default-branch", "", "default branch")
 	list := &cobra.Command{Use: "list", Short: "List repositories", RunE: func(cmd *cobra.Command, args []string) error {
 		_, cfg, err := cwdConfig()
@@ -122,7 +120,7 @@ func repoCmd() *cobra.Command {
 		if output.IsStructured() {
 			result := repoListResult{}
 			for _, r := range cfg.Repositories {
-				result.Repositories = append(result.Repositories, repoEntry{Name: r.Name, Type: r.Type, URL: r.URL})
+				result.Repositories = append(result.Repositories, repoEntry{Name: r.Name, URL: r.URL})
 			}
 			return output.Emit(result)
 		}

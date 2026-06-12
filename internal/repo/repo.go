@@ -15,9 +15,9 @@ import (
 func List(cfg config.Config) {
 	rows := [][]string{}
 	for _, r := range cfg.Repositories {
-		rows = append(rows, []string{r.Name, r.Type, r.URL})
+		rows = append(rows, []string{r.Name, r.URL})
 	}
-	ui.PrintRows([]string{"NAME", "TYPE", "URL"}, rows)
+	ui.PrintRows([]string{"NAME", "URL"}, rows)
 }
 
 func EnsureConfigured(cfg config.Config) error {

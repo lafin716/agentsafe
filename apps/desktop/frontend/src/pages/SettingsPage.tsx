@@ -96,7 +96,6 @@ function GitSettings({
   const [glToken, setGlToken] = useState("");
   const [glTarget, setGlTarget] = useState("");
   // GitHub
-  const [ghUrl, setGhUrl] = useState("");
   const [ghToken, setGhToken] = useState("");
   const [ghTarget, setGhTarget] = useState("");
 
@@ -106,7 +105,6 @@ function GitSettings({
     setGlUrl(config.GitLab?.BaseURL ?? "");
     setGlToken(config.GitLab?.TokenEnv ?? "");
     setGlTarget(config.GitLab?.TargetBranch ?? "");
-    setGhUrl(config.GitHub?.BaseURL ?? "");
     setGhToken(config.GitHub?.TokenEnv ?? "");
     setGhTarget(config.GitHub?.TargetBranch ?? "");
   }, [config]);
@@ -122,7 +120,6 @@ function GitSettings({
           TargetBranch: glTarget.trim(),
         },
         {
-          BaseURL: ghUrl.trim(),
           TokenEnv: ghToken.trim(),
           TargetBranch: ghTarget.trim(),
         }
@@ -172,9 +169,6 @@ function GitSettings({
         </Section>
 
         <Section title="GitHub">
-          <Field label={t("settings.baseUrl")} hint={urlHint(ghUrl)}>
-            <Input value={ghUrl} onChange={(e) => setGhUrl(e.target.value)} placeholder="https://github.com" />
-          </Field>
           <Field label={t("settings.tokenEnv")}>
             <Input value={ghToken} onChange={(e) => setGhToken(e.target.value)} placeholder="GITHUB_TOKEN" />
           </Field>

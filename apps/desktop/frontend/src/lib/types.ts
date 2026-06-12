@@ -23,7 +23,6 @@ export interface Repository {
   Name: string;
   URL: string;
   DefaultBranch: string;
-  Type: string;
   TestCommand: string;
 }
 
@@ -42,7 +41,6 @@ export interface GitLabConfig {
 }
 
 export interface GitHubConfig {
-  BaseURL: string;
   TokenEnv: string;
   TargetBranch: string;
 }

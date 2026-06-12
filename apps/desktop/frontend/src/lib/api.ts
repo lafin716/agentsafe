@@ -37,7 +37,6 @@ type AppBindings = {
   AddRepo(
     name: string,
     url: string,
-    typ: string,
     defaultBranch: string
   ): Promise<void>;
   RemoveRepo(name: string, deleteFiles: boolean): Promise<void>;

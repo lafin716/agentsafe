@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -80,7 +79,6 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
   // Add-repo form
   const [repoName, setRepoName] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
-  const [repoType, setRepoType] = useState("");
   const [repoBranch, setRepoBranch] = useState("");
 
   useEffect(() => {
@@ -136,12 +134,10 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
       await api.AddRepo(
         repoName.trim(),
         repoUrl.trim(),
-        repoType.trim(),
         repoBranch.trim()
       );
       setRepoName("");
       setRepoUrl("");
-      setRepoType("");
       setRepoBranch("");
       await onChanged();
       notify(t("toast.repoAdded"), "success");
@@ -395,7 +391,6 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
               <TableHeader>
                 <TableRow>
                   <TableHead>{t("repo.colName")}</TableHead>
-                  <TableHead>{t("repo.colType")}</TableHead>
                   <TableHead>{t("repo.colBranch")}</TableHead>
                   <TableHead>{t("repo.colUrl")}</TableHead>
                   <TableHead>{t("repo.colAction")}</TableHead>
@@ -406,13 +401,6 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
                 {repos.map((r) => (
                   <TableRow key={r.Name}>
                     <TableCell className="font-medium">{r.Name}</TableCell>
-                    <TableCell>
-                      {r.Type ? (
-                        <Badge variant="secondary">{r.Type}</Badge>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
                     <TableCell>{r.DefaultBranch || "—"}</TableCell>
                     <TableCell className="max-w-xs truncate text-muted-foreground">
                       {r.URL}
@@ -483,15 +471,6 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
                 placeholder="https://gitlab.example.com/company/backend.git"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="rt">{t("repo.typeLabel")}</Label>
-              <Input
-                id="rt"
-                value={repoType}
-                onChange={(e) => setRepoType(e.target.value)}
-                placeholder="backend / frontend"
               />
             </div>
             <div className="space-y-1.5">

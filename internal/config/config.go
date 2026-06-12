@@ -37,7 +37,6 @@ type Repository struct {
 	Name          string `yaml:"name"`
 	URL           string `yaml:"url"`
 	DefaultBranch string `yaml:"defaultBranch,omitempty"`
-	Type          string `yaml:"type,omitempty"`
 	TestCommand   string `yaml:"testCommand,omitempty"`
 }
 type AgentConfig struct {
@@ -56,7 +55,6 @@ type GitLabConfig struct {
 	TargetBranch string `yaml:"targetBranch"`
 }
 type GitHubConfig struct {
-	BaseURL      string `yaml:"baseUrl"`
 	TokenEnv     string `yaml:"tokenEnv"`
 	TargetBranch string `yaml:"targetBranch"`
 }
@@ -75,7 +73,7 @@ func Default(root, name string) Config {
 			DefaultExclude:   []string{".git", "node_modules", "build", "dist", "target", ".gradle", ".idea", ".vscode", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.jks", "application-local.yml", "application-secret.yml", "application-dev.yml", "secrets.yml", "credentials.yml"},
 		},
 		GitLab: GitLabConfig{BaseURL: "https://gitlab.example.com", TokenEnv: "GITLAB_TOKEN", TargetBranch: "develop"},
-		GitHub: GitHubConfig{BaseURL: "https://github.com", TokenEnv: "GITHUB_TOKEN", TargetBranch: "main"},
+		GitHub: GitHubConfig{TokenEnv: "GITHUB_TOKEN", TargetBranch: "main"},
 	}
 }
 

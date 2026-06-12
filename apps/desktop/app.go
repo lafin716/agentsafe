@@ -192,7 +192,7 @@ func (a *App) ListRepos() ([]config.Repository, error) {
 	return cfg.Repositories, nil
 }
 
-func (a *App) AddRepo(name, url, typ, defaultBranch string) error {
+func (a *App) AddRepo(name, url, defaultBranch string) error {
 	root, err := a.requireRoot()
 	if err != nil {
 		return err
@@ -202,7 +202,7 @@ func (a *App) AddRepo(name, url, typ, defaultBranch string) error {
 		return err
 	}
 	_, err = config.AddRepository(root, cfg, config.Repository{
-		Name: name, URL: url, Type: typ, DefaultBranch: defaultBranch,
+		Name: name, URL: url, DefaultBranch: defaultBranch,
 	})
 	return err
 }
@@ -1215,10 +1215,6 @@ func (a *App) SaveGitSettings(git config.GitConfig, gitlab config.GitLabConfig, 
 		return err
 	}
 	gitlab.BaseURL = strings.TrimRight(strings.TrimSpace(gitlab.BaseURL), "/")
-	github.BaseURL = strings.TrimRight(strings.TrimSpace(github.BaseURL), "/")
-	if github.BaseURL == "" {
-		github.BaseURL = "https://github.com"
-	}
 	if github.TokenEnv == "" {
 		github.TokenEnv = "GITHUB_TOKEN"
 	}
@@ -1276,7 +1272,6 @@ func (a *App) DiagnoseGit() (GitDiag, error) {
 		}
 	}
 	checkBase("GitLab", cfg.GitLab.BaseURL)
-	checkBase("GitHub", cfg.GitHub.BaseURL)
 
 	for _, r := range cfg.Repositories {
 		kind := forge.Detect(r.URL)
