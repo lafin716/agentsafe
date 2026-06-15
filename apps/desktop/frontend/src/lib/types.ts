@@ -67,6 +67,26 @@ export interface FeatureListResult {
   features: FeatureEntry[] | null;
 }
 
+export interface RepositoryCreateCheck {
+  name: string;
+  baseBranch: string;
+  localBranch: boolean;
+  remoteBranch: boolean;
+  checkedOutAt?: string;
+  conflict: boolean;
+  canReuse: boolean;
+  canRecreate: boolean;
+  blockedReason?: string;
+}
+
+export interface FeatureCreateCheck {
+  name: string;
+  branch: string;
+  hasConflicts: boolean;
+  blocked: boolean;
+  repositories: RepositoryCreateCheck[] | null;
+}
+
 export interface RepoStatus {
   name: string;
   status: string;

@@ -63,6 +63,63 @@ func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
 	})
 }
 
+func TestCheckCreateReportsAllExistingBranchesWithoutCreatingWorktrees(t *testing.T) {
+	root, firstCfg := testWorkspace(t, "one")
+	secondRoot, secondCfg := testWorkspace(t, "two")
+	if err := os.Rename(config.RepoPath(secondRoot, "two"), config.RepoPath(root, "two")); err != nil {
+		t.Fatal(err)
+	}
+	cfg := firstCfg
+	cfg.Repositories = append(cfg.Repositories, secondCfg.Repositories[0])
+	testGit(t, config.RepoPath(root, "two"), "branch", "feature/demo")
+
+	check, err := CheckCreate(root, cfg, "demo", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !check.HasConflicts || check.Blocked {
+		t.Fatalf("unexpected check result: %+v", check)
+	}
+	if len(check.Repositories) != 2 {
+		t.Fatalf("repositories = %d, want 2", len(check.Repositories))
+	}
+	if check.Repositories[0].Conflict {
+		t.Fatalf("repository one unexpectedly conflicted: %+v", check.Repositories[0])
+	}
+	if !check.Repositories[1].LocalBranch || !check.Repositories[1].CanReuse || !check.Repositories[1].CanRecreate {
+		t.Fatalf("repository two conflict not reported correctly: %+v", check.Repositories[1])
+	}
+	if _, err := os.Stat(filepath.Join(root, "feature")); !os.IsNotExist(err) {
+		t.Fatalf("preflight created feature directory, stat err = %v", err)
+	}
+
+	err = CreateWithOptions(root, cfg, "demo", CreateOptions{
+		Base: "main", ExistingBranch: ExistingBranchError,
+	})
+	if err == nil || !strings.Contains(err.Error(), "choose reuse or recreate") {
+		t.Fatalf("expected existing branch error, got %v", err)
+	}
+	if _, err := os.Stat(config.WorktreePath(root, "demo", "one")); !os.IsNotExist(err) {
+		t.Fatalf("first repository worktree was partially created, stat err = %v", err)
+	}
+}
+
+func TestCheckCreateBlocksBranchUsedByAnotherWorktree(t *testing.T) {
+	root, cfg := testWorkspace(t, "repo")
+	repoPath := config.RepoPath(root, "repo")
+	other := filepath.Join(t.TempDir(), "other")
+	testGit(t, repoPath, "worktree", "add", other, "-b", "feature/demo", "main")
+
+	check, err := CheckCreate(root, cfg, "demo", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := check.Repositories[0]
+	if !check.Blocked || repo.BlockedReason == "" || repo.CanReuse || repo.CanRecreate {
+		t.Fatalf("checked-out branch should be blocked: %+v", check)
+	}
+}
+
 func TestCreateReusesRemoteOnlyBranch(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	repoPath := config.RepoPath(root, "repo")

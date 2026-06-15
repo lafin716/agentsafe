@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronRight, Code2, FolderOpen, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
 import { useConfirm } from "@/components/ui/confirm";
-import type { FeatureDeleteResult, FeatureEntry } from "@/lib/types";
+import type { FeatureCreateCheck, FeatureDeleteResult, FeatureEntry } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -37,7 +37,8 @@ export function FeaturesPage({ onOpen }: Props) {
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
   const [base, setBase] = useState("");
-  const [existingBranch, setExistingBranch] = useState("error");
+  const [createCheck, setCreateCheck] = useState<FeatureCreateCheck | null>(null);
+  const [existingBranch, setExistingBranch] = useState<"reuse" | "recreate">("reuse");
 
   const load = useCallback(async () => {
     try {
@@ -117,20 +118,74 @@ export function FeaturesPage({ onOpen }: Props) {
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
+    const featureName = name.trim();
+    const baseBranch = base.trim();
     try {
       setBusy(true);
-      await api.CreateFeature(name.trim(), base.trim(), existingBranch);
-      notify(t("toast.featureCreated", { name: name.trim() }), "success");
-      setName("");
-      setBase("");
-      setExistingBranch("error");
-      await load();
+      const check = await api.CheckFeatureCreation(featureName, baseBranch);
+      if (check.hasConflicts || check.blocked) {
+        setExistingBranch("reuse");
+        setCreateCheck(check);
+      } else {
+        await completeCreate(featureName, baseBranch, "error");
+      }
     } catch (err) {
       notify(errMessage(err), "error");
     } finally {
       setBusy(false);
     }
   }
+
+  async function completeCreate(
+    featureName: string,
+    baseBranch: string,
+    policy: "error" | "reuse" | "recreate"
+  ) {
+    await api.CreateFeature(featureName, baseBranch, policy);
+    notify(t("toast.featureCreated", { name: featureName }), "success");
+    setName("");
+    setBase("");
+    setCreateCheck(null);
+    setExistingBranch("reuse");
+    await load();
+  }
+
+  async function continueCreate() {
+    if (!createCheck || createCheck.blocked) return;
+    if (
+      existingBranch === "recreate" &&
+      !(await confirm({
+        title: t("features.preflightRecreateTitle"),
+        message: t("features.preflightRecreateConfirm"),
+        confirmLabel: t("features.preflightContinue"),
+        danger: true,
+      }))
+    )
+      return;
+    try {
+      setBusy(true);
+      await completeCreate(createCheck.name, base.trim(), existingBranch);
+    } catch (err) {
+      // State can change after the initial check. Refresh the conflict view
+      // instead of leaving the user with a generic retry error.
+      try {
+        const refreshed = await api.CheckFeatureCreation(createCheck.name, base.trim());
+        if (refreshed.hasConflicts || refreshed.blocked) {
+          setCreateCheck(refreshed);
+        } else {
+          notify(errMessage(err), "error");
+        }
+      } catch {
+        notify(errMessage(err), "error");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const conflictRepos = createCheck?.repositories?.filter((repo) => repo.conflict || repo.blockedReason) ?? [];
+  const canReuse = conflictRepos.every((repo) => !repo.conflict || repo.canReuse);
+  const canRecreate = conflictRepos.every((repo) => !repo.conflict || repo.canRecreate);
 
   return (
     <div className="space-y-6">
@@ -261,22 +316,6 @@ export function FeaturesPage({ onOpen }: Props) {
                 placeholder="develop"
               />
             </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label htmlFor="existingBranch">{t("features.existingBranchLabel")}</Label>
-              <select
-                id="existingBranch"
-                value={existingBranch}
-                onChange={(e) => setExistingBranch(e.target.value)}
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="error">{t("features.existingBranchError")}</option>
-                <option value="reuse">{t("features.existingBranchReuse")}</option>
-                <option value="recreate">{t("features.existingBranchRecreate")}</option>
-              </select>
-              <p className="text-xs text-muted-foreground">
-                {t(`features.existingBranchHint.${existingBranch}`)}
-              </p>
-            </div>
             <div className="sm:col-span-2">
               <Button type="submit" disabled={busy}>
                 <Plus className="size-4" /> {t("features.createButton")}
@@ -285,6 +324,103 @@ export function FeaturesPage({ onOpen }: Props) {
           </form>
         </CardContent>
       </Card>
+
+      {createCheck && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !busy && setCreateCheck(null)}
+        >
+          <div
+            className="w-full max-w-2xl rounded-lg border bg-card p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold">{t("features.preflightTitle")}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t("features.preflightDesc", { branch: createCheck.branch })}
+            </p>
+
+            <div className="mt-4 max-h-64 divide-y overflow-auto rounded-md border">
+              {conflictRepos.map((repo) => (
+                <div key={repo.name} className="space-y-1 p-3 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium">{repo.name}</span>
+                    {repo.blockedReason ? (
+                      <Badge variant="destructive">{t("features.preflightBlocked")}</Badge>
+                    ) : (
+                      <Badge variant="outline">{t("features.preflightExisting")}</Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {[
+                      repo.localBranch && t("features.preflightLocal"),
+                      repo.remoteBranch && t("features.preflightRemote"),
+                      repo.checkedOutAt &&
+                        t("features.preflightCheckedOut", { path: repo.checkedOutAt }),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </p>
+                  {repo.blockedReason && (
+                    <p className="text-xs text-destructive">{repo.blockedReason}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {!createCheck.blocked && (
+              <div className="mt-4 space-y-2">
+                <label className="flex items-start gap-3 rounded-md border p-3 text-sm">
+                  <input
+                    type="radio"
+                    name="branchPolicy"
+                    value="reuse"
+                    checked={existingBranch === "reuse"}
+                    disabled={!canReuse}
+                    onChange={() => setExistingBranch("reuse")}
+                  />
+                  <span>
+                    <strong>{t("features.existingBranchReuse")}</strong>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {t("features.existingBranchHint.reuse")}
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-3 rounded-md border p-3 text-sm">
+                  <input
+                    type="radio"
+                    name="branchPolicy"
+                    value="recreate"
+                    checked={existingBranch === "recreate"}
+                    disabled={!canRecreate}
+                    onChange={() => setExistingBranch("recreate")}
+                  />
+                  <span>
+                    <strong>{t("features.existingBranchRecreate")}</strong>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {t("features.existingBranchHint.recreate")}
+                    </span>
+                  </span>
+                </label>
+              </div>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="outline" disabled={busy} onClick={() => setCreateCheck(null)}>
+                {createCheck.blocked ? t("common.close") : t("common.cancel")}
+              </Button>
+              {!createCheck.blocked && (
+                <Button
+                  variant={existingBranch === "recreate" ? "destructive" : "default"}
+                  disabled={busy || (existingBranch === "reuse" ? !canReuse : !canRecreate)}
+                  onClick={continueCreate}
+                >
+                  {t("features.preflightContinue")}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import type {
   SyncHistoryEntry,
   FeatureListResult,
   FeatureDeleteResult,
+  FeatureCreateCheck,
   FeatureMetadata,
   RepoMeta,
   FeatureStatusResult,
@@ -45,6 +46,7 @@ type AppBindings = {
   RepoLocalStates(): Promise<Record<string, boolean>>;
   SetGitCredentials(host: string, username: string, secret: string): Promise<void>;
   ListFeatures(): Promise<FeatureListResult>;
+  CheckFeatureCreation(name: string, base: string): Promise<FeatureCreateCheck>;
   CreateFeature(name: string, base: string, existingBranch: string): Promise<void>;
   FeatureRepoAdd(
     name: string,

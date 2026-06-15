@@ -38,6 +38,7 @@ func (m Metadata) FolderKey() string {
 	}
 	return m.Name
 }
+
 type RepoMeta struct {
 	Name         string `json:"name"`
 	WorktreePath string `json:"worktreePath"`
@@ -76,6 +77,26 @@ type CreateOptions struct {
 	ExistingBranch ExistingBranchPolicy
 }
 
+type CreateCheck struct {
+	Name         string                  `json:"name"`
+	Branch       string                  `json:"branch"`
+	HasConflicts bool                    `json:"hasConflicts"`
+	Blocked      bool                    `json:"blocked"`
+	Repositories []RepositoryCreateCheck `json:"repositories"`
+}
+
+type RepositoryCreateCheck struct {
+	Name          string `json:"name"`
+	BaseBranch    string `json:"baseBranch"`
+	LocalBranch   bool   `json:"localBranch"`
+	RemoteBranch  bool   `json:"remoteBranch"`
+	CheckedOutAt  string `json:"checkedOutAt,omitempty"`
+	Conflict      bool   `json:"conflict"`
+	CanReuse      bool   `json:"canReuse"`
+	CanRecreate   bool   `json:"canRecreate"`
+	BlockedReason string `json:"blockedReason,omitempty"`
+}
+
 type RepositoryWorktreeOptions struct {
 	ExistingBranch ExistingBranchPolicy
 	Recreate       bool
@@ -109,25 +130,22 @@ func Create(root string, cfg config.Config, name, base string, force bool) error
 }
 
 func CreateWithOptions(root string, cfg config.Config, name string, opt CreateOptions) error {
-	if err := config.ValidateFeatureName(name); err != nil {
-		return err
-	}
 	policy, err := ParseExistingBranchPolicy(string(opt.ExistingBranch))
 	if err != nil {
+		return err
+	}
+	check, err := CheckCreate(root, cfg, name, opt.Base)
+	if err != nil {
+		return err
+	}
+	if err := validateCreatePolicy(check, policy); err != nil {
 		return err
 	}
 	branch := BranchName(cfg, name)
 	key := uniqueFeatureKey(root, name)
 	meta := Metadata{Name: name, Key: key, Branch: branch, BaseBranch: opt.Base, CreatedAt: time.Now().Format(time.RFC3339), Revision: 1}
-	for _, r := range cfg.Repositories {
-		repoBase := opt.Base
-		if repoBase == "" {
-			cur, err := aggit.CurrentBranch(config.RepoPath(root, r.Name))
-			if err != nil || cur == "" {
-				return fmt.Errorf("repository %s is in detached HEAD state; use --base to specify a branch", r.Name)
-			}
-			repoBase = cur
-		}
+	for i, r := range cfg.Repositories {
+		repoBase := check.Repositories[i].BaseBranch
 		rm, err := createRepositoryWorktree(root, key, r, branch, repoBase, policy)
 		if err != nil {
 			return err
@@ -135,6 +153,108 @@ func CreateWithOptions(root string, cfg config.Config, name string, opt CreateOp
 		meta.Repositories = append(meta.Repositories, rm)
 	}
 	return Save(root, meta)
+}
+
+// CheckCreate inspects every configured repository before feature creation.
+// It does not create, delete, or check out branches or worktrees.
+func CheckCreate(root string, cfg config.Config, name, base string) (CreateCheck, error) {
+	if err := config.ValidateFeatureName(name); err != nil {
+		return CreateCheck{}, err
+	}
+	if _, err := os.Stat(config.FeatureMetaPath(root, name)); err == nil {
+		return CreateCheck{}, fmt.Errorf("feature %q already exists", name)
+	} else if !os.IsNotExist(err) {
+		return CreateCheck{}, err
+	}
+
+	branch := BranchName(cfg, name)
+	result := CreateCheck{Name: name, Branch: branch, Repositories: []RepositoryCreateCheck{}}
+	for _, repo := range cfg.Repositories {
+		repoPath := config.RepoPath(root, repo.Name)
+		item := RepositoryCreateCheck{Name: repo.Name, CanReuse: true, CanRecreate: true}
+		if _, err := os.Stat(repoPath); err != nil {
+			item.BlockedReason = fmt.Sprintf("repository is not cloned at %s; run `agentsafe pull`", repoPath)
+			item.CanReuse = false
+			item.CanRecreate = false
+			result.Blocked = true
+			result.Repositories = append(result.Repositories, item)
+			continue
+		}
+
+		item.BaseBranch = base
+		if item.BaseBranch == "" {
+			current, err := aggit.CurrentBranch(repoPath)
+			if err != nil || current == "" {
+				item.BlockedReason = "repository is in detached HEAD state; specify a base branch"
+				item.CanReuse = false
+				item.CanRecreate = false
+				result.Blocked = true
+				result.Repositories = append(result.Repositories, item)
+				continue
+			}
+			item.BaseBranch = current
+		}
+
+		item.LocalBranch = aggit.LocalBranchExists(repoPath, branch)
+		item.RemoteBranch = aggit.RemoteBranchExists(repoPath, branch)
+		if !item.RemoteBranch {
+			// Inspect the remote without updating remote-tracking refs.
+			item.RemoteBranch = aggit.RemoteBranchExistsAtOrigin(repoPath, branch)
+		}
+		item.CheckedOutAt = aggit.WorktreeForBranch(repoPath, branch)
+		item.Conflict = item.LocalBranch || item.RemoteBranch || item.CheckedOutAt != ""
+		if item.Conflict {
+			result.HasConflicts = true
+		}
+
+		if item.CheckedOutAt != "" {
+			switch {
+			case samePath(item.CheckedOutAt, repoPath):
+				if aggit.HasChanges(repoPath) {
+					item.BlockedReason = "feature branch is checked out in the main clone with uncommitted changes"
+					item.CanReuse = false
+					item.CanRecreate = false
+				} else if item.BaseBranch == branch {
+					item.BlockedReason = "feature branch is checked out in the main clone; specify a different base branch"
+					item.CanReuse = false
+					item.CanRecreate = false
+				}
+			default:
+				item.BlockedReason = fmt.Sprintf("feature branch is already checked out in worktree %s", item.CheckedOutAt)
+				item.CanReuse = false
+				item.CanRecreate = false
+			}
+		}
+		if item.BlockedReason != "" {
+			result.Blocked = true
+		}
+		result.Repositories = append(result.Repositories, item)
+	}
+	return result, nil
+}
+
+func validateCreatePolicy(check CreateCheck, policy ExistingBranchPolicy) error {
+	for _, repo := range check.Repositories {
+		if repo.BlockedReason != "" {
+			return fmt.Errorf("repository %s: %s", repo.Name, repo.BlockedReason)
+		}
+		if !repo.Conflict {
+			continue
+		}
+		switch policy {
+		case ExistingBranchError:
+			return fmt.Errorf("branch %s already exists in repository %s; choose reuse or recreate", check.Branch, repo.Name)
+		case ExistingBranchReuse:
+			if !repo.CanReuse {
+				return fmt.Errorf("branch %s cannot be reused in repository %s", check.Branch, repo.Name)
+			}
+		case ExistingBranchRecreate:
+			if !repo.CanRecreate {
+				return fmt.Errorf("branch %s cannot be recreated in repository %s", check.Branch, repo.Name)
+			}
+		}
+	}
+	return nil
 }
 
 // uniqueFeatureKey derives an ASCII folder key from name (config.FeatureKey)
@@ -226,7 +346,7 @@ func createRepositoryWorktree(root, featureName string, repo config.Repository, 
 		// its main clone (for example when the remote HEAD points at it). Move a
 		// clean main clone back to the base branch so the feature branch can be
 		// attached to the requested worktree.
-		if samePath(inUse, repoPath) && policy == ExistingBranchReuse {
+		if samePath(inUse, repoPath) && policy != ExistingBranchError {
 			if aggit.HasChanges(repoPath) {
 				return RepoMeta{}, fmt.Errorf("branch %s is checked out in the main clone %s, which has uncommitted changes; commit or stash them first", branch, inUse)
 			}

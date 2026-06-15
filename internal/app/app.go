@@ -213,6 +213,38 @@ whether to error, reuse it, or recreate the local branch from the base.`,
 	create.Flags().StringVarP(&base, "base", "b", "", "base branch for all repos (default: each repo's current branch)")
 	create.Flags().StringVar(&existingBranch, "existing-branch", "error", "existing branch policy: error, reuse, or recreate")
 	create.Flags().BoolVarP(&force, "force", "f", false, "deprecated alias for --existing-branch recreate")
+	var checkBase string
+	check := &cobra.Command{
+		Use:   "check NAME",
+		Short: "Check for branch conflicts before creating a feature",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, cfg, err := cwdConfig()
+			if err != nil {
+				return err
+			}
+			result, err := feature.CheckCreate(root, cfg, args[0], checkBase)
+			if err != nil {
+				return err
+			}
+			if output.IsStructured() {
+				return output.Emit(result)
+			}
+			fmt.Printf("Feature branch: %s\n", result.Branch)
+			for _, repo := range result.Repositories {
+				status := "ready"
+				if repo.Conflict {
+					status = "existing branch"
+				}
+				if repo.BlockedReason != "" {
+					status = "blocked: " + repo.BlockedReason
+				}
+				fmt.Printf("[%s] %s (base: %s)\n", repo.Name, status, repo.BaseBranch)
+			}
+			return nil
+		},
+	}
+	check.Flags().StringVarP(&checkBase, "base", "b", "", "base branch for all repos (default: each repo's current branch)")
 	list := &cobra.Command{Use: "list", Short: "List feature workspaces", RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
 		if err != nil {
@@ -329,7 +361,7 @@ whether to error, reuse it, or recreate the local branch from the base.`,
 	recreateRepo.Flags().BoolVar(&recreateForce, "force", false, "discard uncommitted worktree changes")
 	repoWorktree.AddCommand(addRepo, recreateRepo)
 
-	c.AddCommand(create, list, rebase, del, repoWorktree)
+	c.AddCommand(create, check, list, rebase, del, repoWorktree)
 	return c
 }
 

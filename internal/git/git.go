@@ -152,6 +152,10 @@ func RemoteBranchExists(repoPath, branch string) bool {
 	_, err := Run(repoPath, "rev-parse", "--verify", "refs/remotes/origin/"+branch)
 	return err == nil
 }
+func RemoteBranchExistsAtOrigin(repoPath, branch string) bool {
+	_, err := Run(repoPath, "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+branch)
+	return err == nil
+}
 func StatusShort(path string) (string, error)   { return Output(path, "status", "--short") }
 func CurrentBranch(path string) (string, error) { return Output(path, "branch", "--show-current") }
 func HasChanges(path string) bool               { s, err := StatusShort(path); return err == nil && s != "" }

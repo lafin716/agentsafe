@@ -366,6 +366,24 @@ func (a *App) CreateFeature(name, base, existingBranch string) error {
 	})
 }
 
+func (a *App) CheckFeatureCreation(name, base string) (feature.CreateCheck, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.CreateCheck{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return feature.CreateCheck{}, err
+	}
+	var result feature.CreateCheck
+	err = a.runTask("Check feature: "+name, func() error {
+		var checkErr error
+		result, checkErr = feature.CheckCreate(root, cfg, name, base)
+		return checkErr
+	})
+	return result, err
+}
+
 func (a *App) FeatureRepoAdd(name, repoName, existingBranch string, force bool) (feature.RepoMeta, error) {
 	return a.configureFeatureRepo(name, repoName, existingBranch, false, force)
 }
