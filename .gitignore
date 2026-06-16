@@ -1,5 +1,6 @@
 # build artifacts
 /agr
+/desktop
 apps/desktop/build/bin/
 
 # OS

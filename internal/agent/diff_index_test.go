@@ -148,6 +148,79 @@ func TestCompareIndexedDetectsCandidates(t *testing.T) {
 	}
 }
 
+func TestRestoreFromWorktreeOverwritesAgentCopy(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default(root, "ws")
+	cfg.Repositories = []config.Repository{{Name: "repo", URL: "https://example.com/repo.git"}}
+	worktreeRel := filepath.ToSlash(filepath.Join("feature", "demo", "repo"))
+	worktree := filepath.Join(root, filepath.FromSlash(worktreeRel))
+	agentDir := config.AgentPath(root, "demo", "repo")
+	writeIndexedFile(t, filepath.Join(worktree, "file.txt"), "worktree")
+	writeIndexedFile(t, filepath.Join(agentDir, "file.txt"), "agent")
+	if err := feature.Save(root, feature.Metadata{
+		Name: "demo", Key: "demo", Branch: "feature/demo", Revision: 1,
+		Repositories: []feature.RepoMeta{{
+			Name: "repo", WorktreePath: worktreeRel, Branch: "feature/demo", BaseBranch: "main", Revision: 1,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := savePrepareMetadata(root, "demo", PrepareMetadata{
+		Feature: "demo",
+		Repositories: []PrepareRepo{{
+			Name: "repo", Source: worktree, Agent: agentDir, WorktreeRevision: 1,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RestoreFromWorktree(root, cfg, "demo", "repo", "file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(agentDir, "file.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "worktree" {
+		t.Fatalf("agent file = %q, want worktree", got)
+	}
+}
+
+func TestRestoreFromWorktreeRemovesAgentCopyWhenWorktreeFileMissing(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default(root, "ws")
+	worktreeRel := filepath.ToSlash(filepath.Join("feature", "demo", "repo"))
+	worktree := filepath.Join(root, filepath.FromSlash(worktreeRel))
+	agentDir := config.AgentPath(root, "demo", "repo")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeIndexedFile(t, filepath.Join(agentDir, "removed.txt"), "agent")
+	if err := feature.Save(root, feature.Metadata{
+		Name: "demo", Key: "demo", Branch: "feature/demo", Revision: 1,
+		Repositories: []feature.RepoMeta{{
+			Name: "repo", WorktreePath: worktreeRel, Branch: "feature/demo", BaseBranch: "main", Revision: 1,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := savePrepareMetadata(root, "demo", PrepareMetadata{
+		Feature: "demo",
+		Repositories: []PrepareRepo{{
+			Name: "repo", Source: worktree, Agent: agentDir, WorktreeRevision: 1,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RestoreFromWorktree(root, cfg, "demo", "repo", "removed.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(agentDir, "removed.txt")); !os.IsNotExist(err) {
+		t.Fatalf("agent file still exists, stat err = %v", err)
+	}
+}
+
 func TestCompareIndexedFallsBackWithoutIndex(t *testing.T) {
 	agentDir := filepath.Join(t.TempDir(), "agent")
 	worktreeDir := filepath.Join(t.TempDir(), "worktree")

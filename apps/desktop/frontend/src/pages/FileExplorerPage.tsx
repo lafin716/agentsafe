@@ -8,7 +8,9 @@ import {
   Folder,
   FolderOpen,
   RefreshCw,
+  Terminal as TerminalIcon,
   Trash2,
+  X,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
 import type { Config, WorkspaceTreeNode } from "@/lib/types";
@@ -24,10 +26,17 @@ import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
+import { TerminalPanel } from "@/components/TerminalPanel";
 
 interface Props {
   config: Config | null;
 }
+
+type TerminalTab = {
+  id: string;
+  title: string;
+  path: string;
+};
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -66,6 +75,8 @@ export function FileExplorerPage({ config }: Props) {
   const [selected, setSelected] = useState<WorkspaceTreeNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [terminals, setTerminals] = useState<TerminalTab[]>([]);
+  const [activeTab, setActiveTab] = useState("main");
 
   const loadRoot = useCallback(async () => {
     if (!config) return;
@@ -164,6 +175,44 @@ export function FileExplorerPage({ config }: Props) {
     }
   }
 
+  async function openEmbeddedTerminal() {
+    if (!selected) return;
+    try {
+      setBusy(true);
+      const session = await api.TerminalOpen(selected.path);
+      setTerminals((prev) => {
+        if (prev.some((tab) => tab.id === session.id)) return prev;
+        return [...prev, session];
+      });
+      setActiveTab(session.id);
+      notify(t("toast.openedEmbeddedTerminal", { path: session.path }), "success");
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function closeTerminal(id: string) {
+    try {
+      await api.TerminalClose(id);
+    } catch {
+      /* terminal may already be closed */
+    }
+    setTerminals((prev) => prev.filter((tab) => tab.id !== id));
+    setActiveTab((prev) => (prev === id ? "main" : prev));
+  }
+
+  function renameTerminal(id: string) {
+    const tab = terminals.find((item) => item.id === id);
+    if (!tab) return;
+    const next = window.prompt(t("explorer.terminalRenamePrompt"), tab.title);
+    if (!next?.trim()) return;
+    setTerminals((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, title: next.trim() } : item))
+    );
+  }
+
   function TreeItem({ node, depth }: { node: WorkspaceTreeNode; depth: number }) {
     const open = expanded.has(node.path);
     const active = selected?.path === node.path;
@@ -198,6 +247,14 @@ export function FileExplorerPage({ config }: Props) {
             <File className="size-4 text-muted-foreground" />
           )}
           <span className="truncate">{node.name}</span>
+          {node.branch && (
+            <span
+              className="ml-auto max-w-32 truncate rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground"
+              title={node.featureName ? `${node.featureName}: ${node.branch}` : node.branch}
+            >
+              {node.branch}
+            </span>
+          )}
         </button>
         {node.isDir && open && (
           <div>
@@ -227,47 +284,103 @@ export function FileExplorerPage({ config }: Props) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{selected?.name ?? t("explorer.noneSelected")}</CardTitle>
-          <CardDescription className="break-all font-mono">
-            {selected?.path ?? t("explorer.selectHint")}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {selected && (
-            <>
-              <div className="grid gap-2 rounded-md border p-3 text-sm md:grid-cols-2">
-                <div>
-                  <span className="text-muted-foreground">{t("explorer.type")}:</span>{" "}
-                  {selected.isDir ? t("explorer.folder") : t("explorer.file")}
-                </div>
-                <div>
-                  <span className="text-muted-foreground">{t("explorer.size")}:</span>{" "}
-                  {selected.isDir ? "—" : formatSize(selected.size)}
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-muted-foreground">{t("explorer.modified")}:</span>{" "}
-                  {formatDate(selected.modTime)}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={openSelected} disabled={busy}>
-                  <FolderOpen className="size-4" /> {t("explorer.open")}
-                </Button>
-                <Button variant="outline" onClick={openVSCode} disabled={busy}>
-                  <Code2 className="size-4" /> {t("explorer.openVSCode")}
-                </Button>
-                <Button variant="outline" onClick={copyPath} disabled={busy}>
-                  <Copy className="size-4" /> {t("feature.copyPath")}
-                </Button>
-                <Button variant="destructive" onClick={removeSelected} disabled={busy}>
-                  <Trash2 className="size-4" /> {t("common.delete")}
-                </Button>
-              </div>
-            </>
-          )}
-        </CardContent>
+      <Card className="min-w-0 overflow-hidden">
+        <div className="flex items-center gap-1 border-b bg-muted/30 px-3 pt-2">
+          <button
+            type="button"
+            className={cn(
+              "rounded-t-md border border-b-0 px-3 py-1.5 text-sm",
+              activeTab === "main" ? "bg-background font-medium" : "bg-transparent text-muted-foreground"
+            )}
+            onClick={() => setActiveTab("main")}
+          >
+            {t("explorer.mainTab")}
+          </button>
+          {terminals.map((tab) => (
+            <div
+              key={tab.id}
+              className={cn(
+                "group flex max-w-56 items-center gap-2 rounded-t-md border border-b-0 px-3 py-1.5 text-sm",
+                activeTab === tab.id ? "bg-background font-medium" : "bg-transparent text-muted-foreground"
+              )}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                renameTerminal(tab.id);
+              }}
+              title={tab.path}
+            >
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-2"
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <TerminalIcon className="size-3.5 shrink-0" />
+                <span className="truncate">{tab.title}</span>
+              </button>
+              <button
+                type="button"
+                className="rounded p-0.5 opacity-60 hover:bg-accent hover:opacity-100"
+                onClick={() => void closeTerminal(tab.id)}
+                title={t("common.close")}
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+        {activeTab === "main" ? (
+          <>
+            <CardHeader>
+              <CardTitle>{selected?.name ?? t("explorer.noneSelected")}</CardTitle>
+              <CardDescription className="break-all font-mono">
+                {selected?.path ?? t("explorer.selectHint")}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {selected && (
+                <>
+                  <div className="grid gap-2 rounded-md border p-3 text-sm md:grid-cols-2">
+                    <div>
+                      <span className="text-muted-foreground">{t("explorer.type")}:</span>{" "}
+                      {selected.isDir ? t("explorer.folder") : t("explorer.file")}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">{t("explorer.size")}:</span>{" "}
+                      {selected.isDir ? "—" : formatSize(selected.size)}
+                    </div>
+                    <div className="md:col-span-2">
+                      <span className="text-muted-foreground">{t("explorer.modified")}:</span>{" "}
+                      {formatDate(selected.modTime)}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={openSelected} disabled={busy}>
+                      <FolderOpen className="size-4" /> {t("explorer.open")}
+                    </Button>
+                    <Button variant="outline" onClick={openVSCode} disabled={busy}>
+                      <Code2 className="size-4" /> {t("explorer.openVSCode")}
+                    </Button>
+                    <Button variant="outline" onClick={openEmbeddedTerminal} disabled={busy}>
+                      <TerminalIcon className="size-4" /> {t("explorer.openTerminal")}
+                    </Button>
+                    <Button variant="outline" onClick={copyPath} disabled={busy}>
+                      <Copy className="size-4" /> {t("feature.copyPath")}
+                    </Button>
+                    <Button variant="destructive" onClick={removeSelected} disabled={busy}>
+                      <Trash2 className="size-4" /> {t("common.delete")}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </>
+        ) : (
+          terminals.map((tab) =>
+            activeTab === tab.id ? (
+              <TerminalPanel key={tab.id} id={tab.id} path={tab.path} />
+            ) : null
+          )
+        )}
       </Card>
     </div>
   );

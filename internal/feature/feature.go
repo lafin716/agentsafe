@@ -507,7 +507,12 @@ func ConfigureRepositoryWorktree(root string, cfg config.Config, featureName, re
 		base = meta.Repositories[existingIndex].BaseBranch
 	}
 	if base == "" {
-		base = cfg.Git.DefaultBaseBranch
+		current, err := aggit.CurrentBranch(config.RepoPath(root, repoName))
+		if err != nil || current == "" {
+			base = cfg.Git.DefaultBaseBranch
+		} else {
+			base = current
+		}
 	}
 	branch := meta.Branch
 	if branch == "" {
@@ -583,6 +588,12 @@ func samePath(a, b string) bool {
 	bb, errB := filepath.Abs(filepath.Clean(b))
 	if errA != nil || errB != nil {
 		return false
+	}
+	if realA, err := filepath.EvalSymlinks(aa); err == nil {
+		aa = realA
+	}
+	if realB, err := filepath.EvalSymlinks(bb); err == nil {
+		bb = realB
 	}
 	if runtime.GOOS == "windows" {
 		return strings.EqualFold(aa, bb)

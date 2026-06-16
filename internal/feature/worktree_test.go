@@ -336,6 +336,34 @@ func TestConfigureRepositoryWorktreeMovesFeatureBranchOutOfMainClone(t *testing.
 	}
 }
 
+func TestCreateUsesCurrentRepositoryBranchWhenBaseAndDefaultAreEmpty(t *testing.T) {
+	root, cfg := testWorkspace(t, "repo")
+	cfg.Repositories[0].DefaultBranch = ""
+	repoPath := config.RepoPath(root, "repo")
+	testGit(t, repoPath, "checkout", "-b", "release")
+	if err := os.WriteFile(filepath.Join(repoPath, "release.txt"), []byte("release"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, repoPath, "add", ".")
+	testGit(t, repoPath, "commit", "-m", "release")
+
+	if err := CreateWithOptions(root, cfg, "demo", CreateOptions{
+		ExistingBranch: ExistingBranchError,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := Load(root, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Repositories) != 1 || meta.Repositories[0].BaseBranch != "release" {
+		t.Fatalf("base branch = %+v, want release", meta.Repositories)
+	}
+	if _, err := os.Stat(filepath.Join(config.WorktreePath(root, "demo", "repo"), "release.txt")); err != nil {
+		t.Fatalf("worktree was not based on current branch: %v", err)
+	}
+}
+
 func testWorkspace(t *testing.T, repoName string) (string, config.Config) {
 	t.Helper()
 	root := t.TempDir()
