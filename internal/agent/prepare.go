@@ -12,6 +12,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/fsutil"
 	"github.com/agentsafe/agentsafe/internal/output"
+	"github.com/agentsafe/agentsafe/internal/wttemplate"
 )
 
 type PrepareMetadata struct {
@@ -112,6 +113,9 @@ func Init(root string, cfg config.Config, featureName string, opt PrepareOptions
 		meta.Repositories = append(meta.Repositories, pr)
 		output.Printf("[%s]\ncopied: %d files\nignored: %d files\nmasked: %d files\n\n", pr.Name, pr.CopiedFiles, pr.IgnoredFiles, len(pr.MaskedFiles))
 	}
+	if err := wttemplate.ApplyAgent(root, fm.FolderKey(), agentTemplateRepos(root, fm.FolderKey(), fm.Repositories)); err != nil {
+		return err
+	}
 	return savePrepareMetadata(root, featureName, meta)
 }
 
@@ -161,10 +165,24 @@ func PrepareRepository(root string, cfg config.Config, featureName, repoName str
 	if allRepositoriesCurrent(fm, meta) {
 		meta.FeatureRevision = fm.Revision
 	}
+	if err := wttemplate.ApplyToAgentRepos(root, agentTemplateRepos(root, fm.FolderKey(), []feature.RepoMeta{*repoMeta})); err != nil {
+		return PrepareMetadata{}, err
+	}
 	if err := savePrepareMetadata(root, featureName, meta); err != nil {
 		return PrepareMetadata{}, err
 	}
 	return meta, nil
+}
+
+func agentTemplateRepos(root, folderKey string, repos []feature.RepoMeta) []wttemplate.Repo {
+	out := make([]wttemplate.Repo, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, wttemplate.Repo{
+			Name:         r.Name,
+			WorktreePath: config.AgentPath(root, folderKey, r.Name),
+		})
+	}
+	return out
 }
 
 func prepareRepository(root string, cfg config.Config, folderKey string, r feature.RepoMeta, opt PrepareOptions, secRoot SecurityFile) (PrepareRepo, error) {

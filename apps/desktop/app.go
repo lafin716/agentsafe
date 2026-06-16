@@ -26,6 +26,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/registry"
 	"github.com/agentsafe/agentsafe/internal/repo"
+	"github.com/agentsafe/agentsafe/internal/wttemplate"
 )
 
 // App exposes agentsafe's core packages to the Wails frontend.
@@ -177,6 +178,176 @@ func (a *App) GetConfig() (config.Config, error) {
 		return config.Config{}, err
 	}
 	return config.Load(root)
+}
+
+// ---- Worktree templates ----
+
+func (a *App) ListWorktreeTemplates() ([]wttemplate.Template, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	return wttemplate.List(root)
+}
+
+func (a *App) ImportWorktreeTemplateFiles() ([]wttemplate.Template, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select worktree template files",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return []wttemplate.Template{}, nil
+	}
+	return wttemplate.ImportFiles(root, paths)
+}
+
+func (a *App) ImportWorktreeTemplateFolder() (wttemplate.Template, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return wttemplate.Template{}, err
+	}
+	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select worktree template folder",
+	})
+	if err != nil || path == "" {
+		return wttemplate.Template{}, err
+	}
+	return wttemplate.ImportFolder(root, path)
+}
+
+func (a *App) UpdateWorktreeTemplate(t wttemplate.Template) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return wttemplate.Update(root, t)
+}
+
+func (a *App) DeleteWorktreeTemplate(id string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return wttemplate.Delete(root, id)
+}
+
+func (a *App) OpenWorktreeTemplateFolder() (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	dir := wttemplate.BaseDir(root)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := revealInFileManager(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func (a *App) ApplyWorktreeTemplates(name string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return err
+	}
+	return a.runTask("Apply worktree templates: "+name, func() error {
+		return wttemplate.Apply(root, fm.FolderKey(), desktopWorktreeTemplateRepos(root, fm.Repositories))
+	})
+}
+
+func (a *App) ApplyAgentTemplates(name string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return err
+	}
+	return a.runTask("Apply agent templates: "+name, func() error {
+		return wttemplate.ApplyAgent(root, fm.FolderKey(), desktopAgentTemplateRepos(root, fm.FolderKey(), fm.Repositories))
+	})
+}
+
+// ---- Workspace explorer ----
+
+type WorkspaceTreeNode struct {
+	Name     string              `json:"name"`
+	Path     string              `json:"path"`
+	RelPath  string              `json:"relPath"`
+	IsDir    bool                `json:"isDir"`
+	Size     int64               `json:"size"`
+	ModTime  string              `json:"modTime"`
+	Children []WorkspaceTreeNode `json:"children"`
+}
+
+func (a *App) WorkspaceTree(path string) (WorkspaceTreeNode, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return WorkspaceTreeNode{}, err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return WorkspaceTreeNode{}, err
+	}
+	return treeNode(root, target)
+}
+
+func (a *App) OpenPath(path string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return "", err
+	}
+	if err := openOSPath(target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func (a *App) OpenPathVSCode(path string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command("code", target)
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func (a *App) DeleteWorkspacePath(path string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return err
+	}
+	if err := ensureExplorerDeleteAllowed(root, target); err != nil {
+		return err
+	}
+	return fsutil.ForceRemoveAll(target)
 }
 
 // ---- Repositories ----
@@ -1188,6 +1359,11 @@ func (a *App) OpenURL(url string) error {
 	return nil
 }
 
+// CopyText copies arbitrary text to the system clipboard.
+func (a *App) CopyText(text string) error {
+	return runtime.ClipboardSetText(a.ctx, text)
+}
+
 // findRepo returns the config entry for a repo by name.
 func findRepo(cfg config.Config, name string) (config.Repository, bool) {
 	for _, r := range cfg.Repositories {
@@ -1314,6 +1490,72 @@ func (a *App) DiagnoseGit() (GitDiag, error) {
 
 // ---- Editor ----
 
+// FeaturePathRepo contains the resolved paths for one repository in a feature.
+type FeaturePathRepo struct {
+	Name         string `json:"name"`
+	WorktreePath string `json:"worktreePath"`
+	AgentPath    string `json:"agentPath"`
+}
+
+// FeaturePathsResult contains the resolved feature-level and per-repository
+// worktree/agent paths for display and copy actions in the desktop UI.
+type FeaturePathsResult struct {
+	Feature      string            `json:"feature"`
+	WorktreePath string            `json:"worktreePath"`
+	AgentPath    string            `json:"agentPath"`
+	Repositories []FeaturePathRepo `json:"repositories"`
+}
+
+// FeaturePaths resolves a feature's worktree and agent paths without opening
+// anything. The paths are absolute OS-native filesystem paths.
+func (a *App) FeaturePaths(name string) (FeaturePathsResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return FeaturePathsResult{}, err
+	}
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return FeaturePathsResult{}, err
+	}
+	key := fm.FolderKey()
+	out := FeaturePathsResult{
+		Feature:      fm.Name,
+		WorktreePath: filepath.Join(root, "feature", key),
+		AgentPath:    filepath.Join(root, "agent", key),
+		Repositories: []FeaturePathRepo{},
+	}
+	for _, r := range fm.Repositories {
+		out.Repositories = append(out.Repositories, FeaturePathRepo{
+			Name:         r.Name,
+			WorktreePath: filepath.Join(root, filepath.FromSlash(r.WorktreePath)),
+			AgentPath:    config.AgentPath(root, key, r.Name),
+		})
+	}
+	return out, nil
+}
+
+func desktopWorktreeTemplateRepos(root string, repos []feature.RepoMeta) []wttemplate.Repo {
+	out := make([]wttemplate.Repo, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, wttemplate.Repo{
+			Name:         r.Name,
+			WorktreePath: filepath.Join(root, filepath.FromSlash(r.WorktreePath)),
+		})
+	}
+	return out
+}
+
+func desktopAgentTemplateRepos(root, featureKey string, repos []feature.RepoMeta) []wttemplate.Repo {
+	out := make([]wttemplate.Repo, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, wttemplate.Repo{
+			Name:         r.Name,
+			WorktreePath: config.AgentPath(root, featureKey, r.Name),
+		})
+	}
+	return out
+}
+
 // OpenWorkspaceFolder opens the current workspace root in the system file
 // manager.
 func (a *App) OpenWorkspaceFolder() (string, error) {
@@ -1339,6 +1581,127 @@ func revealInFileManager(dir string) error {
 		cmd = exec.Command("xdg-open", dir)
 	}
 	return cmd.Start()
+}
+
+func openOSPath(path string) error {
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", path)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	return cmd.Start()
+}
+
+func workspacePath(root, path string) (string, error) {
+	target := root
+	if strings.TrimSpace(path) != "" {
+		if filepath.IsAbs(path) {
+			target = path
+		} else {
+			target = filepath.Join(root, path)
+		}
+	}
+	target, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if err := fsutil.EnsureInside(root, target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
+func treeNode(root, target string) (WorkspaceTreeNode, error) {
+	info, err := os.Stat(target)
+	if err != nil {
+		return WorkspaceTreeNode{}, err
+	}
+	rel, _ := filepath.Rel(root, target)
+	if rel == "." {
+		rel = ""
+	}
+	node := WorkspaceTreeNode{
+		Name:    filepath.Base(target),
+		Path:    target,
+		RelPath: filepath.ToSlash(rel),
+		IsDir:   info.IsDir(),
+		Size:    info.Size(),
+		ModTime: info.ModTime().Format(time.RFC3339),
+	}
+	if !info.IsDir() {
+		return node, nil
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		return node, err
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].IsDir() != entries[j].IsDir() {
+			return entries[i].IsDir()
+		}
+		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
+	})
+	node.Children = []WorkspaceTreeNode{}
+	for _, entry := range entries {
+		childPath := filepath.Join(target, entry.Name())
+		childInfo, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		childRel, _ := filepath.Rel(root, childPath)
+		node.Children = append(node.Children, WorkspaceTreeNode{
+			Name:    entry.Name(),
+			Path:    childPath,
+			RelPath: filepath.ToSlash(childRel),
+			IsDir:   entry.IsDir(),
+			Size:    childInfo.Size(),
+			ModTime: childInfo.ModTime().Format(time.RFC3339),
+		})
+	}
+	return node, nil
+}
+
+func ensureExplorerDeleteAllowed(root, target string) error {
+	if sameAbsPath(root, target) {
+		return fmt.Errorf("cannot delete the workspace root")
+	}
+	protected := []string{
+		filepath.Join(root, config.DirName),
+		filepath.Join(root, config.DirName, config.ConfigFileName),
+		filepath.Join(root, config.DirName, "features"),
+		filepath.Join(root, config.DirName, "sessions"),
+		filepath.Join(root, config.DirName, "history"),
+	}
+	for _, p := range protected {
+		if sameAbsPath(target, p) || pathContains(target, p) || pathContains(p, target) {
+			return fmt.Errorf("protected agentsafe path cannot be deleted: %s", target)
+		}
+	}
+	return nil
+}
+
+func pathContains(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func sameAbsPath(a, b string) bool {
+	aa, errA := filepath.Abs(filepath.Clean(a))
+	bb, errB := filepath.Abs(filepath.Clean(b))
+	if errA != nil || errB != nil {
+		return false
+	}
+	if goruntime.GOOS == "windows" {
+		return strings.EqualFold(aa, bb)
+	}
+	return aa == bb
 }
 
 // launchProgram opens path with program. A program picked via SelectProgram is

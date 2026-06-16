@@ -13,6 +13,7 @@ import (
 	aggit "github.com/agentsafe/agentsafe/internal/git"
 	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/ui"
+	"github.com/agentsafe/agentsafe/internal/wttemplate"
 )
 
 type Metadata struct {
@@ -152,7 +153,10 @@ func CreateWithOptions(root string, cfg config.Config, name string, opt CreateOp
 		}
 		meta.Repositories = append(meta.Repositories, rm)
 	}
-	return Save(root, meta)
+	if err := Save(root, meta); err != nil {
+		return err
+	}
+	return wttemplate.Apply(root, key, templateRepos(root, meta.Repositories))
 }
 
 // CheckCreate inspects every configured repository before feature creation.
@@ -557,7 +561,21 @@ func ConfigureRepositoryWorktree(root string, cfg config.Config, featureName, re
 	if err := Save(root, meta); err != nil {
 		return RepoMeta{}, err
 	}
+	if err := wttemplate.ApplyToRepos(root, templateRepos(root, []RepoMeta{rm})); err != nil {
+		return RepoMeta{}, err
+	}
 	return rm, nil
+}
+
+func templateRepos(root string, repos []RepoMeta) []wttemplate.Repo {
+	out := make([]wttemplate.Repo, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, wttemplate.Repo{
+			Name:         r.Name,
+			WorktreePath: filepath.Join(root, filepath.FromSlash(r.WorktreePath)),
+		})
+	}
+	return out
 }
 
 func samePath(a, b string) bool {

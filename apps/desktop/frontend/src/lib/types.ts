@@ -55,6 +55,35 @@ export interface Config {
   GitHub: GitHubConfig;
 }
 
+export type WorktreeTemplateTargetMode =
+  | "featureRoot"
+  | "allRepos"
+  | "selectedRepos"
+  | "agentRoot"
+  | "agentAllRepos"
+  | "agentSelectedRepos"
+  | string;
+
+export interface WorktreeTemplate {
+  id: string;
+  name: string;
+  sourcePath: string;
+  enabled: boolean;
+  targetMode: WorktreeTemplateTargetMode;
+  repoNames: string[] | null;
+  overwrite: boolean;
+}
+
+export interface WorkspaceTreeNode {
+  name: string;
+  path: string;
+  relPath: string;
+  isDir: boolean;
+  size: number;
+  modTime: string;
+  children: WorkspaceTreeNode[] | null;
+}
+
 export interface FeatureEntry {
   name: string;
   branch: string;
@@ -172,6 +201,19 @@ export interface FeatureMetadata {
   revision?: number;
   createdAt: string;
   repositories: RepoMeta[] | null;
+}
+
+export interface FeaturePathRepo {
+  name: string;
+  worktreePath: string;
+  agentPath: string;
+}
+
+export interface FeaturePathsResult {
+  feature: string;
+  worktreePath: string;
+  agentPath: string;
+  repositories: FeaturePathRepo[] | null;
 }
 
 export interface PrepareRepo {

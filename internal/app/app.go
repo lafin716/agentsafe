@@ -15,6 +15,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/repo"
+	"github.com/agentsafe/agentsafe/internal/wttemplate"
 )
 
 type simpleResult struct {
@@ -53,7 +54,7 @@ func NewRootCommand() *cobra.Command {
 		output.Set(f)
 		return nil
 	}
-	rootCmd.AddCommand(initCmd(), repoCmd(), pullCmd(), featureCmd(), statusCmd(), agentCmd(), commitCmd(), pushCmd(), mrCmd())
+	rootCmd.AddCommand(initCmd(), repoCmd(), pullCmd(), featureCmd(), worktreeTemplateCmd(), statusCmd(), agentCmd(), commitCmd(), pushCmd(), mrCmd())
 	return rootCmd
 }
 
@@ -363,6 +364,168 @@ whether to error, reuse it, or recreate the local branch from the base.`,
 
 	c.AddCommand(create, check, list, rebase, del, repoWorktree)
 	return c
+}
+
+func worktreeTemplateCmd() *cobra.Command {
+	c := &cobra.Command{Use: "worktree-template", Short: "Manage files copied into new worktrees"}
+	list := &cobra.Command{Use: "list", Short: "List worktree templates", RunE: func(cmd *cobra.Command, args []string) error {
+		root, _, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		items, err := wttemplate.List(root)
+		if err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(struct {
+				Templates []wttemplate.Template `json:"templates" yaml:"templates"`
+			}{Templates: items})
+		}
+		for _, t := range items {
+			state := "enabled"
+			if !t.Enabled {
+				state = "disabled"
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\n", t.ID, t.Name, t.TargetMode, state)
+		}
+		return nil
+	}}
+
+	var target string
+	var repos []string
+	var overwrite bool
+	var disabled bool
+	applyFlags := func(cmd *cobra.Command) {
+		cmd.Flags().StringVar(&target, "target", wttemplate.TargetAllRepos, "target: featureRoot, allRepos, selectedRepos, agentRoot, agentAllRepos, or agentSelectedRepos")
+		cmd.Flags().StringSliceVar(&repos, "repo", nil, "repository name for selectedRepos/agentSelectedRepos (repeat or comma-separate)")
+		cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
+		cmd.Flags().BoolVar(&disabled, "disabled", false, "import as disabled")
+	}
+	normalizeAdded := func(root string, items []wttemplate.Template) error {
+		for i := range items {
+			items[i].TargetMode = target
+			items[i].RepoNames = repos
+			items[i].Overwrite = overwrite
+			items[i].Enabled = !disabled
+			if err := wttemplate.Update(root, items[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	addFile := &cobra.Command{Use: "add-file PATH [PATH...]", Short: "Import template file(s)", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, _, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		items, err := wttemplate.ImportFiles(root, args)
+		if err != nil {
+			return err
+		}
+		if err := normalizeAdded(root, items); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(struct {
+				Templates []wttemplate.Template `json:"templates" yaml:"templates"`
+			}{Templates: items})
+		}
+		fmt.Printf("Imported %d template item(s)\n", len(items))
+		return nil
+	}}
+	applyFlags(addFile)
+
+	addFolder := &cobra.Command{Use: "add-folder PATH", Short: "Import a template folder", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, _, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		item, err := wttemplate.ImportFolder(root, args[0])
+		if err != nil {
+			return err
+		}
+		if err := normalizeAdded(root, []wttemplate.Template{item}); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(item)
+		}
+		fmt.Printf("Imported template %s\n", item.Name)
+		return nil
+	}}
+	applyFlags(addFolder)
+
+	del := &cobra.Command{Use: "delete ID", Short: "Delete a worktree template", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, _, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		if err := wttemplate.Delete(root, args[0]); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok", Message: "deleted worktree template " + args[0]})
+		}
+		fmt.Printf("Deleted worktree template %s\n", args[0])
+		return nil
+	}}
+	var applyTarget string
+	apply := &cobra.Command{Use: "apply FEATURE", Short: "Apply templates to an existing worktree/agent workspace", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, _, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		fm, err := feature.Load(root, args[0])
+		if err != nil {
+			return err
+		}
+		switch applyTarget {
+		case "worktree":
+			err = wttemplate.Apply(root, fm.FolderKey(), cliWorktreeTemplateRepos(root, fm.Repositories))
+		case "agent":
+			err = wttemplate.ApplyAgent(root, fm.FolderKey(), cliAgentTemplateRepos(root, fm.FolderKey(), fm.Repositories))
+		case "all":
+			if err = wttemplate.Apply(root, fm.FolderKey(), cliWorktreeTemplateRepos(root, fm.Repositories)); err == nil {
+				err = wttemplate.ApplyAgent(root, fm.FolderKey(), cliAgentTemplateRepos(root, fm.FolderKey(), fm.Repositories))
+			}
+		default:
+			return fmt.Errorf("invalid apply target %q (expected worktree, agent, or all)", applyTarget)
+		}
+		if err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok", Message: "templates applied"})
+		}
+		fmt.Printf("Applied templates to %s\n", args[0])
+		return nil
+	}}
+	apply.Flags().StringVar(&applyTarget, "target", "all", "apply target: worktree, agent, or all")
+	c.AddCommand(list, addFile, addFolder, del, apply)
+	return c
+}
+
+func cliWorktreeTemplateRepos(root string, repos []feature.RepoMeta) []wttemplate.Repo {
+	out := make([]wttemplate.Repo, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, wttemplate.Repo{
+			Name:         r.Name,
+			WorktreePath: filepath.Join(root, filepath.FromSlash(r.WorktreePath)),
+		})
+	}
+	return out
+}
+
+func cliAgentTemplateRepos(root, featureKey string, repos []feature.RepoMeta) []wttemplate.Repo {
+	out := make([]wttemplate.Repo, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, wttemplate.Repo{
+			Name:         r.Name,
+			WorktreePath: config.AgentPath(root, featureKey, r.Name),
+		})
+	}
+	return out
 }
 
 func statusCmd() *cobra.Command {

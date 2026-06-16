@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Archive,
+  FileText,
   FolderGit2,
+  FolderOpen,
   History,
   LayoutGrid,
   RefreshCw,
@@ -22,12 +24,16 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { AgentSecurityPage } from "@/pages/AgentSecurityPage";
 import { BackupsPage } from "@/pages/BackupsPage";
 import { HistoryPage } from "@/pages/HistoryPage";
+import { WorktreeTemplatesPage } from "@/pages/WorktreeTemplatesPage";
+import { FileExplorerPage } from "@/pages/FileExplorerPage";
 import agentsafeLogo from "@/assets/agentsafe-logo.png";
 
 type View =
   | { kind: "workspace" }
   | { kind: "features" }
   | { kind: "feature"; name: string }
+  | { kind: "templates" }
+  | { kind: "explorer" }
   | { kind: "agentsec" }
   | { kind: "backups" }
   | { kind: "history"; feature?: string }
@@ -79,6 +85,8 @@ export default function App() {
   const nav = [
     { id: "workspace" as const, label: t("nav.workspace"), icon: FolderGit2 },
     { id: "features" as const, label: t("nav.features"), icon: LayoutGrid },
+    { id: "templates" as const, label: t("nav.worktreeTemplates"), icon: FileText },
+    { id: "explorer" as const, label: t("nav.fileExplorer"), icon: FolderOpen },
     {
       id: "agentsec" as const,
       label: t("nav.agentSecurity"),
@@ -115,6 +123,8 @@ export default function App() {
               (item.id === "features" && view.kind === "feature");
             const disabled =
               (item.id === "features" ||
+                item.id === "templates" ||
+                item.id === "explorer" ||
                 item.id === "agentsec" ||
                 item.id === "backups" ||
                 item.id === "history") &&
@@ -146,6 +156,8 @@ export default function App() {
             {view.kind === "workspace" && t("header.workspace")}
             {view.kind === "features" && t("header.features")}
             {view.kind === "feature" && t("header.feature", { name: view.name })}
+            {view.kind === "templates" && t("header.worktreeTemplates")}
+            {view.kind === "explorer" && t("header.fileExplorer")}
             {view.kind === "agentsec" && t("header.agentSecurity")}
             {view.kind === "backups" && t("header.backups")}
             {view.kind === "history" && t("header.history")}
@@ -188,6 +200,8 @@ export default function App() {
               onViewHistory={(feature) => setView({ kind: "history", feature })}
             />
           )}
+          {view.kind === "templates" && <WorktreeTemplatesPage config={config} />}
+          {view.kind === "explorer" && <FileExplorerPage config={config} />}
           {view.kind === "agentsec" && <AgentSecurityPage config={config} />}
           {view.kind === "history" && (
             <HistoryPage

@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Boxes,
   ChevronDown,
+  Copy,
   ExternalLink,
   FolderOpen,
   GitCommit,
@@ -25,6 +26,7 @@ import type {
   DiffResult,
   FeatureDeleteResult,
   FeatureMetadata,
+  FeaturePathsResult,
   FeatureStatusResult,
   RepoFileStatus,
   RequestResult,
@@ -68,6 +70,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [dangerOpen, setDangerOpen] = useState(false);
   const [featureMeta, setFeatureMeta] = useState<FeatureMetadata | null>(null);
+  const [featurePaths, setFeaturePaths] = useState<FeaturePathsResult | null>(null);
   const [configuredRepos, setConfiguredRepos] = useState<Repository[]>([]);
   const [repoPolicy, setRepoPolicy] = useState("reuse");
 
@@ -165,8 +168,13 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
 
   const loadRepoManager = useCallback(async () => {
     try {
-      const [meta, repos] = await Promise.all([api.LoadFeature(name), api.ListRepos()]);
+      const [meta, repos, paths] = await Promise.all([
+        api.LoadFeature(name),
+        api.ListRepos(),
+        api.FeaturePaths(name),
+      ]);
       setFeatureMeta(meta);
+      setFeaturePaths(paths);
       setConfiguredRepos(repos ?? []);
     } catch (e) {
       notify(errMessage(e), "error");
@@ -179,6 +187,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     setDiffLoaded(false);
     setDiffAutoAttempted(false);
     setPrepared(null);
+    setFeaturePaths(null);
   }, [name]);
 
   useEffect(() => {
@@ -316,6 +325,33 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     run(async () => {
       const p = await api.OpenRepoFolder(name, repo);
       notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  const openFeatureFolder = () =>
+    run(async () => {
+      const p = await api.OpenFeatureFolder(name);
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  const copyPath = (path?: string) =>
+    run(async () => {
+      if (!path) return;
+      await api.CopyText(path);
+      notify(t("toast.copiedPath"), "success");
+    });
+
+  const applyWorktreeTemplates = () =>
+    run(async () => {
+      await api.ApplyWorktreeTemplates(name);
+      notify(t("toast.templatesApplied"), "success");
+      await Promise.all([loadStatus(), loadRepoManager()]);
+    });
+
+  const applyAgentTemplates = () =>
+    run(async () => {
+      await api.ApplyAgentTemplates(name);
+      notify(t("toast.templatesApplied"), "success");
+      await loadDiff(true);
     });
 
   const openRepoProgram = (repo: string) =>
@@ -479,6 +515,9 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     { id: "agent", label: t("feature.tabAgent") },
     { id: "deliver", label: t("feature.tabDeliver") },
   ];
+  const repoPathsByName = new Map(
+    (featurePaths?.repositories ?? []).map((repo) => [repo.name, repo])
+  );
 
   return (
     <div className="space-y-5">
@@ -507,13 +546,45 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       {tab === "status" && (
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
-            <div>
+            <div className="min-w-0">
               <CardTitle>{status?.feature ?? name}</CardTitle>
-              <CardDescription>
-                {t("feature.branchLabel", { branch: status?.branch ?? "—" })}
+              <CardDescription className="space-y-1">
+                <div>{t("feature.branchLabel", { branch: status?.branch ?? "—" })}</div>
+                {featurePaths?.worktreePath && (
+                  <div
+                    className="max-w-xl truncate font-mono text-xs"
+                    title={featurePaths.worktreePath}
+                  >
+                    {t("feature.worktreePath")}: {featurePaths.worktreePath}
+                  </div>
+                )}
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={openFeatureFolder}
+                disabled={busy || !featurePaths?.worktreePath}
+              >
+                <FolderOpen className="size-4" /> {t("feature.openWorktreeFolder")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => copyPath(featurePaths?.worktreePath)}
+                disabled={busy || !featurePaths?.worktreePath}
+              >
+                <Copy className="size-4" /> {t("feature.copyPath")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={applyWorktreeTemplates}
+                disabled={busy || statusLoading}
+              >
+                <Wand2 className="size-4" /> {t("feature.applyWorktreeTemplates")}
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -744,6 +815,26 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
               <CardDescription>{t("feature.agentDesc")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {featurePaths?.agentPath && (
+                <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-muted-foreground">
+                      {t("feature.agentPath")}
+                    </div>
+                    <div className="truncate font-mono text-xs" title={featurePaths.agentPath}>
+                      {featurePaths.agentPath}
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => copyPath(featurePaths.agentPath)}
+                    disabled={busy}
+                  >
+                    <Copy className="size-4" /> {t("feature.copyPath")}
+                  </Button>
+                </div>
+              )}
               {status?.agentNeedsPrepare && (
                 <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
                   {t("feature.agentNeedsPrepare")}
@@ -773,6 +864,13 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                     {diffLoading
                       ? t("feature.refreshingDiff")
                       : t("feature.refreshDiff")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={applyAgentTemplates}
+                    disabled={busy || diffLoading}
+                  >
+                    <Wand2 className="size-4" /> {t("feature.applyAgentTemplates")}
                   </Button>
                   <Button
                     variant="secondary"
@@ -816,40 +914,62 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                 label={t("feature.backupOnPrepare")}
               />
               <div className="divide-y rounded-md border">
-                {(status?.repositories ?? []).map((repo) => (
-                  <div
-                    key={repo.name}
-                    className="flex items-center justify-between gap-3 p-3"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-medium">{repo.name}</div>
-                      <div className="mt-1">
-                        {!repo.agentReady ? (
-                          <Badge variant="outline">{t("feature.agentRepoMissing")}</Badge>
-                        ) : repo.agentNeedsPrepare ? (
-                          <Badge variant="warning">{t("feature.agentRepoStale")}</Badge>
-                        ) : (
-                          <Badge variant="success">{t("feature.agentRepoReady")}</Badge>
+                {(status?.repositories ?? []).map((repo) => {
+                  const paths = repoPathsByName.get(repo.name);
+                  return (
+                    <div
+                      key={repo.name}
+                      className="flex items-center justify-between gap-3 p-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium">{repo.name}</div>
+                        {paths?.agentPath && (
+                          <div
+                            className="mt-1 truncate font-mono text-xs text-muted-foreground"
+                            title={paths.agentPath}
+                          >
+                            {t("feature.repoAgentPath")}: {paths.agentPath}
+                          </div>
                         )}
+                        <div className="mt-1">
+                          {!repo.agentReady ? (
+                            <Badge variant="outline">{t("feature.agentRepoMissing")}</Badge>
+                          ) : repo.agentNeedsPrepare ? (
+                            <Badge variant="warning">{t("feature.agentRepoStale")}</Badge>
+                          ) : (
+                            <Badge variant="success">{t("feature.agentRepoReady")}</Badge>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title={t("feature.copyPath")}
+                          disabled={busy || !paths?.agentPath}
+                          onClick={() => copyPath(paths?.agentPath)}
+                        >
+                          <Copy className="size-4" />
+                        </Button>
+                        <Button
+                          variant={repo.agentReady ? "outline" : "default"}
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => prepareRepo(repo.name)}
+                        >
+                          {preparingRepo === repo.name ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Wand2 className="size-4" />
+                          )}
+                          {repo.agentReady
+                            ? t("feature.agentRepoRegenerate")
+                            : t("feature.agentRepoPrepare")}
+                        </Button>
                       </div>
                     </div>
-                    <Button
-                      variant={repo.agentReady ? "outline" : "default"}
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => prepareRepo(repo.name)}
-                    >
-                      {preparingRepo === repo.name ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <Wand2 className="size-4" />
-                      )}
-                      {repo.agentReady
-                        ? t("feature.agentRepoRegenerate")
-                        : t("feature.agentRepoPrepare")}
-                    </Button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
                 </>
               )}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
+	"github.com/agentsafe/agentsafe/internal/wttemplate"
 )
 
 func TestPrepareRepositoryPreservesOtherRepositoriesAndMetadata(t *testing.T) {
@@ -74,5 +75,62 @@ func TestValidatePreparedRepositoriesRejectsMissingAndStale(t *testing.T) {
 	}
 	if err := validatePreparedRepositories(root, name, fm, pm, "one"); err != nil {
 		t.Fatalf("current filtered repository should pass: %v", err)
+	}
+}
+
+func TestPrepareAppliesAgentTemplates(t *testing.T) {
+	root := t.TempDir()
+	name := "demo"
+	repos := []feature.RepoMeta{
+		{Name: "one", WorktreePath: filepath.ToSlash(filepath.Join("feature", name, "one")), Revision: 1},
+		{Name: "two", WorktreePath: filepath.ToSlash(filepath.Join("feature", name, "two")), Revision: 1},
+	}
+	for _, repo := range repos {
+		path := filepath.Join(root, filepath.FromSlash(repo.WorktreePath))
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, repo.Name+".txt"), []byte(repo.Name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := feature.Save(root, feature.Metadata{Name: name, Key: name, Revision: 1, Repositories: repos}); err != nil {
+		t.Fatal(err)
+	}
+	rootTemplate := filepath.Join(root, "AGENTS.md")
+	repoTemplate := filepath.Join(root, "CLAUDE.md")
+	if err := os.WriteFile(rootTemplate, []byte("root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repoTemplate, []byte("repo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	added, err := wttemplate.ImportFiles(root, []string{rootTemplate, repoTemplate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added[0].TargetMode = wttemplate.TargetAgentRoot
+	if err := wttemplate.Update(root, added[0]); err != nil {
+		t.Fatal(err)
+	}
+	added[1].TargetMode = wttemplate.TargetAgentSelectedRepos
+	added[1].RepoNames = []string{"one"}
+	if err := wttemplate.Update(root, added[1]); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default(root, "test")
+	cfg.Agent.DefaultExclude = nil
+
+	if err := Init(root, cfg, name, PrepareOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "agent", name, "AGENTS.md")); err != nil {
+		t.Fatalf("agent root template missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(config.AgentPath(root, name, "one"), "CLAUDE.md")); err != nil {
+		t.Fatalf("selected repo template missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(config.AgentPath(root, name, "two"), "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Fatalf("unselected repo received template, err=%v", err)
 	}
 }

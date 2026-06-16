@@ -9,6 +9,7 @@ import type {
   FeatureDeleteResult,
   FeatureCreateCheck,
   FeatureMetadata,
+  FeaturePathsResult,
   RepoMeta,
   FeatureStatusResult,
   GitConfig,
@@ -23,15 +24,30 @@ import type {
   SecurityTemplate,
   SyncOptions,
   WorkspaceEntry,
+  WorkspaceTreeNode,
+  WorktreeTemplate,
 } from "./types";
 
 type AppBindings = {
   SelectWorkspaceDir(): Promise<string>;
   SelectProgram(): Promise<string>;
   OpenWorkspace(path: string): Promise<Config>;
+  CopyText(text: string): Promise<void>;
   InitWorkspace(path: string, name: string): Promise<Config>;
   CurrentRoot(): Promise<string>;
   GetConfig(): Promise<Config>;
+  ListWorktreeTemplates(): Promise<WorktreeTemplate[]>;
+  ImportWorktreeTemplateFiles(): Promise<WorktreeTemplate[]>;
+  ImportWorktreeTemplateFolder(): Promise<WorktreeTemplate>;
+  UpdateWorktreeTemplate(t: WorktreeTemplate): Promise<void>;
+  DeleteWorktreeTemplate(id: string): Promise<void>;
+  OpenWorktreeTemplateFolder(): Promise<string>;
+  ApplyWorktreeTemplates(name: string): Promise<void>;
+  ApplyAgentTemplates(name: string): Promise<void>;
+  WorkspaceTree(path: string): Promise<WorkspaceTreeNode>;
+  OpenPath(path: string): Promise<string>;
+  OpenPathVSCode(path: string): Promise<string>;
+  DeleteWorkspacePath(path: string): Promise<void>;
   ListWorkspaces(): Promise<WorkspaceEntry[]>;
   RemoveWorkspace(path: string): Promise<void>;
   ListRepos(): Promise<Repository[]>;
@@ -68,6 +84,7 @@ type AppBindings = {
     force: boolean
   ): Promise<FeatureDeleteResult>;
   LoadFeature(name: string): Promise<FeatureMetadata>;
+  FeaturePaths(name: string): Promise<FeaturePathsResult>;
   AgentPrepare(name: string, backup: boolean): Promise<PrepareMetadata>;
   AgentPrepareRepo(
     name: string,
