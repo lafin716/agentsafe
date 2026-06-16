@@ -715,6 +715,9 @@ func (a *App) RepoRuntimeStates() ([]RepoRuntimeState, error) {
 			continue
 		}
 		state.Local = true
+		// Remove any phantom origin/origin… refs left by an earlier buggy fetch so
+		// they neither show in the dropdown nor get selected for checkout.
+		_ = aggit.PruneStaleOriginRefs(repoPath)
 		if current, branchErr := aggit.CurrentBranch(repoPath); branchErr == nil {
 			state.CurrentBranch = current
 		} else {

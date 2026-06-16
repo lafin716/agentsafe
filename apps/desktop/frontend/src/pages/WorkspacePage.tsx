@@ -102,7 +102,9 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
         for (const item of runtime) {
           const branches = item.remoteBranches ?? [];
           if (!next[item.name] || !branches.includes(next[item.name])) {
-            next[item.name] = branches.find((branch) => branch !== item.currentBranch) ?? branches[0] ?? "";
+            next[item.name] = branches.includes(item.currentBranch)
+              ? item.currentBranch
+              : branches[0] ?? "";
           }
         }
         return next;

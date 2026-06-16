@@ -3,6 +3,7 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +68,104 @@ func TestCheckoutRemoteBranchCreatesLocalTrackingBranch(t *testing.T) {
 	}
 	if upstream, err := Upstream(clone, "release/v1"); err != nil || upstream != "origin/release/v1" {
 		t.Fatalf("upstream = %q, err = %v", upstream, err)
+	}
+}
+
+func TestNormalizeBranchName(t *testing.T) {
+	cases := map[string]string{
+		"main":                         "main",
+		"origin/main":                  "main",
+		"origin/origin":                "origin",
+		"origin/origin/main":           "main",
+		"refs/remotes/origin/main":     "main",
+		"refs/heads/main":              "main",
+		"  origin/feature/x  ":         "feature/x",
+		"refs/remotes/origin/origin/x": "x",
+	}
+	for in, want := range cases {
+		if got := NormalizeBranchName(in); got != want {
+			t.Errorf("NormalizeBranchName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestFetchBranchDoesNotCreatePhantomOriginRef(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	work := filepath.Join(t.TempDir(), "work")
+	clone := filepath.Join(t.TempDir(), "clone")
+	testGit(t, "", "init", "--bare", remote)
+	testGit(t, "", "clone", remote, work)
+	testGit(t, work, "config", "user.email", "test@example.com")
+	testGit(t, work, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, work, "add", ".")
+	testGit(t, work, "commit", "-m", "initial")
+	testGit(t, work, "branch", "-M", "main")
+	testGit(t, work, "push", "-u", "origin", "main")
+	testGit(t, "", "clone", remote, clone)
+
+	// Passing an "origin/"-prefixed base must not create refs/remotes/origin/origin…
+	if err := FetchBranch(clone, "origin/main"); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := Output(clone, "for-each-ref", "--format=%(refname)", "refs/remotes/origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(refs, "refs/remotes/origin/origin") {
+		t.Fatalf("phantom origin ref created: %s", refs)
+	}
+
+	branches, err := ListRemoteBranches(clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(branches, "origin") {
+		t.Fatalf("remote branches must not contain bare \"origin\": %#v", branches)
+	}
+	if !contains(branches, "main") {
+		t.Fatalf("remote branches = %#v, want main", branches)
+	}
+}
+
+func TestPruneStaleOriginRefs(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	work := filepath.Join(t.TempDir(), "work")
+	clone := filepath.Join(t.TempDir(), "clone")
+	testGit(t, "", "init", "--bare", remote)
+	testGit(t, "", "clone", remote, work)
+	testGit(t, work, "config", "user.email", "test@example.com")
+	testGit(t, work, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(work, "README.md"), []byte("main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, work, "add", ".")
+	testGit(t, work, "commit", "-m", "initial")
+	testGit(t, work, "branch", "-M", "main")
+	testGit(t, work, "push", "-u", "origin", "main")
+	testGit(t, "", "clone", remote, clone)
+
+	// Simulate the phantom ref a previous buggy fetch would have left behind.
+	head, err := Output(clone, "rev-parse", "refs/remotes/origin/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, clone, "update-ref", "refs/remotes/origin/origin", strings.TrimSpace(head))
+
+	if branches, err := ListRemoteBranches(clone); err != nil || contains(branches, "origin") {
+		t.Fatalf("pre-prune list = %#v, err = %v (must hide bare origin)", branches, err)
+	}
+	if err := PruneStaleOriginRefs(clone); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := Output(clone, "for-each-ref", "--format=%(refname)", "refs/remotes/origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(refs, "refs/remotes/origin/origin") {
+		t.Fatalf("phantom ref not pruned: %s", refs)
 	}
 }
 

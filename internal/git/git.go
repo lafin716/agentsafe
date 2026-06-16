@@ -128,11 +128,26 @@ func Output(dir string, args ...string) (string, error) {
 
 func Fetch(repoPath string) error { _, err := Run(repoPath, "fetch", "origin"); return err }
 
+// NormalizeBranchName strips ref-namespace and "origin/" prefixes from a branch
+// reference, returning the bare branch name. Repeated "origin/" prefixes are
+// collapsed so a malformed value like "origin/origin/main" becomes "main" — this
+// is what keeps a stray "origin/"-prefixed input from producing phantom
+// refs/remotes/origin/origin… refs.
+func NormalizeBranchName(ref string) string {
+	b := strings.TrimSpace(ref)
+	b = strings.TrimPrefix(b, "refs/remotes/")
+	b = strings.TrimPrefix(b, "refs/heads/")
+	for strings.HasPrefix(b, "origin/") {
+		b = strings.TrimPrefix(b, "origin/")
+	}
+	return b
+}
+
 // FetchBranch fetches just one branch from origin (updating FETCH_HEAD and the
 // matching origin/<branch> ref). Cheaper than a full fetch when only the base
 // branch is needed.
 func FetchBranch(repoPath, branch string) error {
-	_, err := Run(repoPath, "fetch", "origin", branch)
+	_, err := Run(repoPath, "fetch", "origin", NormalizeBranchName(branch))
 	return err
 }
 func FetchAll(repoPath string) error {
@@ -148,12 +163,10 @@ func ListRemoteBranches(repoPath string) ([]string, error) {
 	seen := map[string]bool{}
 	var branches []string
 	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line == "origin/HEAD" || strings.HasPrefix(line, "origin/HEAD ") {
-			continue
-		}
-		branch := strings.TrimPrefix(line, "origin/")
-		if branch == "" || seen[branch] {
+		branch := NormalizeBranchName(line)
+		// Skip the symbolic HEAD ref and any phantom "origin/origin…" refs that a
+		// malformed fetch may have left behind locally.
+		if branch == "" || branch == "HEAD" || branch == "origin" || seen[branch] {
 			continue
 		}
 		seen[branch] = true
@@ -161,11 +174,29 @@ func ListRemoteBranches(repoPath string) ([]string, error) {
 	}
 	return branches, nil
 }
+
+// PruneStaleOriginRefs deletes malformed refs/remotes/origin/origin… refs that a
+// previous buggy fetch may have created locally. They never correspond to a real
+// remote branch and otherwise surface as a phantom "origin/origin" entry that
+// fails to check out. Best-effort: callers can ignore the error.
+func PruneStaleOriginRefs(repoPath string) error {
+	out, err := Output(repoPath, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/origin")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
+		ref := strings.TrimSpace(line)
+		if ref == "" {
+			continue
+		}
+		if _, err := Run(repoPath, "update-ref", "-d", ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func CheckoutRemoteBranch(repoPath, remoteBranch string) error {
-	branch := strings.TrimSpace(remoteBranch)
-	branch = strings.TrimPrefix(branch, "refs/remotes/")
-	branch = strings.TrimPrefix(branch, "refs/heads/")
-	branch = strings.TrimPrefix(branch, "origin/")
+	branch := NormalizeBranchName(remoteBranch)
 	if branch == "" || branch == "HEAD" {
 		return fmt.Errorf("invalid remote branch %q", remoteBranch)
 	}

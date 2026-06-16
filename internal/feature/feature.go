@@ -432,6 +432,7 @@ func configureWorktreeUpstream(path, branch, base string, trackFeatureBranch, pr
 	if trackFeatureBranch {
 		targetBranch = branch
 	}
+	targetBranch = aggit.NormalizeBranchName(targetBranch)
 	if targetBranch == "" {
 		return nil
 	}
