@@ -39,6 +39,9 @@ func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
 		if branch, err := aggit.CurrentBranch(worktree); err != nil || branch != "feature/demo" {
 			t.Fatalf("branch = %q, err = %v", branch, err)
 		}
+		if upstream, err := aggit.Upstream(worktree, "feature/demo"); err != nil || upstream != "origin/main" {
+			t.Fatalf("upstream = %q, err = %v; want origin/main", upstream, err)
+		}
 	})
 
 	t.Run("recreate", func(t *testing.T) {
@@ -61,6 +64,30 @@ func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
 			t.Fatalf("recreated branch retained old commit, stat err = %v", err)
 		}
 	})
+}
+
+func TestCreateTracksBaseUntilFirstPush(t *testing.T) {
+	root, cfg := testWorkspace(t, "repo")
+	if err := CreateWithOptions(root, cfg, "demo", CreateOptions{
+		Base: "main", ExistingBranch: ExistingBranchError,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	worktree := config.WorktreePath(root, "demo", "repo")
+	if upstream, err := aggit.Upstream(worktree, "feature/demo"); err != nil || upstream != "origin/main" {
+		t.Fatalf("upstream = %q, err = %v; want origin/main", upstream, err)
+	}
+
+	if err := Push(root, "demo", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !aggit.RemoteBranchExists(worktree, "feature/demo") {
+		t.Fatal("first push did not create origin/feature/demo")
+	}
+	if upstream, err := aggit.Upstream(worktree, "feature/demo"); err != nil || upstream != "origin/feature/demo" {
+		t.Fatalf("upstream after push = %q, err = %v; want origin/feature/demo", upstream, err)
+	}
 }
 
 func TestCheckCreateReportsAllExistingBranchesWithoutCreatingWorktrees(t *testing.T) {
@@ -140,6 +167,10 @@ func TestCreateReusesRemoteOnlyBranch(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(config.WorktreePath(root, "demo", "repo"), "remote.txt")); err != nil {
 		t.Fatalf("remote branch content missing: %v", err)
+	}
+	worktree := config.WorktreePath(root, "demo", "repo")
+	if upstream, err := aggit.Upstream(worktree, "feature/demo"); err != nil || upstream != "origin/feature/demo" {
+		t.Fatalf("upstream = %q, err = %v; want origin/feature/demo", upstream, err)
 	}
 }
 
@@ -234,6 +265,7 @@ func TestConfigureRepositoryWorktreeAdoptsExistingTargetWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	testGit(t, config.RepoPath(root, "repo"), "worktree", "add", dest, "-b", branch, "main")
+	_, _ = aggit.Run(dest, "branch", "--unset-upstream", branch)
 
 	rm, err := ConfigureRepositoryWorktree(root, cfg, name, "repo", RepositoryWorktreeOptions{
 		ExistingBranch: ExistingBranchReuse,
@@ -250,6 +282,9 @@ func TestConfigureRepositoryWorktreeAdoptsExistingTargetWorktree(t *testing.T) {
 	}
 	if len(meta.Repositories) != 1 || meta.Repositories[0].Name != "repo" {
 		t.Fatalf("repository metadata not saved after adoption: %+v", meta.Repositories)
+	}
+	if upstream, err := aggit.Upstream(dest, branch); err != nil || upstream != "origin/main" {
+		t.Fatalf("adopted branch upstream = %q, err = %v; want origin/main", upstream, err)
 	}
 }
 

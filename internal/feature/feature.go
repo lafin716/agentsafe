@@ -319,11 +319,13 @@ func createRepositoryWorktree(root, featureName string, repo config.Repository, 
 	}
 
 	local := aggit.LocalBranchExists(repoPath, branch)
-	if !local {
-		// Discover remote-only feature branches before applying the policy.
-		_ = aggit.FetchAll(repoPath)
-	}
 	remote := aggit.RemoteBranchExists(repoPath, branch)
+	if !remote && (!local || aggit.RemoteBranchExistsAtOrigin(repoPath, branch)) {
+		// Discover remote-only feature branches, including a remote counterpart
+		// for an existing local branch whose remote-tracking ref is stale.
+		_ = aggit.FetchAll(repoPath)
+		remote = aggit.RemoteBranchExists(repoPath, branch)
+	}
 
 	_ = aggit.WorktreePrune(repoPath)
 	if inUse := aggit.WorktreeForBranch(repoPath, branch); inUse != "" {
@@ -333,6 +335,9 @@ func createRepositoryWorktree(root, featureName string, repo config.Repository, 
 		if samePath(inUse, dest) {
 			if current, err := aggit.CurrentBranch(dest); err == nil && current == branch {
 				output.Printf("  worktree already exists at target, adopting branch %s\n", branch)
+				if err := configureWorktreeUpstream(dest, branch, base, remote, true); err != nil {
+					return RepoMeta{}, fmt.Errorf("failed to configure upstream for branch %s in repository %s: %w", branch, repo.Name, err)
+				}
 				return RepoMeta{
 					Name:         repo.Name,
 					WorktreePath: filepath.ToSlash(rel),
@@ -360,6 +365,8 @@ func createRepositoryWorktree(root, featureName string, repo config.Repository, 
 	}
 
 	create := true
+	preserveExistingUpstream := false
+	trackFeatureBranch := false
 	switch {
 	case local && policy == ExistingBranchError:
 		return RepoMeta{}, fmt.Errorf("branch %s already exists in repository %s; choose reuse or recreate", branch, repo.Name)
@@ -368,9 +375,12 @@ func createRepositoryWorktree(root, featureName string, repo config.Repository, 
 			output.Printf("  reusing existing local branch %s\n", branch)
 			create = false
 			start = branch
+			preserveExistingUpstream = !remote
+			trackFeatureBranch = remote
 		} else {
 			output.Printf("  creating tracking branch %s from origin/%s\n", branch, branch)
 			start = "origin/" + branch
+			trackFeatureBranch = true
 		}
 	case (local || remote) && policy == ExistingBranchRecreate:
 		if local {
@@ -392,6 +402,9 @@ func createRepositoryWorktree(root, featureName string, repo config.Repository, 
 	if err := aggit.AddWorktree(repoPath, dest, branch, start, create); err != nil {
 		return RepoMeta{}, fmt.Errorf("failed to create worktree for repository %s: %w", repo.Name, err)
 	}
+	if err := configureWorktreeUpstream(dest, branch, base, trackFeatureBranch, preserveExistingUpstream); err != nil {
+		return RepoMeta{}, fmt.Errorf("failed to configure upstream for branch %s in repository %s: %w", branch, repo.Name, err)
+	}
 	return RepoMeta{
 		Name:         repo.Name,
 		WorktreePath: filepath.ToSlash(rel),
@@ -399,6 +412,35 @@ func createRepositoryWorktree(root, featureName string, repo config.Repository, 
 		BaseBranch:   base,
 		Revision:     1,
 	}, nil
+}
+
+// configureWorktreeUpstream makes a new feature branch track its base branch
+// until its first push. Reused remote feature branches track their matching
+// origin branch, while a reused local branch keeps an existing valid upstream.
+func configureWorktreeUpstream(path, branch, base string, trackFeatureBranch, preserveExisting bool) error {
+	if preserveExisting {
+		if upstream, err := aggit.Upstream(path, branch); err == nil && upstream != "" {
+			return nil
+		}
+	}
+
+	targetBranch := base
+	if trackFeatureBranch {
+		targetBranch = branch
+	}
+	if targetBranch == "" {
+		return nil
+	}
+	if !aggit.RemoteBranchExists(path, targetBranch) {
+		output.Printf("  warning: origin/%s not found; branch %s has no upstream\n", targetBranch, branch)
+		return nil
+	}
+	target := "origin/" + targetBranch
+	if err := aggit.SetUpstream(path, branch, target); err != nil {
+		return err
+	}
+	output.Printf("  branch %s now tracks %s\n", branch, target)
+	return nil
 }
 
 // ConfigureRepositoryWorktree adds a repository missing from a feature or
@@ -944,7 +986,8 @@ func Push(root, name, repoFilter string) error {
 			continue
 		}
 		p := filepath.Join(root, r.WorktreePath)
-		if unpushedCount(p, r.Branch, r.BaseBranch) == 0 {
+		remoteExists := aggit.RemoteBranchExists(p, r.Branch)
+		if remoteExists && unpushedCount(p, r.Branch, r.BaseBranch) == 0 {
 			output.Printf("[%s] nothing to push, skipped\n", r.Name)
 			continue
 		}

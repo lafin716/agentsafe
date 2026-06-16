@@ -159,6 +159,13 @@ func RemoteBranchExistsAtOrigin(repoPath, branch string) bool {
 func StatusShort(path string) (string, error)   { return Output(path, "status", "--short") }
 func CurrentBranch(path string) (string, error) { return Output(path, "branch", "--show-current") }
 func HasChanges(path string) bool               { s, err := StatusShort(path); return err == nil && s != "" }
+func Upstream(path, branch string) (string, error) {
+	return Output(path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", branch+"@{upstream}")
+}
+func SetUpstream(path, branch, upstream string) error {
+	_, err := Run(path, "branch", "--set-upstream-to", upstream, branch)
+	return err
+}
 
 // StatusFiles returns both the porcelain output and a structured representation
 // for UI consumers. Unlike Output, it preserves the leading status columns.
