@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Languages, Save, Stethoscope } from "lucide-react";
+import { Download, FolderOpen, Languages, Save, Stethoscope, Upload } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
 import { LOCALES, type Locale } from "@/i18n/translations";
 import { api, errMessage } from "@/lib/api";
@@ -62,6 +63,11 @@ export function SettingsPage({ config, onChanged }: Props) {
         </CardContent>
       </Card>
 
+      <WorkspaceTransfer
+        config={config}
+        onChanged={onChanged}
+      />
+
       {config ? (
         <GitSettings config={config} onChanged={onChanged} />
       ) : (
@@ -73,6 +79,151 @@ export function SettingsPage({ config, onChanged }: Props) {
         </Card>
       )}
     </div>
+  );
+}
+
+function WorkspaceTransfer({
+  config,
+  onChanged,
+}: {
+  config: Config | null;
+  onChanged: () => void | Promise<void>;
+}) {
+  const { t } = useI18n();
+  const { notify } = useToast();
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [bundlePath, setBundlePath] = useState("");
+  const [targetDir, setTargetDir] = useState("");
+
+  async function exportBundle() {
+    try {
+      setBusy(true);
+      const path = await api.ExportWorkspaceBundle();
+      if (path) notify(t("settings.transferExported", { path }), "success");
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importBundle() {
+    try {
+      setBusy(true);
+      const cfg = await api.ImportWorkspaceBundleFrom(bundlePath, targetDir);
+      await onChanged();
+      notify(t("settings.transferImported", { name: cfg.Workspace.Name }), "success");
+      setImportOpen(false);
+      setBundlePath("");
+      setTargetDir("");
+      const clone = await confirm({
+        title: t("settings.transferCloneTitle"),
+        message: t("settings.transferCloneConfirm"),
+      });
+      if (clone) {
+        await api.Pull();
+        notify(t("toast.pullCompleted"), "success");
+        await onChanged();
+      }
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function chooseBundleFile() {
+    try {
+      const path = await api.SelectWorkspaceBundleFile();
+      if (path) setBundlePath(path);
+    } catch (e) {
+      notify(errMessage(e), "error");
+    }
+  }
+
+  async function chooseTargetDir() {
+    try {
+      const path = await api.SelectWorkspaceBundleTargetDir();
+      if (path) setTargetDir(path);
+    } catch (e) {
+      notify(errMessage(e), "error");
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("settings.transferTitle")}</CardTitle>
+        <CardDescription>{t("settings.transferDesc")}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap gap-2">
+        <Button variant="outline" onClick={exportBundle} disabled={busy || !config}>
+          <Download className="size-4" /> {t("settings.transferExport")}
+        </Button>
+        <Button onClick={() => setImportOpen(true)} disabled={busy}>
+          <Upload className="size-4" /> {t("settings.transferImport")}
+        </Button>
+      </CardContent>
+      {importOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setImportOpen(false)}
+        >
+          <div
+            className="w-full max-w-xl rounded-lg border bg-card p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-base font-semibold">
+              {t("settings.transferImportTitle")}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t("settings.transferImportDesc")}
+            </p>
+            <div className="mt-4 space-y-4">
+              <div className="space-y-1.5">
+                <Label>{t("settings.transferBundleFile")}</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={bundlePath || t("settings.transferNoFile")}
+                    readOnly
+                    className={!bundlePath ? "text-muted-foreground" : ""}
+                  />
+                  <Button variant="outline" onClick={chooseBundleFile} disabled={busy}>
+                    <Upload className="size-4" /> {t("settings.transferChooseFile")}
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label>{t("settings.transferTargetFolder")}</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={targetDir || t("settings.transferNoFolder")}
+                    readOnly
+                    className={!targetDir ? "text-muted-foreground" : ""}
+                  />
+                  <Button variant="outline" onClick={chooseTargetDir} disabled={busy}>
+                    <FolderOpen className="size-4" /> {t("settings.transferChooseFolder")}
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setImportOpen(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                onClick={importBundle}
+                disabled={busy || !bundlePath || !targetDir}
+              >
+                {t("settings.transferRunImport")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 

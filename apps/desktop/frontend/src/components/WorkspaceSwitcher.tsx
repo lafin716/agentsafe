@@ -11,6 +11,9 @@ import type { Config, WorkspaceEntry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useI18n } from "@/i18n/I18nProvider";
 
 interface Props {
@@ -32,6 +35,9 @@ export function WorkspaceSwitcher({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([]);
+  const [initOpen, setInitOpen] = useState(false);
+  const [initDir, setInitDir] = useState("");
+  const [initName, setInitName] = useState("");
   const ref = useRef<HTMLDivElement>(null);
 
   const activeRoot = config?.Workspace.Root ?? "";
@@ -96,19 +102,31 @@ export function WorkspaceSwitcher({
     }
   }
 
-  async function initNew() {
+  async function chooseInitDir() {
     try {
       setBusy(true);
       const dir = await api.SelectWorkspaceDir();
-      if (!dir) return;
-      const name = window.prompt(t("switcher.promptName")) ?? "";
-      const cfg = await api.InitWorkspace(dir, name.trim());
+      if (dir) setInitDir(dir);
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function initNew() {
+    try {
+      setBusy(true);
+      const cfg = await api.InitWorkspace(initDir, initName.trim());
       onSwitched(cfg);
       notify(
         t("toast.initializedWorkspace", { name: cfg.Workspace.Name }),
         "success"
       );
       setOpen(false);
+      setInitOpen(false);
+      setInitDir("");
+      setInitName("");
       await refresh();
     } catch (e) {
       notify(errMessage(e), "error");
@@ -215,12 +233,68 @@ export function WorkspaceSwitcher({
               <FolderOpen className="size-4" /> {t("switcher.openFolder")}
             </button>
             <button
-              onClick={initNew}
+              onClick={() => {
+                setOpen(false);
+                setInitOpen(true);
+              }}
               disabled={busy}
               className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             >
               <Sparkles className="size-4" /> {t("switcher.initNew")}
             </button>
+          </div>
+        </div>
+      )}
+      {initOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setInitOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-lg border bg-card p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-base font-semibold">{t("switcher.initTitle")}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t("switcher.initDesc")}
+            </p>
+            <div className="mt-4 space-y-4">
+              <div className="space-y-1.5">
+                <Label>{t("switcher.promptName")}</Label>
+                <Input
+                  value={initName}
+                  onChange={(e) => setInitName(e.target.value)}
+                  placeholder={t("switcher.promptName")}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>{t("switcher.targetFolder")}</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={initDir || t("switcher.noFolderSelected")}
+                    readOnly
+                    className={!initDir ? "text-muted-foreground" : ""}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={chooseInitDir}
+                    disabled={busy}
+                  >
+                    <FolderOpen className="size-4" />
+                    {t("workspace.chooseFolder")}
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setInitOpen(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button onClick={initNew} disabled={busy || !initDir}>
+                {t("common.confirm")}
+              </Button>
+            </div>
           </div>
         </div>
       )}

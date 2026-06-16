@@ -26,6 +26,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/registry"
 	"github.com/agentsafe/agentsafe/internal/repo"
+	"github.com/agentsafe/agentsafe/internal/workspacebundle"
 	"github.com/agentsafe/agentsafe/internal/wttemplate"
 )
 
@@ -178,6 +179,71 @@ func (a *App) GetConfig() (config.Config, error) {
 		return config.Config{}, err
 	}
 	return config.Load(root)
+}
+
+func (a *App) ExportWorkspaceBundle() (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(cfg.Workspace.Name)
+	if name == "" {
+		name = filepath.Base(root)
+	}
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "Export agentsafe workspace settings",
+		DefaultFilename: "agentsafe-workspace-" + safeFilename(name) + ".zip",
+		Filters:         []runtime.FileFilter{{DisplayName: "ZIP archive", Pattern: "*.zip"}},
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	if !strings.HasSuffix(strings.ToLower(path), ".zip") {
+		path += ".zip"
+	}
+	if err := workspacebundle.Export(root, path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (a *App) ImportWorkspaceBundle() (config.Config, error) {
+	zipPath, err := a.SelectWorkspaceBundleFile()
+	if err != nil || zipPath == "" {
+		return config.Config{}, err
+	}
+	target, err := a.SelectWorkspaceBundleTargetDir()
+	if err != nil || target == "" {
+		return config.Config{}, err
+	}
+	return a.ImportWorkspaceBundleFrom(zipPath, target)
+}
+
+func (a *App) SelectWorkspaceBundleFile() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Import agentsafe workspace settings",
+		Filters: []runtime.FileFilter{{DisplayName: "ZIP archive", Pattern: "*.zip"}},
+	})
+}
+
+func (a *App) SelectWorkspaceBundleTargetDir() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select empty target folder",
+	})
+}
+
+func (a *App) ImportWorkspaceBundleFrom(zipPath, target string) (config.Config, error) {
+	cfg, err := workspacebundle.Import(zipPath, target)
+	if err != nil {
+		return config.Config{}, err
+	}
+	a.root = cfg.Workspace.Root
+	_ = registry.Add(cfg.Workspace.Name, cfg.Workspace.Root)
+	return cfg, nil
 }
 
 // ---- Worktree templates ----
@@ -1702,6 +1768,22 @@ func sameAbsPath(a, b string) bool {
 		return strings.EqualFold(aa, bb)
 	}
 	return aa == bb
+}
+
+func safeFilename(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-.")
+	if out == "" {
+		return "workspace"
+	}
+	return out
 }
 
 // launchProgram opens path with program. A program picked via SelectProgram is

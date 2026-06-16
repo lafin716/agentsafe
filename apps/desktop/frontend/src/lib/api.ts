@@ -36,6 +36,11 @@ type AppBindings = {
   InitWorkspace(path: string, name: string): Promise<Config>;
   CurrentRoot(): Promise<string>;
   GetConfig(): Promise<Config>;
+  ExportWorkspaceBundle(): Promise<string>;
+  ImportWorkspaceBundle(): Promise<Config>;
+  SelectWorkspaceBundleFile(): Promise<string>;
+  SelectWorkspaceBundleTargetDir(): Promise<string>;
+  ImportWorkspaceBundleFrom(zipPath: string, target: string): Promise<Config>;
   ListWorktreeTemplates(): Promise<WorktreeTemplate[]>;
   ImportWorktreeTemplateFiles(): Promise<WorktreeTemplate[]>;
   ImportWorktreeTemplateFolder(): Promise<WorktreeTemplate>;
