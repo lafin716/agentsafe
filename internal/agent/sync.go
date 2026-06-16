@@ -209,3 +209,73 @@ func Sync(root string, cfg config.Config, featureName string, opt Options) error
 	output.Printf("synced %d change(s)\n", applied)
 	return nil
 }
+
+// SyncAndCommit syncs reviewed agent changes back to worktrees, then commits
+// them with the given message. A dry-run or an empty message skips the commit,
+// so callers can reuse it for a preview. The sync step reuses Sync, preserving
+// the risky/masked guards, rollback snapshot, and confirmation behaviour.
+func SyncAndCommit(root string, cfg config.Config, featureName, message string, opt Options) error {
+	if err := Sync(root, cfg, featureName, opt); err != nil {
+		return err
+	}
+	if opt.DryRun || strings.TrimSpace(message) == "" {
+		return nil
+	}
+	return feature.Commit(root, featureName, message, opt.Repo)
+}
+
+// RestoreFromWorktree overwrites one file in the prepared agent workspace with
+// the current worktree version. If the file no longer exists in the worktree,
+// the agent copy is removed. This lets the desktop UI dismiss an agent diff
+// entry that was caused by direct worktree edits.
+func RestoreFromWorktree(root string, cfg config.Config, featureName, repoName, relPath string) error {
+	relPath = filepath.ToSlash(strings.TrimSpace(relPath))
+	if relPath == "" || filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "../") || strings.Contains(relPath, "/../") || relPath == ".." {
+		return fmt.Errorf("invalid file path %q", relPath)
+	}
+	fm, err := feature.Load(root, featureName)
+	if err != nil {
+		return err
+	}
+	pm := LoadPrepareMetadata(root, featureName)
+	if err := validatePreparedRepositories(root, featureName, fm, pm, repoName); err != nil {
+		return err
+	}
+	var repoMeta *feature.RepoMeta
+	for i := range fm.Repositories {
+		if fm.Repositories[i].Name == repoName {
+			repoMeta = &fm.Repositories[i]
+			break
+		}
+	}
+	if repoMeta == nil {
+		return fmt.Errorf("repository %q is not part of feature %q", repoName, featureName)
+	}
+	agentRoot := config.AgentPath(root, fm.FolderKey(), repoName)
+	worktreeRoot := filepath.Join(root, filepath.FromSlash(repoMeta.WorktreePath))
+	agentPath := filepath.Join(agentRoot, filepath.FromSlash(relPath))
+	worktreePath := filepath.Join(worktreeRoot, filepath.FromSlash(relPath))
+	if err := fsutil.EnsureInside(agentRoot, agentPath); err != nil {
+		return err
+	}
+	if err := fsutil.EnsureInside(worktreeRoot, worktreePath); err != nil {
+		return err
+	}
+	info, err := os.Stat(worktreePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if removeErr := os.Remove(agentPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				return removeErr
+			}
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("cannot restore directory %q", relPath)
+	}
+	if err := os.MkdirAll(filepath.Dir(agentPath), 0755); err != nil {
+		return err
+	}
+	return fsutil.CopyFile(worktreePath, agentPath, info.Mode().Perm())
+}

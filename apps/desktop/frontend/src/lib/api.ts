@@ -20,9 +20,11 @@ import type {
   PrepareMetadata,
   RebaseResult,
   Repository,
+  RepoRuntimeState,
   RequestResults,
   SecurityTemplate,
   SyncOptions,
+  TerminalSession,
   WorkspaceEntry,
   WorkspaceTreeNode,
   WorktreeTemplate,
@@ -65,6 +67,8 @@ type AppBindings = {
   Pull(): Promise<void>;
   PullRepo(name: string): Promise<void>;
   RepoLocalStates(): Promise<Record<string, boolean>>;
+  RepoRuntimeStates(): Promise<RepoRuntimeState[]>;
+  CheckoutRepoBranch(name: string, remoteBranch: string): Promise<void>;
   SetGitCredentials(host: string, username: string, secret: string): Promise<void>;
   ListFeatures(): Promise<FeatureListResult>;
   CheckFeatureCreation(name: string, base: string): Promise<FeatureCreateCheck>;
@@ -98,6 +102,8 @@ type AppBindings = {
   ): Promise<PrepareMetadata>;
   AgentDiff(name: string, repoFilter: string): Promise<DiffResult>;
   AgentSync(name: string, opt: SyncOptions): Promise<void>;
+  SyncAndCommit(name: string, message: string, opt: SyncOptions): Promise<void>;
+  AgentRestoreFromWorktree(name: string, repoName: string, path: string): Promise<void>;
   AgentDelete(name: string): Promise<void>;
   AllSyncHistory(): Promise<SyncHistoryEntry[]>;
   RollbackSync(name: string, repo: string, id: string): Promise<void>;
@@ -132,6 +138,11 @@ type AppBindings = {
   OpenFeatureFolder(name: string): Promise<string>;
   OpenRepoFolder(name: string, repo: string): Promise<string>;
   OpenRepoInProgram(name: string, repo: string, program: string): Promise<string>;
+  TerminalOpen(path: string): Promise<TerminalSession>;
+  AgentRun(name: string, command: string): Promise<TerminalSession>;
+  TerminalWrite(id: string, data: string): Promise<void>;
+  TerminalResize(id: string, cols: number, rows: number): Promise<void>;
+  TerminalClose(id: string): Promise<void>;
 };
 
 declare global {

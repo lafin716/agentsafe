@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"gopkg.in/yaml.v3"
 
@@ -41,6 +43,9 @@ type App struct {
 	taskSeq      int        // monotonic id for progress tasks
 	credentialMu sync.Mutex
 	credentials  map[string]gitCredential // HTTPS credentials, memory-only for this app process
+	terminalMu   sync.Mutex
+	terminalSeq  int
+	terminals    map[string]*terminalProcess
 }
 
 type gitCredential struct {
@@ -48,7 +53,18 @@ type gitCredential struct {
 	Secret   string
 }
 
-func NewApp() *App { return &App{credentials: map[string]gitCredential{}} }
+type terminalProcess struct {
+	cmd  *exec.Cmd
+	file *os.File
+	path string
+	// feature is set when this session runs a managed agent for a feature, so its
+	// exit can be reported via the "agent:exit" event. Empty for plain shells.
+	feature string
+}
+
+func NewApp() *App {
+	return &App{credentials: map[string]gitCredential{}, terminals: map[string]*terminalProcess{}}
+}
 
 // runTask runs a long-running operation while streaming its output to the
 // frontend progress box. It emits "task:start" before, forwards each output
@@ -349,13 +365,15 @@ func (a *App) ApplyAgentTemplates(name string) error {
 // ---- Workspace explorer ----
 
 type WorkspaceTreeNode struct {
-	Name     string              `json:"name"`
-	Path     string              `json:"path"`
-	RelPath  string              `json:"relPath"`
-	IsDir    bool                `json:"isDir"`
-	Size     int64               `json:"size"`
-	ModTime  string              `json:"modTime"`
-	Children []WorkspaceTreeNode `json:"children"`
+	Name        string              `json:"name"`
+	Path        string              `json:"path"`
+	RelPath     string              `json:"relPath"`
+	IsDir       bool                `json:"isDir"`
+	Size        int64               `json:"size"`
+	ModTime     string              `json:"modTime"`
+	FeatureName string              `json:"featureName,omitempty"`
+	Branch      string              `json:"branch,omitempty"`
+	Children    []WorkspaceTreeNode `json:"children"`
 }
 
 func (a *App) WorkspaceTree(path string) (WorkspaceTreeNode, error) {
@@ -367,7 +385,7 @@ func (a *App) WorkspaceTree(path string) (WorkspaceTreeNode, error) {
 	if err != nil {
 		return WorkspaceTreeNode{}, err
 	}
-	return treeNode(root, target)
+	return treeNode(root, target, workspaceTreeLabels(root))
 }
 
 func (a *App) OpenPath(path string) (string, error) {
@@ -414,6 +432,166 @@ func (a *App) DeleteWorkspacePath(path string) error {
 		return err
 	}
 	return fsutil.ForceRemoveAll(target)
+}
+
+type TerminalSession struct {
+	ID    string `json:"id"`
+	Path  string `json:"path"`
+	Title string `json:"title"`
+}
+
+func (a *App) TerminalOpen(path string) (TerminalSession, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return TerminalSession{}, err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return TerminalSession{}, err
+	}
+	if info, statErr := os.Stat(target); statErr == nil && !info.IsDir() {
+		target = filepath.Dir(target)
+	} else if statErr != nil {
+		return TerminalSession{}, statErr
+	}
+	shell, args := defaultShell()
+	return a.startPTY(target, "", shell, args)
+}
+
+// startPTY launches argv in a pty rooted at target, registers it as a tracked
+// terminal, and streams its output. When feature is non-empty the session is
+// tagged as a managed agent run so its exit is also reported via "agent:exit".
+func (a *App) startPTY(target, feature, name string, args []string) (TerminalSession, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = target
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	ptyFile, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	if err != nil {
+		return TerminalSession{}, err
+	}
+	a.terminalMu.Lock()
+	a.terminalSeq++
+	id := fmt.Sprintf("term-%d", a.terminalSeq)
+	if a.terminals == nil {
+		a.terminals = map[string]*terminalProcess{}
+	}
+	a.terminals[id] = &terminalProcess{cmd: cmd, file: ptyFile, path: target, feature: feature}
+	a.terminalMu.Unlock()
+
+	go a.pipeTerminalOutput(id, ptyFile, cmd, feature)
+	return TerminalSession{ID: id, Path: target, Title: filepath.Base(target)}, nil
+}
+
+func (a *App) TerminalWrite(id, data string) error {
+	tp, err := a.terminal(id)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(tp.file, data)
+	return err
+}
+
+func (a *App) TerminalResize(id string, cols, rows int) error {
+	tp, err := a.terminal(id)
+	if err != nil {
+		return err
+	}
+	if cols <= 0 || rows <= 0 {
+		return nil
+	}
+	return pty.Setsize(tp.file, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+}
+
+func (a *App) TerminalClose(id string) error {
+	tp, err := a.terminal(id)
+	if err != nil {
+		return nil
+	}
+	a.removeTerminal(id)
+	_ = tp.file.Close()
+	if tp.cmd.Process != nil {
+		_ = tp.cmd.Process.Kill()
+	}
+	return nil
+}
+
+func (a *App) terminal(id string) (*terminalProcess, error) {
+	a.terminalMu.Lock()
+	defer a.terminalMu.Unlock()
+	tp := a.terminals[id]
+	if tp == nil {
+		return nil, fmt.Errorf("terminal %q not found", id)
+	}
+	return tp, nil
+}
+
+func (a *App) removeTerminal(id string) {
+	a.terminalMu.Lock()
+	delete(a.terminals, id)
+	a.terminalMu.Unlock()
+}
+
+func (a *App) pipeTerminalOutput(id string, ptyFile *os.File, cmd *exec.Cmd, feature string) {
+	buf := make([]byte, 8192)
+	for {
+		n, err := ptyFile.Read(buf)
+		if n > 0 {
+			runtime.EventsEmit(a.ctx, "terminal:data", map[string]any{
+				"id":   id,
+				"data": string(buf[:n]),
+			})
+		}
+		if err != nil {
+			break
+		}
+	}
+	waitErr := cmd.Wait()
+	a.removeTerminal(id)
+	status := "closed"
+	message := ""
+	if waitErr != nil {
+		status = "error"
+		message = waitErr.Error()
+	}
+	runtime.EventsEmit(a.ctx, "terminal:close", map[string]any{
+		"id": id, "status": status, "error": message,
+	})
+	// Managed agent run finished — signal the feature so the UI can refresh the
+	// diff and prompt the user to sync.
+	if feature != "" {
+		runtime.EventsEmit(a.ctx, "agent:exit", map[string]any{
+			"id": id, "feature": feature, "status": status, "error": message,
+		})
+	}
+	_ = ptyFile.Close()
+}
+
+func defaultShell() (string, []string) {
+	if goruntime.GOOS == "windows" {
+		if shell := os.Getenv("COMSPEC"); shell != "" {
+			return shell, nil
+		}
+		return "cmd.exe", nil
+	}
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell, []string{"-l"}
+	}
+	return "/bin/sh", []string{"-l"}
+}
+
+// commandShell wraps a command line so it runs through the user's login shell,
+// resolving PATH/aliases and keeping a TTY for interactive agents.
+func commandShell(command string) (string, []string) {
+	if goruntime.GOOS == "windows" {
+		if shell := os.Getenv("COMSPEC"); shell != "" {
+			return shell, []string{"/c", command}
+		}
+		return "cmd.exe", []string{"/c", command}
+	}
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell, []string{"-lc", command}
+	}
+	return "/bin/sh", []string{"-lc", command}
 }
 
 // ---- Repositories ----
@@ -501,6 +679,73 @@ func (a *App) RepoLocalStates() (map[string]bool, error) {
 		states[r.Name] = present
 	}
 	return states, nil
+}
+
+type RepoRuntimeState struct {
+	Name           string   `json:"name"`
+	Local          bool     `json:"local"`
+	CurrentBranch  string   `json:"currentBranch"`
+	RemoteBranches []string `json:"remoteBranches"`
+	Error          string   `json:"error,omitempty"`
+}
+
+func (a *App) RepoRuntimeStates() ([]RepoRuntimeState, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RepoRuntimeState, 0, len(cfg.Repositories))
+	for _, r := range cfg.Repositories {
+		state := RepoRuntimeState{Name: r.Name, RemoteBranches: []string{}}
+		repoPath := config.RepoPath(root, r.Name)
+		if st, statErr := os.Stat(repoPath); statErr != nil || !st.IsDir() {
+			state.Local = false
+			if statErr != nil && !os.IsNotExist(statErr) {
+				state.Error = statErr.Error()
+			}
+			out = append(out, state)
+			continue
+		} else if empty, emptyErr := fsutil.IsEmptyDir(repoPath); emptyErr == nil && empty {
+			state.Local = false
+			out = append(out, state)
+			continue
+		}
+		state.Local = true
+		if current, branchErr := aggit.CurrentBranch(repoPath); branchErr == nil {
+			state.CurrentBranch = current
+		} else {
+			state.Error = branchErr.Error()
+		}
+		if branches, branchErr := aggit.ListRemoteBranches(repoPath); branchErr == nil {
+			state.RemoteBranches = branches
+		} else if state.Error == "" {
+			state.Error = branchErr.Error()
+		}
+		out = append(out, state)
+	}
+	return out, nil
+}
+
+func (a *App) CheckoutRepoBranch(name, remoteBranch string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	if _, ok := findRepo(cfg, name); !ok {
+		return fmt.Errorf("repository %q not found", name)
+	}
+	repoPath := config.RepoPath(root, name)
+	return a.runTask("Checkout repository branch: "+name, func() error {
+		return aggit.CheckoutRemoteBranch(repoPath, remoteBranch)
+	})
 }
 
 // PullRepo clones a missing repository or fetches/pulls an existing one.
@@ -820,6 +1065,41 @@ func (a *App) AgentSync(name string, opt SyncOptions) error {
 			Yes:             true,
 		})
 	})
+}
+
+// SyncAndCommit syncs reviewed agent changes back to the worktrees and, unless
+// it is a dry run or the message is empty, commits them with the given message.
+// The diff is shown in the UI beforehand, so the sync runs non-interactively.
+func (a *App) SyncAndCommit(name, message string, opt SyncOptions) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	return a.runTask("Sync & commit: "+name, func() error {
+		return agent.SyncAndCommit(root, cfg, name, message, agent.Options{
+			Repo:            opt.Repo,
+			DryRun:          opt.DryRun,
+			IncludeRisky:    opt.IncludeRisky,
+			AllowMaskedSync: opt.AllowMaskedSync,
+			Yes:             true,
+		})
+	})
+}
+
+func (a *App) AgentRestoreFromWorktree(name, repoName, path string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	return agent.RestoreFromWorktree(root, cfg, name, repoName, path)
 }
 
 func (a *App) AgentDelete(name string) error {
@@ -1681,7 +1961,42 @@ func workspacePath(root, path string) (string, error) {
 	return target, nil
 }
 
-func treeNode(root, target string) (WorkspaceTreeNode, error) {
+type workspaceTreeLabel struct {
+	FeatureName string
+	Branch      string
+}
+
+func workspaceTreeLabels(root string) map[string]workspaceTreeLabel {
+	labels := map[string]workspaceTreeLabel{}
+	list, err := feature.ListData(root)
+	if err != nil {
+		return labels
+	}
+	for _, item := range list.Features {
+		meta, err := feature.Load(root, item.Name)
+		if err != nil {
+			continue
+		}
+		labels[filepath.ToSlash(filepath.Join("feature", meta.FolderKey()))] = workspaceTreeLabel{
+			FeatureName: meta.Name,
+			Branch:      meta.Branch,
+		}
+		labels[filepath.ToSlash(filepath.Join("agent", meta.FolderKey()))] = workspaceTreeLabel{
+			FeatureName: meta.Name,
+			Branch:      meta.Branch,
+		}
+	}
+	return labels
+}
+
+func applyWorkspaceTreeLabel(node *WorkspaceTreeNode, labels map[string]workspaceTreeLabel) {
+	if label, ok := labels[node.RelPath]; ok {
+		node.FeatureName = label.FeatureName
+		node.Branch = label.Branch
+	}
+}
+
+func treeNode(root, target string, labels map[string]workspaceTreeLabel) (WorkspaceTreeNode, error) {
 	info, err := os.Stat(target)
 	if err != nil {
 		return WorkspaceTreeNode{}, err
@@ -1698,6 +2013,7 @@ func treeNode(root, target string) (WorkspaceTreeNode, error) {
 		Size:    info.Size(),
 		ModTime: info.ModTime().Format(time.RFC3339),
 	}
+	applyWorkspaceTreeLabel(&node, labels)
 	if !info.IsDir() {
 		return node, nil
 	}
@@ -1719,14 +2035,16 @@ func treeNode(root, target string) (WorkspaceTreeNode, error) {
 			continue
 		}
 		childRel, _ := filepath.Rel(root, childPath)
-		node.Children = append(node.Children, WorkspaceTreeNode{
+		child := WorkspaceTreeNode{
 			Name:    entry.Name(),
 			Path:    childPath,
 			RelPath: filepath.ToSlash(childRel),
 			IsDir:   entry.IsDir(),
 			Size:    childInfo.Size(),
 			ModTime: childInfo.ModTime().Format(time.RFC3339),
-		})
+		}
+		applyWorkspaceTreeLabel(&child, labels)
+		node.Children = append(node.Children, child)
 	}
 	return node, nil
 }
@@ -1763,6 +2081,12 @@ func sameAbsPath(a, b string) bool {
 	bb, errB := filepath.Abs(filepath.Clean(b))
 	if errA != nil || errB != nil {
 		return false
+	}
+	if realA, err := filepath.EvalSymlinks(aa); err == nil {
+		aa = realA
+	}
+	if realB, err := filepath.EvalSymlinks(bb); err == nil {
+		bb = realB
 	}
 	if goruntime.GOOS == "windows" {
 		return strings.EqualFold(aa, bb)
@@ -1925,6 +2249,26 @@ func (a *App) OpenInTerminal(name string) (string, error) {
 		return "", err
 	}
 	return openTerminalAt(filepath.Join(root, "agent", fm.FolderKey()))
+}
+
+// AgentRun launches the given command in an embedded pty terminal rooted at the
+// feature's agent workspace. The session is tagged with the feature so its exit
+// emits "agent:exit", letting the UI refresh the diff and prompt a sync.
+func (a *App) AgentRun(name, command string) (TerminalSession, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return TerminalSession{}, err
+	}
+	if strings.TrimSpace(command) == "" {
+		return TerminalSession{}, fmt.Errorf("agent command is required")
+	}
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return TerminalSession{}, err
+	}
+	dir := filepath.Join(root, "agent", fm.FolderKey())
+	shell, args := commandShell(command)
+	return a.startPTY(dir, name, shell, args)
 }
 
 func openTerminalAt(dir string) (string, error) {

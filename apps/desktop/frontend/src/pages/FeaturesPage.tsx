@@ -36,7 +36,6 @@ export function FeaturesPage({ onOpen }: Props) {
   const [features, setFeatures] = useState<FeatureEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
-  const [base, setBase] = useState("");
   const [createCheck, setCreateCheck] = useState<FeatureCreateCheck | null>(null);
   const [existingBranch, setExistingBranch] = useState<"reuse" | "recreate">("reuse");
 
@@ -119,15 +118,14 @@ export function FeaturesPage({ onOpen }: Props) {
   async function create(e: React.FormEvent) {
     e.preventDefault();
     const featureName = name.trim();
-    const baseBranch = base.trim();
     try {
       setBusy(true);
-      const check = await api.CheckFeatureCreation(featureName, baseBranch);
+      const check = await api.CheckFeatureCreation(featureName, "");
       if (check.hasConflicts || check.blocked) {
         setExistingBranch("reuse");
         setCreateCheck(check);
       } else {
-        await completeCreate(featureName, baseBranch, "error");
+        await completeCreate(featureName, "error");
       }
     } catch (err) {
       notify(errMessage(err), "error");
@@ -138,16 +136,26 @@ export function FeaturesPage({ onOpen }: Props) {
 
   async function completeCreate(
     featureName: string,
-    baseBranch: string,
     policy: "error" | "reuse" | "recreate"
   ) {
-    await api.CreateFeature(featureName, baseBranch, policy);
+    await api.CreateFeature(featureName, "", policy);
     notify(t("toast.featureCreated", { name: featureName }), "success");
     setName("");
-    setBase("");
     setCreateCheck(null);
     setExistingBranch("reuse");
     await load();
+    if (
+      await confirm({
+        title: t("features.prepareAgentTitle"),
+        message: t("features.prepareAgentConfirm", { name: featureName }),
+        confirmLabel: t("features.prepareAgentYes"),
+      })
+    ) {
+      const meta = await api.AgentPrepare(featureName, true);
+      const copied = (meta.repositories ?? []).reduce((n, r) => n + r.copiedFiles, 0);
+      notify(t("toast.agentPrepared", { count: copied }), "success");
+    }
+    onOpen(featureName);
   }
 
   async function continueCreate() {
@@ -164,12 +172,12 @@ export function FeaturesPage({ onOpen }: Props) {
       return;
     try {
       setBusy(true);
-      await completeCreate(createCheck.name, base.trim(), existingBranch);
+      await completeCreate(createCheck.name, existingBranch);
     } catch (err) {
       // State can change after the initial check. Refresh the conflict view
       // instead of leaving the user with a generic retry error.
       try {
-        const refreshed = await api.CheckFeatureCreation(createCheck.name, base.trim());
+        const refreshed = await api.CheckFeatureCreation(createCheck.name, "");
         if (refreshed.hasConflicts || refreshed.blocked) {
           setCreateCheck(refreshed);
         } else {
@@ -305,15 +313,6 @@ export function FeaturesPage({ onOpen }: Props) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="coupon-v2"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="fb">{t("features.baseLabel")}</Label>
-              <Input
-                id="fb"
-                value={base}
-                onChange={(e) => setBase(e.target.value)}
-                placeholder="develop"
               />
             </div>
             <div className="sm:col-span-2">

@@ -194,9 +194,6 @@ func AddRepository(root string, cfg Config, r Repository) (Config, error) {
 			return cfg, fmt.Errorf("repository %q already exists", r.Name)
 		}
 	}
-	if r.DefaultBranch == "" {
-		r.DefaultBranch = cfg.Git.DefaultBaseBranch
-	}
 	cfg.Repositories = append(cfg.Repositories, r)
 	return cfg, Save(root, cfg)
 }

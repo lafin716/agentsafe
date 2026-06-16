@@ -81,7 +81,17 @@ export interface WorkspaceTreeNode {
   isDir: boolean;
   size: number;
   modTime: string;
+  featureName?: string;
+  branch?: string;
   children: WorkspaceTreeNode[] | null;
+}
+
+export interface RepoRuntimeState {
+  name: string;
+  local: boolean;
+  currentBranch: string;
+  remoteBranches: string[] | null;
+  error?: string;
 }
 
 export interface FeatureEntry {
@@ -283,6 +293,12 @@ export interface SyncOptions {
   dryRun: boolean;
   includeRisky: boolean;
   allowMaskedSync: boolean;
+}
+
+export interface TerminalSession {
+  id: string;
+  path: string;
+  title: string;
 }
 
 export interface RequestResult {

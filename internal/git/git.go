@@ -140,6 +140,52 @@ func FetchAll(repoPath string) error {
 	return err
 }
 func Checkout(repoPath, branch string) error { _, err := Run(repoPath, "checkout", branch); return err }
+func ListRemoteBranches(repoPath string) ([]string, error) {
+	out, err := Output(repoPath, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var branches []string
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "origin/HEAD" || strings.HasPrefix(line, "origin/HEAD ") {
+			continue
+		}
+		branch := strings.TrimPrefix(line, "origin/")
+		if branch == "" || seen[branch] {
+			continue
+		}
+		seen[branch] = true
+		branches = append(branches, branch)
+	}
+	return branches, nil
+}
+func CheckoutRemoteBranch(repoPath, remoteBranch string) error {
+	branch := strings.TrimSpace(remoteBranch)
+	branch = strings.TrimPrefix(branch, "refs/remotes/")
+	branch = strings.TrimPrefix(branch, "refs/heads/")
+	branch = strings.TrimPrefix(branch, "origin/")
+	if branch == "" || branch == "HEAD" {
+		return fmt.Errorf("invalid remote branch %q", remoteBranch)
+	}
+	if _, err := Run(repoPath, "check-ref-format", "--branch", branch); err != nil {
+		return err
+	}
+	if !RemoteBranchExists(repoPath, branch) {
+		if err := FetchAll(repoPath); err != nil {
+			return err
+		}
+	}
+	if !RemoteBranchExists(repoPath, branch) {
+		return fmt.Errorf("remote branch origin/%s not found", branch)
+	}
+	if LocalBranchExists(repoPath, branch) {
+		return Checkout(repoPath, branch)
+	}
+	_, err := Run(repoPath, "checkout", "-b", branch, "--track", "origin/"+branch)
+	return err
+}
 func Pull(repoPath, remote, branch string) error {
 	_, err := Run(repoPath, "pull", "--ff-only", remote, branch)
 	return err

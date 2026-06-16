@@ -86,11 +86,11 @@ func pullRepository(root string, cfg config.Config, r config.Repository, usernam
 		return err
 	}
 	branch := r.DefaultBranch
-	if branch == "" {
-		branch = cfg.Git.DefaultBaseBranch
-	}
 	cur, _ := aggit.CurrentBranch(dest)
-	if cur == branch && !aggit.HasChanges(dest) {
+	if branch == "" {
+		branch = cur
+	}
+	if branch != "" && cur == branch && !aggit.HasChanges(dest) {
 		if err := run(dest, "pull", "--ff-only", "origin", branch); err != nil {
 			return fmt.Errorf("fetched, but pull failed: %w", err)
 		}

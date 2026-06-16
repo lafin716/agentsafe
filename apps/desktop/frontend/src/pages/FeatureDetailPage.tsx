@@ -12,13 +12,16 @@ import {
   GitMerge,
   History,
   Loader2,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
+  Sparkles,
   Terminal,
   Trash2,
   Upload,
   Wand2,
+  X,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
 import type {
@@ -32,7 +35,9 @@ import type {
   RequestResult,
   RequestResults,
   Repository,
+  TerminalSession,
 } from "@/lib/types";
+import { TerminalPanel, runtime } from "@/components/TerminalPanel";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -54,13 +59,14 @@ interface Props {
   onViewHistory: (feature: string) => void;
 }
 
-type Tab = "status" | "agent" | "deliver";
+type Tab = "work" | "status";
 
 export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   const { notify } = useToast();
   const { t } = useI18n();
   const confirm = useConfirm();
-  const [tab, setTab] = useState<Tab>("status");
+  const [tab, setTab] = useState<Tab>("work");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [statusLoading, setStatusLoading] = useState(true);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -115,10 +121,31 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     }
   });
 
+  // Managed agent run: command launched in an embedded terminal whose exit
+  // triggers a diff refresh and the "agent finished" sync prompt.
+  const [agentCommand, setAgentCommand] = useState(() => {
+    try {
+      return localStorage.getItem("agentsafe.agentCommand") || "claude";
+    } catch {
+      return "claude";
+    }
+  });
+  const [agentSession, setAgentSession] = useState<TerminalSession | null>(null);
+  const [agentFinished, setAgentFinished] = useState(false);
+
   function changeBackupOnPrepare(v: boolean) {
     setBackupOnPrepare(v);
     try {
       localStorage.setItem("agentsafe.backupOnPrepare", v ? "true" : "false");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function changeAgentCommand(v: string) {
+    setAgentCommand(v);
+    try {
+      localStorage.setItem("agentsafe.agentCommand", v);
     } catch {
       /* ignore */
     }
@@ -188,6 +215,8 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     setDiffAutoAttempted(false);
     setPrepared(null);
     setFeaturePaths(null);
+    setAgentSession(null);
+    setAgentFinished(false);
   }, [name]);
 
   useEffect(() => {
@@ -200,7 +229,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
 
   useEffect(() => {
     if (
-      tab === "agent" &&
+      tab === "work" &&
       agentReady &&
       !diffLoaded &&
       !diffLoading &&
@@ -217,6 +246,21 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     loadDiff,
     tab,
   ]);
+
+  // When a managed agent run for this feature exits, refresh the diff/status and
+  // surface the "agent finished" banner so the user can review and sync.
+  useEffect(() => {
+    const rt = runtime();
+    if (!rt) return;
+    const off = rt.EventsOn("agent:exit", (...data: unknown[]) => {
+      const payload = data[0] as { feature?: string };
+      if (payload?.feature !== name) return;
+      setAgentFinished(true);
+      notify(t("toast.agentFinished"), "success");
+      void Promise.all([loadDiff(), loadStatus(), loadCounts()]);
+    });
+    return off;
+  }, [name, notify, t, loadDiff, loadStatus, loadCounts]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -240,7 +284,28 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       setDiffAutoAttempted(true);
       await Promise.all([loadDiff(), loadStatus()]);
       setDiffLoaded(true);
-      setTab("agent");
+      setTab("work");
+    });
+
+  // syncAndCommit applies the reviewed agent changes to the worktrees and, unless
+  // it is a dry run, commits them with the bulk message in a single action.
+  const syncAndCommit = () =>
+    run(async () => {
+      await api.SyncAndCommit(name, dryRun ? "" : commitMsg.trim(), {
+        repo: "",
+        dryRun,
+        includeRisky,
+        allowMaskedSync: allowMasked,
+      });
+      notify(
+        dryRun ? t("toast.dryRunCompleted") : t("toast.syncCommitted"),
+        "success"
+      );
+      if (!dryRun) {
+        setCommitMsg("");
+        setAgentFinished(false);
+      }
+      await Promise.all([loadDiff(), loadStatus(), loadCounts()]);
     });
 
   const sync = () =>
@@ -256,6 +321,13 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
         "success"
       );
       await Promise.all([loadDiff(), loadStatus(), loadCounts()]);
+    });
+
+  const restoreFromWorktree = (repo: string, path: string) =>
+    run(async () => {
+      await api.AgentRestoreFromWorktree(name, repo, path);
+      notify(t("toast.agentRestoredFromWorktree", { path }), "success");
+      await loadDiff();
     });
 
   const del = () =>
@@ -319,6 +391,24 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     run(async () => {
       const p = await api.OpenInEditor(name, program.trim());
       notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  // runAgent launches the configured agent command in an embedded terminal; its
+  // exit is detected via the "agent:exit" event subscribed above.
+  const runAgent = () =>
+    run(async () => {
+      const session = await api.AgentRun(name, agentCommand.trim());
+      setAgentSession(session);
+      setAgentFinished(false);
+      notify(t("toast.agentStarted"), "success");
+    });
+
+  const closeAgentTerminal = () =>
+    run(async () => {
+      if (agentSession) {
+        await api.TerminalClose(agentSession.id);
+      }
+      setAgentSession(null);
     });
 
   const openRepoFolder = (repo: string) =>
@@ -511,9 +601,8 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     });
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: "work", label: t("feature.tabWork") },
     { id: "status", label: t("feature.tabStatus") },
-    { id: "agent", label: t("feature.tabAgent") },
-    { id: "deliver", label: t("feature.tabDeliver") },
   ];
   const repoPathsByName = new Map(
     (featurePaths?.repositories ?? []).map((repo) => [repo.name, repo])
@@ -807,7 +896,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
         </Card>
       )}
 
-      {tab === "agent" && (
+      {tab === "work" && (
         <div className="space-y-5">
           <Card>
             <CardHeader>
@@ -908,6 +997,53 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                 </>
               )}
               </div>
+              {agentReady && (
+                <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1 space-y-1.5">
+                      <Label htmlFor="agentCmd">{t("feature.agentCommand")}</Label>
+                      <Input
+                        id="agentCmd"
+                        value={agentCommand}
+                        onChange={(e) => changeAgentCommand(e.target.value)}
+                        placeholder="claude"
+                      />
+                    </div>
+                    <Button
+                      onClick={runAgent}
+                      disabled={busy || !agentCommand.trim() || !!agentSession}
+                    >
+                      <Play className="size-4" /> {t("feature.runAgent")}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t("feature.agentRunHint")}
+                  </p>
+                  {agentSession && (
+                    <div className="overflow-hidden rounded-md border">
+                      <div className="flex items-center justify-between gap-2 border-b bg-card px-3 py-1.5">
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {t("feature.agentRunning")}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7"
+                          onClick={closeAgentTerminal}
+                          disabled={busy}
+                        >
+                          <X className="size-3.5" /> {t("feature.closeAgentTerminal")}
+                        </Button>
+                      </div>
+                      <TerminalPanel
+                        id={agentSession.id}
+                        path={agentSession.path}
+                        className="flex h-80 flex-col"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
               <Toggle
                 checked={backupOnPrepare}
                 onChange={changeBackupOnPrepare}
@@ -978,6 +1114,12 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
 
           {agentReady && (
           <>
+          {agentFinished && (
+            <div className="flex items-start gap-3 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">
+              <Sparkles className="mt-0.5 size-5 shrink-0 text-emerald-600" />
+              <div>{t("feature.agentFinishedBanner")}</div>
+            </div>
+          )}
           <Card>
             <CardHeader>
               <CardTitle>{t("feature.diffTitle")}</CardTitle>
@@ -1014,7 +1156,12 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                   ) : (
                     <ul className="divide-y rounded-md border">
                       {(r.changes ?? []).map((c, i) => (
-                        <ChangeRow key={c.path + i} change={c} />
+                        <ChangeRow
+                          key={c.path + i}
+                          change={c}
+                          onRestore={() => restoreFromWorktree(r.name, c.path)}
+                          disabled={busy || diffLoading}
+                        />
                       ))}
                     </ul>
                   )}
@@ -1024,72 +1171,37 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
           </Card>
 
           <Card>
-            <CardHeader>
-              <CardTitle>{t("feature.syncTitle")}</CardTitle>
-              <CardDescription>{t("feature.syncDesc")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex flex-wrap gap-4 text-sm">
-                <Toggle
-                  checked={dryRun}
-                  onChange={setDryRun}
-                  label={t("feature.dryRun")}
-                />
-                <Toggle
-                  checked={includeRisky}
-                  onChange={setIncludeRisky}
-                  label={t("feature.includeRisky")}
-                />
-                <Toggle
-                  checked={allowMasked}
-                  onChange={setAllowMasked}
-                  label={t("feature.allowMasked")}
-                />
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle>{t("feature.deliverTitle")}</CardTitle>
+                <CardDescription>{t("feature.deliverDesc")}</CardDescription>
               </div>
-              <Button onClick={sync} disabled={busy}>
-                <Upload className="size-4" />{" "}
-                {dryRun ? t("feature.previewSync") : t("feature.sync")}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadStatus}
+                disabled={statusLoading || busy}
+              >
+                {statusLoading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                {statusLoading ? t("common.loading") : t("common.refresh")}
               </Button>
-            </CardContent>
-          </Card>
-          </>
-          )}
-        </div>
-      )}
-
-      {tab === "deliver" && (
-        <div className="space-y-5">
-          {(() => {
-            const repos = status?.repositories ?? [];
-            const anyDirty = repos.some((r) => (r.changes ?? []).length > 0);
-            const anyPushable = repos.some((r) => (r.ahead ?? 0) > 0);
-            const actionable = repos.filter(
-              (r) => (r.changes ?? []).length > 0 || (r.ahead ?? 0) > 0 || !!r.error
-            );
-            return (
-              <>
-                {/* Bulk commit / push */}
-                <Card>
-                  <CardHeader className="flex-row items-center justify-between space-y-0">
-                    <div>
-                      <CardTitle>{t("feature.bulkCommitTitle")}</CardTitle>
-                      <CardDescription>{t("feature.bulkCommitDesc")}</CardDescription>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={loadStatus}
-                      disabled={statusLoading || busy}
-                    >
-                      {statusLoading ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="size-4" />
-                      )}
-                      {statusLoading ? t("common.loading") : t("common.refresh")}
-                    </Button>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {(() => {
+                const repos = status?.repositories ?? [];
+                const anyPushable = repos.some((r) => (r.ahead ?? 0) > 0);
+                const actionable = repos.filter(
+                  (r) =>
+                    (r.changes ?? []).length > 0 ||
+                    (r.ahead ?? 0) > 0 ||
+                    !!r.error
+                );
+                return (
+                  <>
                     <div className="space-y-1.5">
                       <Label htmlFor="cm">{t("feature.messageLabel")}</Label>
                       <Input
@@ -1099,17 +1211,15 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                         placeholder="feat: add coupon v2"
                       />
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <Button
-                        onClick={() => doCommit("", commitMsg)}
-                        disabled={busy || !commitMsg.trim() || !anyDirty}
+                        onClick={syncAndCommit}
+                        disabled={busy || (!dryRun && !commitMsg.trim())}
                       >
-                        {actingRepo === "*" ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <GitCommit className="size-4" />
-                        )}
-                        {t("feature.commitAll")}
+                        <Upload className="size-4" />{" "}
+                        {dryRun
+                          ? t("feature.previewSync")
+                          : t("feature.syncAndCommit")}
                       </Button>
                       <Button
                         variant="secondary"
@@ -1119,147 +1229,223 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                         <Upload className="size-4" /> {t("feature.pushAll")}
                       </Button>
                     </div>
-                  </CardContent>
-                </Card>
 
-                {/* Per-repository commit / push */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>{t("feature.perRepoCommitTitle")}</CardTitle>
-                    <CardDescription>{t("feature.perRepoCommitDesc")}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {statusLoading && !status ? (
-                      <LoadingState label={t("feature.loadingStatus")} />
-                    ) : actionable.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        {t("feature.noChangesToCommit")}
-                      </p>
-                    ) : (
-                      actionable.map((r) => {
-                        const changeCount = (r.changes ?? []).length;
-                        const dirty = changeCount > 0;
-                        const ahead = r.ahead ?? 0;
-                        const msg = repoMsgs[r.name] ?? "";
-                        const rowBusy = actingRepo === r.name;
-                        return (
-                          <div key={r.name} className="space-y-2 rounded-md border p-3">
-                            <div className="flex items-center gap-2">
-                              <Boxes className="size-4 text-muted-foreground" />
-                              <span className="font-medium">{r.name}</span>
-                              {dirty && (
-                                <Badge variant="warning">
-                                  {t("feature.repoChanges", { count: changeCount })}
-                                </Badge>
-                              )}
-                              {ahead > 0 && (
-                                <Badge variant="secondary">
-                                  {t("feature.repoAhead", { count: ahead })}
-                                </Badge>
-                              )}
+                    <details
+                      className="rounded-md border"
+                      open={advancedOpen}
+                      onToggle={(e) =>
+                        setAdvancedOpen(
+                          (e.target as HTMLDetailsElement).open
+                        )
+                      }
+                    >
+                      <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium">
+                        {t("feature.advancedOptions")}
+                      </summary>
+                      <div className="space-y-4 border-t p-3">
+                        <div className="flex flex-wrap items-center gap-4 text-sm">
+                          <Toggle
+                            checked={dryRun}
+                            onChange={setDryRun}
+                            label={t("feature.dryRun")}
+                          />
+                          <Toggle
+                            checked={includeRisky}
+                            onChange={setIncludeRisky}
+                            label={t("feature.includeRisky")}
+                          />
+                          <Toggle
+                            checked={allowMasked}
+                            onChange={setAllowMasked}
+                            label={t("feature.allowMasked")}
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={sync}
+                            disabled={busy}
+                          >
+                            <Upload className="size-4" />{" "}
+                            {dryRun
+                              ? t("feature.previewSync")
+                              : t("feature.sync")}
+                          </Button>
+                        </div>
+
+                        <div className="space-y-3">
+                          <div>
+                            <div className="font-medium">
+                              {t("feature.perRepoCommitTitle")}
                             </div>
-                            {r.error ? (
-                              <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
-                                {r.error}
-                              </div>
-                            ) : dirty ? (
-                              <ul className="divide-y rounded-md border">
-                                {(r.changes ?? []).map((change, i) => (
-                                  <RepoStatusRow
-                                    key={`${change.code}-${change.path}-${i}`}
-                                    change={change}
-                                  />
-                                ))}
-                              </ul>
-                            ) : null}
-                            <div className="flex items-end gap-2">
-                              <div className="flex-1 space-y-1.5">
-                                <Label htmlFor={`cm-${r.name}`}>
-                                  {t("feature.messageLabel")}
-                                </Label>
-                                <Input
-                                  id={`cm-${r.name}`}
-                                  value={msg}
-                                  onChange={(e) =>
-                                    setRepoMsgs((m) => ({ ...m, [r.name]: e.target.value }))
-                                  }
-                                  placeholder="feat: ..."
-                                />
-                              </div>
-                              <Button
-                                onClick={() => doCommit(r.name, msg)}
-                                disabled={busy || !dirty || !msg.trim()}
-                              >
-                                {rowBusy ? (
-                                  <Loader2 className="size-4 animate-spin" />
-                                ) : (
-                                  <GitCommit className="size-4" />
-                                )}
-                                {t("feature.commitRepo")}
-                              </Button>
-                              <Button
-                                variant="secondary"
-                                onClick={() => push(r.name)}
-                                disabled={busy || ahead === 0}
-                              >
-                                <Upload className="size-4" /> {t("feature.pushRepo")}
-                              </Button>
-                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              {t("feature.perRepoCommitDesc")}
+                            </p>
                           </div>
-                        );
-                      })
-                    )}
-                  </CardContent>
-                </Card>
-              </>
-            );
-          })()}
+                          {statusLoading && !status ? (
+                            <LoadingState
+                              label={t("feature.loadingStatus")}
+                            />
+                          ) : actionable.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">
+                              {t("feature.noChangesToCommit")}
+                            </p>
+                          ) : (
+                            actionable.map((r) => {
+                              const changeCount = (r.changes ?? []).length;
+                              const dirty = changeCount > 0;
+                              const ahead = r.ahead ?? 0;
+                              const msg = repoMsgs[r.name] ?? "";
+                              const rowBusy = actingRepo === r.name;
+                              return (
+                                <div
+                                  key={r.name}
+                                  className="space-y-2 rounded-md border p-3"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <Boxes className="size-4 text-muted-foreground" />
+                                    <span className="font-medium">
+                                      {r.name}
+                                    </span>
+                                    {dirty && (
+                                      <Badge variant="warning">
+                                        {t("feature.repoChanges", {
+                                          count: changeCount,
+                                        })}
+                                      </Badge>
+                                    )}
+                                    {ahead > 0 && (
+                                      <Badge variant="secondary">
+                                        {t("feature.repoAhead", {
+                                          count: ahead,
+                                        })}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  {r.error ? (
+                                    <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
+                                      {r.error}
+                                    </div>
+                                  ) : dirty ? (
+                                    <ul className="divide-y rounded-md border">
+                                      {(r.changes ?? []).map((change, i) => (
+                                        <RepoStatusRow
+                                          key={`${change.code}-${change.path}-${i}`}
+                                          change={change}
+                                        />
+                                      ))}
+                                    </ul>
+                                  ) : null}
+                                  <div className="flex items-end gap-2">
+                                    <div className="flex-1 space-y-1.5">
+                                      <Label htmlFor={`cm-${r.name}`}>
+                                        {t("feature.messageLabel")}
+                                      </Label>
+                                      <Input
+                                        id={`cm-${r.name}`}
+                                        value={msg}
+                                        onChange={(e) =>
+                                          setRepoMsgs((m) => ({
+                                            ...m,
+                                            [r.name]: e.target.value,
+                                          }))
+                                        }
+                                        placeholder="feat: ..."
+                                      />
+                                    </div>
+                                    <Button
+                                      onClick={() => doCommit(r.name, msg)}
+                                      disabled={busy || !dirty || !msg.trim()}
+                                    >
+                                      {rowBusy ? (
+                                        <Loader2 className="size-4 animate-spin" />
+                                      ) : (
+                                        <GitCommit className="size-4" />
+                                      )}
+                                      {t("feature.commitRepo")}
+                                    </Button>
+                                    <Button
+                                      variant="secondary"
+                                      onClick={() => push(r.name)}
+                                      disabled={busy || ahead === 0}
+                                    >
+                                      <Upload className="size-4" />{" "}
+                                      {t("feature.pushRepo")}
+                                    </Button>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("feature.mrTitle")}</CardTitle>
-              <CardDescription>{t("feature.mrDesc")}</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="mti">{t("feature.mrTitleLabel")}</Label>
-                <Input
-                  id="mti"
-                  value={mrTitle}
-                  onChange={(e) => setMrTitle(e.target.value)}
-                  placeholder={`[${name}] ...`}
-                />
-              </div>
-              <Button onClick={sendRequests} disabled={busy}>
-                <GitMerge className="size-4" /> {t("feature.generateMr")}
-              </Button>
-              {requests && (
-                <ul className="divide-y rounded-md border">
-                  {(requests.items ?? []).length === 0 ? (
-                    <li className="px-3 py-2 text-sm text-muted-foreground">
-                      {t("request.empty")}
-                    </li>
-                  ) : (
-                    (requests.items ?? []).map((r) => (
-                      <RequestRow key={r.repo} item={r} />
-                    ))
-                  )}
-                </ul>
-              )}
+                        <div className="space-y-3">
+                          <div>
+                            <div className="font-medium">
+                              {t("feature.mrTitle")}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              {t("feature.mrDesc")}
+                            </p>
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label htmlFor="mti">
+                              {t("feature.mrTitleLabel")}
+                            </Label>
+                            <Input
+                              id="mti"
+                              value={mrTitle}
+                              onChange={(e) => setMrTitle(e.target.value)}
+                              placeholder={`[${name}] ...`}
+                            />
+                          </div>
+                          <Button onClick={sendRequests} disabled={busy}>
+                            <GitMerge className="size-4" />{" "}
+                            {t("feature.generateMr")}
+                          </Button>
+                          {requests && (
+                            <ul className="divide-y rounded-md border">
+                              {(requests.items ?? []).length === 0 ? (
+                                <li className="px-3 py-2 text-sm text-muted-foreground">
+                                  {t("request.empty")}
+                                </li>
+                              ) : (
+                                (requests.items ?? []).map((r) => (
+                                  <RequestRow key={r.repo} item={r} />
+                                ))
+                              )}
+                            </ul>
+                          )}
+                        </div>
+                      </div>
+                    </details>
+                  </>
+                );
+              })()}
             </CardContent>
           </Card>
+          </>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function ChangeRow({ change }: { change: Change }) {
+function ChangeRow({
+  change,
+  onRestore,
+  disabled,
+}: {
+  change: Change;
+  onRestore: () => void;
+  disabled: boolean;
+}) {
   const { t } = useI18n();
+  const type = change.type.toLowerCase();
   const typeColor =
-    change.type === "added"
+    type === "added"
       ? "text-emerald-600"
-      : change.type === "deleted"
+      : type === "deleted"
         ? "text-destructive"
         : "text-amber-600";
   return (
@@ -1273,6 +1459,16 @@ function ChangeRow({ change }: { change: Change }) {
       <div className="flex shrink-0 gap-1">
         {change.risky && <Badge variant="warning">{t("feature.risky")}</Badge>}
         {change.masked && <Badge variant="destructive">{t("feature.masked")}</Badge>}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7"
+          disabled={disabled}
+          onClick={onRestore}
+          title={t("feature.restoreFromWorktree")}
+        >
+          <RotateCcw className="size-3.5" /> {t("feature.restoreFromWorktreeShort")}
+        </Button>
       </div>
     </li>
   );

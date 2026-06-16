@@ -616,10 +616,14 @@ func agentCmd() *cobra.Command {
 	}}
 	diff.Flags().StringVar(&repoFilter, "repo", "", "limit to repository")
 	var opt agent.Options
+	var syncMessage string
 	sync := &cobra.Command{Use: "sync FEATURE", Short: "Sync reviewed agent changes back to worktrees", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, cfg, err := cwdConfig()
 		if err != nil {
 			return err
+		}
+		if strings.TrimSpace(syncMessage) != "" {
+			return agent.SyncAndCommit(root, cfg, args[0], syncMessage, opt)
 		}
 		return agent.Sync(root, cfg, args[0], opt)
 	}}
@@ -628,6 +632,7 @@ func agentCmd() *cobra.Command {
 	sync.Flags().BoolVar(&opt.IncludeRisky, "include-risky", false, "allow risky files to sync")
 	sync.Flags().BoolVar(&opt.AllowMaskedSync, "allow-masked-sync", false, "allow masked files to sync")
 	sync.Flags().BoolVar(&opt.Yes, "yes", false, "skip confirmation")
+	sync.Flags().StringVarP(&syncMessage, "message", "m", "", "commit the synced changes with this message")
 	var editor string
 	open := &cobra.Command{Use: "open FEATURE", Short: "Print or open the agent workspace path", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()

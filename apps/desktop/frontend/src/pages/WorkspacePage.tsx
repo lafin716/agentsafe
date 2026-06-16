@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Code2,
   DownloadCloud,
@@ -11,7 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
-import type { Config } from "@/lib/types";
+import type { Config, RepoRuntimeState } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -72,6 +72,8 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [actingRepo, setActingRepo] = useState<string | null>(null);
   const [repoLocalStates, setRepoLocalStates] = useState<Record<string, boolean>>({});
+  const [repoRuntimeStates, setRepoRuntimeStates] = useState<Record<string, RepoRuntimeState>>({});
+  const [selectedRemoteBranches, setSelectedRemoteBranches] = useState<Record<string, string>>({});
   const [repoStatesLoading, setRepoStatesLoading] = useState(false);
   const [credentialPrompt, setCredentialPrompt] = useState<CredentialPrompt | null>(null);
   const [initName, setInitName] = useState("");
@@ -79,20 +81,42 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
   // Add-repo form
   const [repoName, setRepoName] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
-  const [repoBranch, setRepoBranch] = useState("");
 
-  useEffect(() => {
+  const loadRepoStates = useCallback(async () => {
     if (!config) {
       setRepoLocalStates({});
+      setRepoRuntimeStates({});
       return;
     }
     setRepoStatesLoading(true);
-    void api
-      .RepoLocalStates()
-      .then(setRepoLocalStates)
-      .catch((e) => notify(errMessage(e), "error"))
-      .finally(() => setRepoStatesLoading(false));
-  }, [config, root, notify]);
+    try {
+      const [local, runtime] = await Promise.all([
+        api.RepoLocalStates(),
+        api.RepoRuntimeStates(),
+      ]);
+      setRepoLocalStates(local);
+      const runtimeByName = Object.fromEntries(runtime.map((item) => [item.name, item]));
+      setRepoRuntimeStates(runtimeByName);
+      setSelectedRemoteBranches((prev) => {
+        const next = { ...prev };
+        for (const item of runtime) {
+          const branches = item.remoteBranches ?? [];
+          if (!next[item.name] || !branches.includes(next[item.name])) {
+            next[item.name] = branches.find((branch) => branch !== item.currentBranch) ?? branches[0] ?? "";
+          }
+        }
+        return next;
+      });
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setRepoStatesLoading(false);
+    }
+  }, [config, notify]);
+
+  useEffect(() => {
+    void loadRepoStates();
+  }, [loadRepoStates, root]);
 
   async function pickAndOpen() {
     try {
@@ -131,15 +155,11 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
     e.preventDefault();
     try {
       setBusy(true);
-      await api.AddRepo(
-        repoName.trim(),
-        repoUrl.trim(),
-        repoBranch.trim()
-      );
+      await api.AddRepo(repoName.trim(), repoUrl.trim(), "");
       setRepoName("");
       setRepoUrl("");
-      setRepoBranch("");
       await onChanged();
+      await loadRepoStates();
       notify(t("toast.repoAdded"), "success");
     } catch (err) {
       notify(errMessage(err), "error");
@@ -189,7 +209,7 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
           notify(errMessage(e), "error");
         }
       }
-      setRepoLocalStates(await api.RepoLocalStates());
+      await loadRepoStates();
       if (failed === 0) {
         notify(t("toast.pullCompleted"), "success");
       } else {
@@ -206,7 +226,7 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
       setActingRepo(name);
       const cloned = !repoLocalStates[name];
       await pullRepoWithAuthentication(name);
-      setRepoLocalStates(await api.RepoLocalStates());
+      await loadRepoStates();
       notify(
         cloned
           ? t("toast.repoCloned", { name })
@@ -261,6 +281,21 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
       notify(errMessage(e), "error");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function checkoutRepo(name: string) {
+    const branch = selectedRemoteBranches[name];
+    if (!branch) return;
+    try {
+      setActingRepo(name);
+      await api.CheckoutRepoBranch(name, branch);
+      await loadRepoStates();
+      notify(t("toast.repoCheckedOut", { name, branch }), "success");
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setActingRepo(null);
     }
   }
 
@@ -359,11 +394,6 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-          <Info label={t("workspace.baseBranch")} value={config.Git.DefaultBaseBranch} />
-          <Info label={t("workspace.branchPrefix")} value={config.Git.BranchPrefix} />
-          <Info label={t("workspace.target")} value={config.GitLab.TargetBranch} />
-        </CardContent>
       </Card>
 
       <Card>
@@ -392,6 +422,7 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
                 <TableRow>
                   <TableHead>{t("repo.colName")}</TableHead>
                   <TableHead>{t("repo.colBranch")}</TableHead>
+                  <TableHead>{t("repo.colCheckout")}</TableHead>
                   <TableHead>{t("repo.colUrl")}</TableHead>
                   <TableHead>{t("repo.colAction")}</TableHead>
                   <TableHead className="w-10"></TableHead>
@@ -401,7 +432,64 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
                 {repos.map((r) => (
                   <TableRow key={r.Name}>
                     <TableCell className="font-medium">{r.Name}</TableCell>
-                    <TableCell>{r.DefaultBranch || "—"}</TableCell>
+                    <TableCell>
+                      {repoStatesLoading ? (
+                        <span className="text-muted-foreground">{t("common.loading")}</span>
+                      ) : repoRuntimeStates[r.Name]?.currentBranch ? (
+                        <span className="font-mono text-xs">{repoRuntimeStates[r.Name].currentBranch}</span>
+                      ) : repoRuntimeStates[r.Name]?.local ? (
+                        <span className="text-muted-foreground">{t("repo.detached")}</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="h-8 min-w-32 rounded-md border bg-background px-2 text-xs"
+                          disabled={
+                            busy ||
+                            repoStatesLoading ||
+                            actingRepo === r.Name ||
+                            !(repoRuntimeStates[r.Name]?.remoteBranches ?? []).length
+                          }
+                          value={selectedRemoteBranches[r.Name] ?? ""}
+                          onChange={(e) =>
+                            setSelectedRemoteBranches((prev) => ({
+                              ...prev,
+                              [r.Name]: e.target.value,
+                            }))
+                          }
+                        >
+                          {(repoRuntimeStates[r.Name]?.remoteBranches ?? []).length === 0 && (
+                            <option value="">{t("repo.noRemoteBranches")}</option>
+                          )}
+                          {(repoRuntimeStates[r.Name]?.remoteBranches ?? []).map((branch) => (
+                            <option key={branch} value={branch}>
+                              origin/{branch}
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={
+                            busy ||
+                            repoStatesLoading ||
+                            actingRepo === r.Name ||
+                            !selectedRemoteBranches[r.Name]
+                          }
+                          onClick={() => checkoutRepo(r.Name)}
+                        >
+                          {actingRepo === r.Name ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="size-4" />
+                          )}
+                          {t("repo.checkout")}
+                        </Button>
+                      </div>
+                    </TableCell>
                     <TableCell className="max-w-xs truncate text-muted-foreground">
                       {r.URL}
                     </TableCell>
@@ -471,15 +559,6 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
                 placeholder="https://gitlab.example.com/company/backend.git"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="rb">{t("repo.branchLabel")}</Label>
-              <Input
-                id="rb"
-                value={repoBranch}
-                onChange={(e) => setRepoBranch(e.target.value)}
-                placeholder="develop"
               />
             </div>
             <div className="sm:col-span-2">
@@ -566,15 +645,6 @@ function CredentialDialog({
           </Button>
         </div>
       </form>
-    </div>
-  );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border bg-background p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 truncate font-medium">{value || "—"}</div>
     </div>
   );
 }
