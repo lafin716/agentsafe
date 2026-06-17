@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -8,6 +8,7 @@ import {
   Folder,
   FolderOpen,
   RefreshCw,
+  Save,
   Terminal as TerminalIcon,
   Trash2,
   X,
@@ -22,6 +23,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -36,6 +38,14 @@ type TerminalTab = {
   id: string;
   title: string;
   path: string;
+};
+
+type EditorTab = {
+  id: string;
+  title: string;
+  path: string;
+  content: string;
+  savedContent: string;
 };
 
 function formatSize(bytes: number): string {
@@ -67,6 +77,10 @@ function replaceNode(
   };
 }
 
+function editorId(path: string): string {
+  return `editor:${path}`;
+}
+
 export function FileExplorerPage({ config }: Props) {
   const { t } = useI18n();
   const { notify } = useToast();
@@ -76,7 +90,17 @@ export function FileExplorerPage({ config }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [terminals, setTerminals] = useState<TerminalTab[]>([]);
+  const [editors, setEditors] = useState<EditorTab[]>([]);
   const [activeTab, setActiveTab] = useState("main");
+
+  const activeEditor = useMemo(
+    () => editors.find((tab) => tab.id === activeTab) ?? null,
+    [activeTab, editors]
+  );
+  const activeTerminal = useMemo(
+    () => terminals.find((tab) => tab.id === activeTab) ?? null,
+    [activeTab, terminals]
+  );
 
   const loadRoot = useCallback(async () => {
     if (!config) return;
@@ -166,6 +190,8 @@ export function FileExplorerPage({ config }: Props) {
     try {
       setBusy(true);
       await api.DeleteWorkspacePath(selected.path);
+      setEditors((prev) => prev.filter((tab) => tab.path !== selected.path));
+      if (activeTab === editorId(selected.path)) setActiveTab("main");
       notify(t("toast.pathDeleted"), "success");
       await loadRoot();
     } catch (e) {
@@ -175,11 +201,69 @@ export function FileExplorerPage({ config }: Props) {
     }
   }
 
+  async function openEditor(node: WorkspaceTreeNode) {
+    if (node.isDir) return;
+    const id = editorId(node.path);
+    if (editors.some((tab) => tab.id === id)) {
+      setActiveTab(id);
+      return;
+    }
+    try {
+      setBusy(true);
+      const content = await api.ReadWorkspaceFile(node.path);
+      setEditors((prev) => [
+        ...prev,
+        { id, title: node.name, path: node.path, content, savedContent: content },
+      ]);
+      setActiveTab(id);
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveEditor(tab: EditorTab) {
+    try {
+      setBusy(true);
+      await api.SaveWorkspaceFile(tab.path, tab.content);
+      setEditors((prev) =>
+        prev.map((item) =>
+          item.id === tab.id ? { ...item, savedContent: tab.content } : item
+        )
+      );
+      if (selected?.path === tab.path) {
+        const refreshed = await api.WorkspaceTree(tab.path);
+        setSelected(refreshed);
+      }
+      notify(t("explorer.fileSaved"), "success");
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function closeEditor(tab: EditorTab) {
+    if (
+      tab.content !== tab.savedContent &&
+      !(await confirm({ message: t("explorer.unsavedConfirm", { name: tab.title }) }))
+    ) {
+      return;
+    }
+    setEditors((prev) => prev.filter((item) => item.id !== tab.id));
+    setActiveTab((prev) => (prev === tab.id ? "main" : prev));
+  }
+
   async function openEmbeddedTerminal() {
     if (!selected) return;
     try {
       setBusy(true);
       const session = await api.TerminalOpen(selected.path);
+      if (session.external) {
+        notify(t("toast.openedPath", { path: session.path }), "success");
+        return;
+      }
       setTerminals((prev) => {
         if (prev.some((tab) => tab.id === session.id)) return prev;
         return [...prev, session];
@@ -226,7 +310,10 @@ export function FileExplorerPage({ config }: Props) {
           )}
           style={{ paddingLeft: 8 + depth * 16 }}
           onClick={() => setSelected(node)}
-          onDoubleClick={() => expand(node)}
+          onDoubleClick={() => {
+            if (node.isDir) void expand(node);
+            else void openEditor(node);
+          }}
         >
           {node.isDir ? (
             <span
@@ -285,7 +372,7 @@ export function FileExplorerPage({ config }: Props) {
       </Card>
 
       <Card className="min-w-0 overflow-hidden">
-        <div className="flex items-center gap-1 border-b bg-muted/30 px-3 pt-2">
+        <div className="flex items-center gap-1 overflow-x-auto border-b bg-muted/30 px-3 pt-2">
           <button
             type="button"
             className={cn(
@@ -296,6 +383,36 @@ export function FileExplorerPage({ config }: Props) {
           >
             {t("explorer.mainTab")}
           </button>
+          {editors.map((tab) => {
+            const dirty = tab.content !== tab.savedContent;
+            return (
+              <div
+                key={tab.id}
+                className={cn(
+                  "group flex max-w-56 items-center gap-2 rounded-t-md border border-b-0 px-3 py-1.5 text-sm",
+                  activeTab === tab.id ? "bg-background font-medium" : "bg-transparent text-muted-foreground"
+                )}
+                title={tab.path}
+              >
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-2"
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  <File className="size-3.5 shrink-0" />
+                  <span className="truncate">{dirty ? "*" : ""}{tab.title}</span>
+                </button>
+                <button
+                  type="button"
+                  className="rounded p-0.5 opacity-60 hover:bg-accent hover:opacity-100"
+                  onClick={() => void closeEditor(tab)}
+                  title={t("common.close")}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            );
+          })}
           {terminals.map((tab) => (
             <div
               key={tab.id}
@@ -360,6 +477,11 @@ export function FileExplorerPage({ config }: Props) {
                     <Button variant="outline" onClick={openVSCode} disabled={busy}>
                       <Code2 className="size-4" /> {t("explorer.openVSCode")}
                     </Button>
+                    {!selected.isDir && (
+                      <Button variant="outline" onClick={() => openEditor(selected)} disabled={busy}>
+                        <File className="size-4" /> {t("explorer.openEditor")}
+                      </Button>
+                    )}
                     <Button variant="outline" onClick={openEmbeddedTerminal} disabled={busy}>
                       <TerminalIcon className="size-4" /> {t("explorer.openTerminal")}
                     </Button>
@@ -374,13 +496,34 @@ export function FileExplorerPage({ config }: Props) {
               )}
             </CardContent>
           </>
-        ) : (
-          terminals.map((tab) =>
-            activeTab === tab.id ? (
-              <TerminalPanel key={tab.id} id={tab.id} path={tab.path} />
-            ) : null
-          )
-        )}
+        ) : activeEditor ? (
+          <div className="flex h-[calc(100vh-12rem)] flex-col">
+            <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{activeEditor.title}</div>
+                <div className="truncate font-mono text-xs text-muted-foreground" title={activeEditor.path}>
+                  {activeEditor.path}
+                </div>
+              </div>
+              <Button size="sm" onClick={() => void saveEditor(activeEditor)} disabled={busy || activeEditor.content === activeEditor.savedContent}>
+                <Save className="size-4" /> {t("common.save")}
+              </Button>
+            </div>
+            <Textarea
+              value={activeEditor.content}
+              onChange={(e) =>
+                setEditors((prev) =>
+                  prev.map((tab) =>
+                    tab.id === activeEditor.id ? { ...tab, content: e.target.value } : tab
+                  )
+                )
+              }
+              className="min-h-0 flex-1 resize-none rounded-none border-0 font-mono text-sm focus-visible:ring-0"
+            />
+          </div>
+        ) : activeTerminal ? (
+          <TerminalPanel id={activeTerminal.id} path={activeTerminal.path} />
+        ) : null}
       </Card>
     </div>
   );

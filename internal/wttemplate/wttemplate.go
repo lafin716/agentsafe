@@ -87,6 +87,33 @@ func ImportFiles(root string, paths []string) ([]Template, error) {
 	return added, nil
 }
 
+func ImportPaths(root string, paths []string) ([]Template, error) {
+	added := []Template{}
+	for _, src := range paths {
+		if strings.TrimSpace(src) == "" {
+			continue
+		}
+		info, err := os.Stat(src)
+		if err != nil {
+			return nil, err
+		}
+		if info.IsDir() {
+			item, err := ImportFolder(root, src)
+			if err != nil {
+				return nil, err
+			}
+			added = append(added, item)
+			continue
+		}
+		items, err := ImportFiles(root, []string{src})
+		if err != nil {
+			return nil, err
+		}
+		added = append(added, items...)
+	}
+	return added, nil
+}
+
 func ImportFolder(root, src string) (Template, error) {
 	info, err := os.Stat(src)
 	if err != nil {
@@ -150,6 +177,30 @@ func Delete(root, id string) error {
 		return err
 	}
 	return fsutil.ForceRemoveAll(filepath.Join(FilesDir(root), id))
+}
+
+func ReadTemplateFile(root, id string) (string, error) {
+	path, err := singleTemplateFilePath(root, id)
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func WriteTemplateFile(root, id, content string) error {
+	path, err := singleTemplateFilePath(root, id)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), info.Mode().Perm())
 }
 
 func Apply(root, featureKey string, repos []Repo) error {
@@ -313,6 +364,39 @@ func validateTemplate(t Template) error {
 	default:
 		return fmt.Errorf("invalid template target mode %q", t.TargetMode)
 	}
+}
+
+func singleTemplateFilePath(root, id string) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", fmt.Errorf("template id is required")
+	}
+	templates, err := List(root)
+	if err != nil {
+		return "", err
+	}
+	found := false
+	for _, t := range templates {
+		if t.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("template %q not found", id)
+	}
+	dir := filepath.Join(FilesDir(root), id)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	if len(entries) != 1 {
+		return "", fmt.Errorf("template %q is not a single file template", id)
+	}
+	entry := entries[0]
+	if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("template %q is a folder template; open the template folder to edit it", id)
+	}
+	return filepath.Join(dir, entry.Name()), nil
 }
 
 func isWorktreeTarget(mode string) bool {

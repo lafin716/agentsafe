@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Boxes,
   ChevronDown,
+  ChevronRight,
   Copy,
   ExternalLink,
   FolderOpen,
@@ -59,7 +60,7 @@ interface Props {
   onViewHistory: (feature: string) => void;
 }
 
-type Tab = "work" | "status";
+type Tab = "work" | "status" | "settings";
 
 export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   const { notify } = useToast();
@@ -82,6 +83,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
 
   const [status, setStatus] = useState<FeatureStatusResult | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
+  const [openDiffRepos, setOpenDiffRepos] = useState<Set<string>>(new Set());
   // Sync-history stack depth per repository, for the count badges.
   const [histCounts, setHistCounts] = useState<Record<string, number>>({});
   // Local override of prepared state. null = no user action yet (fall back to
@@ -112,6 +114,16 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       return "code";
     }
   });
+  const [terminalProgram, setTerminalProgram] = useState(() => {
+    try {
+      return localStorage.getItem("agentsafe.terminalProgram") || "powershell";
+    } catch {
+      return "powershell";
+    }
+  });
+  const [agentOpenTarget, setAgentOpenTarget] = useState<"terminal" | "program">(
+    "terminal"
+  );
   // Whether re-preparing backs up the existing agent workspace (default true).
   const [backupOnPrepare, setBackupOnPrepare] = useState(() => {
     try {
@@ -146,6 +158,15 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     setAgentCommand(v);
     try {
       localStorage.setItem("agentsafe.agentCommand", v);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function changeTerminalProgram(v: string) {
+    setTerminalProgram(v);
+    try {
+      localStorage.setItem("agentsafe.terminalProgram", v);
     } catch {
       /* ignore */
     }
@@ -217,6 +238,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     setFeaturePaths(null);
     setAgentSession(null);
     setAgentFinished(false);
+    setOpenDiffRepos(new Set());
   }, [name]);
 
   useEffect(() => {
@@ -225,7 +247,9 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     loadRepoManager();
   }, [loadStatus, loadCounts, loadRepoManager]);
 
+  const agentStatusLoading = prepared === null && statusLoading && !status;
   const agentReady = prepared ?? (status?.agentReady ?? false);
+  const agentMissing = !agentStatusLoading && !agentReady;
 
   useEffect(() => {
     if (
@@ -387,17 +411,40 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
+  const openAgentCommandTerminal = () =>
+    run(async () => {
+      const p = await api.OpenAgentCommandTerminal(
+        name,
+        terminalProgram.trim(),
+        agentCommand.trim()
+      );
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
   const openProgram = () =>
     run(async () => {
       const p = await api.OpenInEditor(name, program.trim());
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
+  const openAgentTarget = () => {
+    if (agentOpenTarget === "program") {
+      openProgram();
+    } else {
+      openTerminal();
+    }
+  };
+
   // runAgent launches the configured agent command in an embedded terminal; its
   // exit is detected via the "agent:exit" event subscribed above.
   const runAgent = () =>
     run(async () => {
       const session = await api.AgentRun(name, agentCommand.trim());
+      if (session.external) {
+        setAgentSession(null);
+        notify(t("toast.openedPath", { path: session.path }), "success");
+        return;
+      }
       setAgentSession(session);
       setAgentFinished(false);
       notify(t("toast.agentStarted"), "success");
@@ -601,11 +648,30 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     });
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: "work", label: t("feature.tabWork") },
-    { id: "status", label: t("feature.tabStatus") },
+    { id: "work", label: "작업" },
+    { id: "status", label: "상태" },
+    { id: "settings", label: "설정" },
   ];
   const repoPathsByName = new Map(
     (featurePaths?.repositories ?? []).map((repo) => [repo.name, repo])
+  );
+  const statusReposByName = new Map(
+    (status?.repositories ?? []).map((repo) => [repo.name, repo])
+  );
+  const configuredRepoByName = new Map(
+    (configuredRepos ?? []).map((repo) => [repo.Name, repo])
+  );
+  const worktreeRepoNames = Array.from(
+    new Set([
+      ...(status?.repositories ?? []).map((repo) => repo.name),
+      ...(featureMeta?.repositories ?? []).map((repo) => repo.name),
+      ...(configuredRepos ?? []).map((repo) => repo.Name),
+    ])
+  );
+  const agentRepos = status?.repositories ?? [];
+  const agentChangeCount = (diff?.repositories ?? []).reduce(
+    (n, r) => n + (r.changes?.length ?? 0),
+    0
   );
 
   return (
@@ -632,316 +698,77 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
         </div>
       </div>
 
-      {tab === "status" && (
-        <Card>
-          <CardHeader className="flex-row items-center justify-between space-y-0">
-            <div className="min-w-0">
-              <CardTitle>{status?.feature ?? name}</CardTitle>
-              <CardDescription className="space-y-1">
-                <div>{t("feature.branchLabel", { branch: status?.branch ?? "—" })}</div>
-                {featurePaths?.worktreePath && (
-                  <div
-                    className="max-w-xl truncate font-mono text-xs"
-                    title={featurePaths.worktreePath}
-                  >
-                    {t("feature.worktreePath")}: {featurePaths.worktreePath}
-                  </div>
-                )}
-              </CardDescription>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={openFeatureFolder}
-                disabled={busy || !featurePaths?.worktreePath}
-              >
-                <FolderOpen className="size-4" /> {t("feature.openWorktreeFolder")}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => copyPath(featurePaths?.worktreePath)}
-                disabled={busy || !featurePaths?.worktreePath}
-              >
-                <Copy className="size-4" /> {t("feature.copyPath")}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={applyWorktreeTemplates}
-                disabled={busy || statusLoading}
-              >
-                <Wand2 className="size-4" /> {t("feature.applyWorktreeTemplates")}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={chooseProgram}
-                disabled={busy}
-                title={program}
-              >
-                <AppWindow className="size-4" /> {t("feature.selectProgram")} (
-                {programLabel(program)})
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={rebase}
-                disabled={busy || statusLoading}
-              >
-                <GitMerge className="size-4" /> {t("feature.rebase")}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={loadStatus}
-                disabled={statusLoading}
-              >
-                {statusLoading ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-4" />
-                )}
-                {statusLoading ? t("common.loading") : t("common.refresh")}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {statusLoading && !status ? (
-              <LoadingState label={t("feature.loadingStatus")} />
-            ) : (status?.repositories ?? []).map((r) => (
-              <div key={r.name}>
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Boxes className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate font-medium">{r.name}</span>
-                    {r.status.trim() === "" && (
-                      <Badge variant="outline">{t("feature.clean")}</Badge>
-                    )}
-                    {(histCounts[r.name] ?? 0) > 0 && (
-                      <Badge variant="secondary">
-                        {t("feature.syncHistoryBadge", {
-                          count: histCounts[r.name],
-                        })}
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      title={t("feature.openFolder")}
-                      disabled={busy}
-                      onClick={() => openRepoFolder(r.name)}
-                    >
-                      <FolderOpen className="size-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      title={`${t("feature.openProgram")} (${programLabel(program)})`}
-                      disabled={busy}
-                      onClick={() => openRepoProgram(r.name)}
-                    >
-                      <ExternalLink className="size-4" />
-                    </Button>
-                  </div>
-                </div>
-                {r.error ? (
-                  <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
-                    {r.error}
-                  </div>
-                ) : (
-                  (r.changes ?? []).length > 0 && (
-                    <ul className="divide-y rounded-md border">
-                      {(r.changes ?? []).map((change, i) => (
-                        <RepoStatusRow
-                          key={`${change.code}-${change.path}-${i}`}
-                          change={change}
-                        />
-                      ))}
-                    </ul>
-                  )
-                )}
-              </div>
-            ))}
-            {!statusLoading && (status?.repositories ?? []).length === 0 && (
-              <p className="text-sm text-muted-foreground">{t("feature.noRepos")}</p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {tab === "status" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("feature.repoManagerTitle")}</CardTitle>
-            <CardDescription>{t("feature.repoManagerDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="repoPolicy">{t("features.existingBranchLabel")}</Label>
-              <select
-                id="repoPolicy"
-                value={repoPolicy}
-                onChange={(e) => setRepoPolicy(e.target.value)}
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value="error">{t("features.existingBranchError")}</option>
-                <option value="reuse">{t("features.existingBranchReuse")}</option>
-                <option value="recreate">{t("features.existingBranchRecreate")}</option>
-              </select>
-              <p className="text-xs text-muted-foreground">
-                {t(`features.existingBranchHint.${repoPolicy}`)}
-              </p>
-            </div>
-            <div className="divide-y rounded-md border">
-              {configuredRepos.map((repo) => {
-                const included = (featureMeta?.repositories ?? []).some(
-                  (item) => item.name === repo.Name
-                );
-                return (
-                  <div
-                    key={repo.Name}
-                    className="flex items-center justify-between gap-3 p-3"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-medium">{repo.Name}</div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {repo.DefaultBranch}
-                      </div>
-                    </div>
-                    {included ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => recreateFeatureRepo(repo.Name)}
-                      >
-                        <RotateCcw className="size-4" />
-                        {t("feature.repoRecreate")}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        disabled={busy}
-                        onClick={() => addFeatureRepo(repo.Name)}
-                      >
-                        <Plus className="size-4" />
-                        {t("feature.repoAdd")}
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
-              {configuredRepos.length === 0 && (
-                <p className="p-3 text-sm text-muted-foreground">
-                  {t("feature.noRepos")}
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {tab === "status" && (
-        <Card className={dangerOpen ? "border-destructive/40" : "border-amber-300/60"}>
-          <button
-            type="button"
-            className="flex w-full items-center justify-between gap-4 p-6 text-left"
-            aria-expanded={dangerOpen}
-            onClick={() => {
-              setDangerOpen((open) => {
-                if (open) setDeleteBranch(false);
-                return !open;
-              });
-            }}
-          >
-            <div className="flex min-w-0 items-start gap-3">
-              <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600" />
-              <div>
-                <CardTitle className={dangerOpen ? "text-destructive" : ""}>
-                  {t("feature.dangerZone")}
-                </CardTitle>
-                <CardDescription className="mt-1">
-                  {dangerOpen
-                    ? t("feature.deleteDesc")
-                    : t("feature.dangerCollapsed")}
-                </CardDescription>
-              </div>
-            </div>
-            <ChevronDown
-              className={
-                "size-5 shrink-0 text-muted-foreground transition-transform " +
-                (dangerOpen ? "rotate-180" : "")
-              }
-            />
-          </button>
-          {dangerOpen && (
-            <CardContent className="space-y-4 border-t pt-5">
-              <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-                {t("feature.deleteDesc")}
-              </div>
-              <Toggle
-                checked={deleteBranch}
-                onChange={setDeleteBranch}
-                label={t("feature.deleteBranch")}
-              />
-              <Button variant="destructive" onClick={deleteFeature} disabled={busy}>
-                <Trash2 className="size-4" /> {t("feature.delete")}
-              </Button>
-            </CardContent>
-          )}
-        </Card>
-      )}
-
       {tab === "work" && (
         <div className="space-y-5">
           <Card>
             <CardHeader>
-              <CardTitle>{t("feature.agentTitle")}</CardTitle>
-              <CardDescription>{t("feature.agentDesc")}</CardDescription>
+              <CardTitle>개요 정보</CardTitle>
+              <CardDescription>에이전트 워크스페이스 관련 작업만 표시합니다.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              {featurePaths?.agentPath && (
-                <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-muted-foreground">
-                      {t("feature.agentPath")}
-                    </div>
-                    <div className="truncate font-mono text-xs" title={featurePaths.agentPath}>
-                      {featurePaths.agentPath}
-                    </div>
+              <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-muted-foreground">에이전트 경로</div>
+                  <div className="truncate font-mono text-xs" title={featurePaths?.agentPath}>
+                    {featurePaths?.agentPath || "-"}
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => copyPath(featurePaths?.agentPath)}
+                  disabled={busy || !featurePaths?.agentPath}
+                >
+                  <Copy className="size-4" /> {t("feature.copyPath")}
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
+                <div className="min-w-56 flex-1 space-y-1.5">
+                  <Label htmlFor="agentCmdOverview">에이전트 명령</Label>
+                  <Input
+                    id="agentCmdOverview"
+                    value={agentCommand}
+                    onChange={(e) => changeAgentCommand(e.target.value)}
+                    placeholder="claude"
+                  />
+                </div>
+                <Button
+                  onClick={openAgentCommandTerminal}
+                  disabled={busy || agentStatusLoading || !agentReady || !agentCommand.trim()}
+                >
+                  <Terminal className="size-4" /> 에이전트 명령 터미널 열기
+                </Button>
+              </div>
+              {agentStatusLoading ? (
+                <div className="flex items-center gap-2 rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  {t("feature.loadingAgent")}
+                </div>
+              ) : agentMissing ? (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  에이전트 폴더가 없습니다. 상태 탭에서 먼저 생성하세요.
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          {agentReady && (
+            <>
+              <Card>
+                <CardHeader className="flex-row items-center justify-between space-y-0">
+                  <div>
+                    <CardTitle>변경 정보</CardTitle>
+                    <CardDescription>
+                      {diffLoading && !diff
+                        ? t("feature.loadingDiff")
+                        : diff
+                        ? t("feature.changeCount", { count: agentChangeCount })
+                        : t("feature.diffHint")}
+                    </CardDescription>
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => copyPath(featurePaths.agentPath)}
-                    disabled={busy}
-                  >
-                    <Copy className="size-4" /> {t("feature.copyPath")}
-                  </Button>
-                </div>
-              )}
-              {status?.agentNeedsPrepare && (
-                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                  {t("feature.agentNeedsPrepare")}
-                </div>
-              )}
-              {statusLoading && !status ? (
-                <LoadingState label={t("feature.loadingAgent")} />
-              ) : (
-                <>
-              <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={prepare} disabled={busy || diffLoading}>
-                <Wand2 className="size-4" />{" "}
-                {agentReady ? t("feature.regenerate") : t("feature.prepare")}
-              </Button>
-              {agentReady && (
-                <>
-                  <Button
-                    variant="outline"
                     onClick={() => loadDiff(true)}
                     disabled={busy || diffLoading}
                   >
@@ -950,426 +777,162 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                     ) : (
                       <RefreshCw className="size-4" />
                     )}
-                    {diffLoading
-                      ? t("feature.refreshingDiff")
-                      : t("feature.refreshDiff")}
+                    {diffLoading ? t("feature.refreshingDiff") : t("feature.refreshDiff")}
                   </Button>
-                  <Button
-                    variant="outline"
-                    onClick={applyAgentTemplates}
-                    disabled={busy || diffLoading}
-                  >
-                    <Wand2 className="size-4" /> {t("feature.applyAgentTemplates")}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={openTerminal}
-                    disabled={busy}
-                  >
-                    <Terminal className="size-4" /> {t("feature.terminal")}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={openProgram}
-                    disabled={busy}
-                    title={program}
-                  >
-                    <ExternalLink className="size-4" /> {t("feature.openProgram")}{" "}
-                    ({programLabel(program)})
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={chooseProgram}
-                    disabled={busy}
-                  >
-                    <AppWindow className="size-4" /> {t("feature.selectProgram")}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => onViewHistory(name)}
-                    disabled={busy}
-                  >
-                    <History className="size-4" /> {t("feature.viewHistory")}
-                  </Button>
-                  <Button variant="destructive" onClick={del} disabled={busy}>
-                    <Trash2 className="size-4" /> {t("common.delete")}
-                  </Button>
-                </>
-              )}
-              </div>
-              {agentReady && (
-                <div className="space-y-3 rounded-md border bg-muted/30 p-3">
-                  <div className="flex items-end gap-2">
-                    <div className="flex-1 space-y-1.5">
-                      <Label htmlFor="agentCmd">{t("feature.agentCommand")}</Label>
-                      <Input
-                        id="agentCmd"
-                        value={agentCommand}
-                        onChange={(e) => changeAgentCommand(e.target.value)}
-                        placeholder="claude"
-                      />
-                    </div>
-                    <Button
-                      onClick={runAgent}
-                      disabled={busy || !agentCommand.trim() || !!agentSession}
-                    >
-                      <Play className="size-4" /> {t("feature.runAgent")}
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {t("feature.agentRunHint")}
-                  </p>
-                  {agentSession && (
-                    <div className="overflow-hidden rounded-md border">
-                      <div className="flex items-center justify-between gap-2 border-b bg-card px-3 py-1.5">
-                        <span className="font-mono text-xs text-muted-foreground">
-                          {t("feature.agentRunning")}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7"
-                          onClick={closeAgentTerminal}
-                          disabled={busy}
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {diffLoading && !diff ? (
+                    <LoadingState label={t("feature.loadingDiff")} />
+                  ) : (diff?.repositories ?? []).map((r) => {
+                    const changes = r.changes ?? [];
+                    const open = openDiffRepos.has(r.name);
+                    return (
+                      <div key={r.name} className="rounded-md border">
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-accent/50"
+                          onClick={() =>
+                            setOpenDiffRepos((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(r.name)) next.delete(r.name);
+                              else next.add(r.name);
+                              return next;
+                            })
+                          }
+                          aria-expanded={open}
                         >
-                          <X className="size-3.5" /> {t("feature.closeAgentTerminal")}
-                        </Button>
-                      </div>
-                      <TerminalPanel
-                        id={agentSession.id}
-                        path={agentSession.path}
-                        className="flex h-80 flex-col"
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-              <Toggle
-                checked={backupOnPrepare}
-                onChange={changeBackupOnPrepare}
-                label={t("feature.backupOnPrepare")}
-              />
-              <div className="divide-y rounded-md border">
-                {(status?.repositories ?? []).map((repo) => {
-                  const paths = repoPathsByName.get(repo.name);
-                  return (
-                    <div
-                      key={repo.name}
-                      className="flex items-center justify-between gap-3 p-3"
-                    >
-                      <div className="min-w-0">
-                        <div className="font-medium">{repo.name}</div>
-                        {paths?.agentPath && (
-                          <div
-                            className="mt-1 truncate font-mono text-xs text-muted-foreground"
-                            title={paths.agentPath}
-                          >
-                            {t("feature.repoAgentPath")}: {paths.agentPath}
+                          <div className="flex min-w-0 items-center gap-2">
+                            {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                            <span className="truncate font-medium">{r.name}</span>
+                            <Badge variant={changes.length > 0 ? "secondary" : "outline"}>
+                              {t("feature.repoChanges", { count: changes.length })}
+                            </Badge>
+                            {(histCounts[r.name] ?? 0) > 0 && (
+                              <Badge variant="secondary">
+                                {t("feature.syncHistoryBadge", { count: histCounts[r.name] })}
+                              </Badge>
+                            )}
                           </div>
+                        </button>
+                        {open && (
+                          changes.length === 0 ? (
+                            <p className="border-t p-3 text-sm text-muted-foreground">{t("feature.noChanges")}</p>
+                          ) : (
+                            <ul className="divide-y border-t">
+                              {changes.map((c, i) => (
+                                <ChangeRow
+                                  key={c.path + i}
+                                  change={c}
+                                  onRestore={() => restoreFromWorktree(r.name, c.path)}
+                                  disabled={busy || diffLoading}
+                                />
+                              ))}
+                            </ul>
+                          )
                         )}
-                        <div className="mt-1">
-                          {!repo.agentReady ? (
-                            <Badge variant="outline">{t("feature.agentRepoMissing")}</Badge>
-                          ) : repo.agentNeedsPrepare ? (
-                            <Badge variant="warning">{t("feature.agentRepoStale")}</Badge>
-                          ) : (
-                            <Badge variant="success">{t("feature.agentRepoReady")}</Badge>
-                          )}
-                        </div>
                       </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t("feature.copyPath")}
-                          disabled={busy || !paths?.agentPath}
-                          onClick={() => copyPath(paths?.agentPath)}
-                        >
-                          <Copy className="size-4" />
-                        </Button>
-                        <Button
-                          variant={repo.agentReady ? "outline" : "default"}
-                          size="sm"
-                          disabled={busy}
-                          onClick={() => prepareRepo(repo.name)}
-                        >
-                          {preparingRepo === repo.name ? (
-                            <Loader2 className="size-4 animate-spin" />
-                          ) : (
-                            <Wand2 className="size-4" />
-                          )}
-                          {repo.agentReady
-                            ? t("feature.agentRepoRegenerate")
-                            : t("feature.agentRepoPrepare")}
-                        </Button>
-                      </div>
+                    );
+                  })}
+                  <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+                    <div>
+                      <div className="font-medium">Sync to current delivery area</div>
+                      <p className="text-xs text-muted-foreground">
+                        모의실행, 위험 파일 포함, 마스킹 동기화 허용 옵션을 선택한 뒤 동기화합니다.
+                      </p>
                     </div>
-                  );
-                })}
-              </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          {agentReady && (
-          <>
-          {agentFinished && (
-            <div className="flex items-start gap-3 rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900">
-              <Sparkles className="mt-0.5 size-5 shrink-0 text-emerald-600" />
-              <div>{t("feature.agentFinishedBanner")}</div>
-            </div>
-          )}
-          <Card>
-            <CardHeader>
-              <CardTitle>{t("feature.diffTitle")}</CardTitle>
-              <CardDescription>
-                {diffLoading && !diff
-                  ? t("feature.loadingDiff")
-                  : diff
-                  ? t("feature.changeCount", {
-                      count: (diff.repositories ?? []).reduce(
-                        (n, r) => n + (r.changes?.length ?? 0),
-                        0
-                      ),
-                    })
-                  : t("feature.diffHint")}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {diffLoading && !diff ? (
-                <LoadingState label={t("feature.loadingDiff")} />
-              ) : (diff?.repositories ?? []).map((r) => (
-                <div key={r.name}>
-                  <div className="mb-1 flex items-center gap-2 font-medium">
-                    {r.name}
-                    {(histCounts[r.name] ?? 0) > 0 && (
-                      <Badge variant="secondary">
-                        {t("feature.syncHistoryBadge", {
-                          count: histCounts[r.name],
-                        })}
-                      </Badge>
-                    )}
+                    <div className="flex flex-wrap items-center gap-4 text-sm">
+                      <Toggle checked={dryRun} onChange={setDryRun} label={t("feature.dryRun")} />
+                      <Toggle checked={includeRisky} onChange={setIncludeRisky} label={t("feature.includeRisky")} />
+                      <Toggle checked={allowMasked} onChange={setAllowMasked} label={t("feature.allowMasked")} />
+                      <Button variant="outline" size="sm" onClick={sync} disabled={busy}>
+                        <Upload className="size-4" /> {dryRun ? t("feature.previewSync") : t("feature.sync")}
+                      </Button>
+                    </div>
                   </div>
-                  {(r.changes ?? []).length === 0 ? (
-                    <p className="text-sm text-muted-foreground">{t("feature.noChanges")}</p>
-                  ) : (
-                    <ul className="divide-y rounded-md border">
-                      {(r.changes ?? []).map((c, i) => (
-                        <ChangeRow
-                          key={c.path + i}
-                          change={c}
-                          onRestore={() => restoreFromWorktree(r.name, c.path)}
-                          disabled={busy || diffLoading}
-                        />
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
 
-          <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0">
-              <div>
-                <CardTitle>{t("feature.deliverTitle")}</CardTitle>
-                <CardDescription>{t("feature.deliverDesc")}</CardDescription>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={loadStatus}
-                disabled={statusLoading || busy}
-              >
-                {statusLoading ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-4" />
-                )}
-                {statusLoading ? t("common.loading") : t("common.refresh")}
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {(() => {
-                const repos = status?.repositories ?? [];
-                const anyPushable = repos.some((r) => (r.ahead ?? 0) > 0);
-                const actionable = repos.filter(
-                  (r) =>
-                    (r.changes ?? []).length > 0 ||
-                    (r.ahead ?? 0) > 0 ||
-                    !!r.error
-                );
-                return (
-                  <>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="cm">{t("feature.messageLabel")}</Label>
-                      <Input
-                        id="cm"
-                        value={commitMsg}
-                        onChange={(e) => setCommitMsg(e.target.value)}
-                        placeholder="feat: add coupon v2"
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        onClick={syncAndCommit}
-                        disabled={busy || (!dryRun && !commitMsg.trim())}
-                      >
-                        <Upload className="size-4" />{" "}
-                        {dryRun
-                          ? t("feature.previewSync")
-                          : t("feature.syncAndCommit")}
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={() => push()}
-                        disabled={busy || !anyPushable}
-                      >
-                        <Upload className="size-4" /> {t("feature.pushAll")}
-                      </Button>
-                    </div>
-
-                    <details
-                      className="rounded-md border"
-                      open={advancedOpen}
-                      onToggle={(e) =>
-                        setAdvancedOpen(
-                          (e.target as HTMLDetailsElement).open
-                        )
-                      }
-                    >
-                      <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium">
-                        {t("feature.advancedOptions")}
-                      </summary>
-                      <div className="space-y-4 border-t p-3">
-                        <div className="flex flex-wrap items-center gap-4 text-sm">
-                          <Toggle
-                            checked={dryRun}
-                            onChange={setDryRun}
-                            label={t("feature.dryRun")}
+              <Card>
+                <CardHeader className="flex-row items-center justify-between space-y-0">
+                  <div>
+                    <CardTitle>전달</CardTitle>
+                    <CardDescription>Git 커밋, 푸시 기능만 제공합니다.</CardDescription>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={loadStatus} disabled={statusLoading || busy}>
+                    {statusLoading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                    {statusLoading ? t("common.loading") : t("common.refresh")}
+                  </Button>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {(() => {
+                    const repos = status?.repositories ?? [];
+                    const anyDirty = repos.some((r) => (r.changes ?? []).length > 0);
+                    const anyPushable = repos.some((r) => (r.ahead ?? 0) > 0);
+                    const actionable = repos.filter(
+                      (r) => (r.changes ?? []).length > 0 || (r.ahead ?? 0) > 0 || !!r.error
+                    );
+                    return (
+                      <>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="cm">{t("feature.messageLabel")}</Label>
+                          <Input
+                            id="cm"
+                            value={commitMsg}
+                            onChange={(e) => setCommitMsg(e.target.value)}
+                            placeholder="feat: add coupon v2"
                           />
-                          <Toggle
-                            checked={includeRisky}
-                            onChange={setIncludeRisky}
-                            label={t("feature.includeRisky")}
-                          />
-                          <Toggle
-                            checked={allowMasked}
-                            onChange={setAllowMasked}
-                            label={t("feature.allowMasked")}
-                          />
+                        </div>
+                        <div className="flex flex-wrap gap-2">
                           <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={sync}
-                            disabled={busy}
+                            onClick={() => doCommit("", commitMsg)}
+                            disabled={busy || !anyDirty || !commitMsg.trim()}
                           >
-                            <Upload className="size-4" />{" "}
-                            {dryRun
-                              ? t("feature.previewSync")
-                              : t("feature.sync")}
+                            {actingRepo === "*" ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}
+                            {t("feature.commitAll")}
+                          </Button>
+                          <Button variant="secondary" onClick={() => push()} disabled={busy || !anyPushable}>
+                            <Upload className="size-4" /> {t("feature.pushAll")}
                           </Button>
                         </div>
-
-                        <div className="space-y-3">
-                          <div>
-                            <div className="font-medium">
-                              {t("feature.perRepoCommitTitle")}
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              {t("feature.perRepoCommitDesc")}
-                            </p>
-                          </div>
+                        <div className="divide-y rounded-md border">
                           {statusLoading && !status ? (
-                            <LoadingState
-                              label={t("feature.loadingStatus")}
-                            />
+                            <LoadingState label={t("feature.loadingStatus")} />
                           ) : actionable.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">
-                              {t("feature.noChangesToCommit")}
-                            </p>
+                            <p className="p-3 text-sm text-muted-foreground">{t("feature.noChangesToCommit")}</p>
                           ) : (
                             actionable.map((r) => {
-                              const changeCount = (r.changes ?? []).length;
-                              const dirty = changeCount > 0;
+                              const dirty = (r.changes ?? []).length > 0;
                               const ahead = r.ahead ?? 0;
                               const msg = repoMsgs[r.name] ?? "";
-                              const rowBusy = actingRepo === r.name;
                               return (
-                                <div
-                                  key={r.name}
-                                  className="space-y-2 rounded-md border p-3"
-                                >
-                                  <div className="flex items-center gap-2">
+                                <div key={r.name} className="space-y-3 p-3">
+                                  <div className="flex flex-wrap items-center gap-2">
                                     <Boxes className="size-4 text-muted-foreground" />
-                                    <span className="font-medium">
-                                      {r.name}
-                                    </span>
-                                    {dirty && (
-                                      <Badge variant="warning">
-                                        {t("feature.repoChanges", {
-                                          count: changeCount,
-                                        })}
-                                      </Badge>
-                                    )}
-                                    {ahead > 0 && (
-                                      <Badge variant="secondary">
-                                        {t("feature.repoAhead", {
-                                          count: ahead,
-                                        })}
-                                      </Badge>
-                                    )}
+                                    <span className="font-medium">{r.name}</span>
+                                    {dirty && <Badge variant="warning">{t("feature.repoChanges", { count: (r.changes ?? []).length })}</Badge>}
+                                    {ahead > 0 && <Badge variant="secondary">{t("feature.repoAhead", { count: ahead })}</Badge>}
                                   </div>
-                                  {r.error ? (
+                                  {r.error && (
                                     <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
                                       {r.error}
                                     </div>
-                                  ) : dirty ? (
-                                    <ul className="divide-y rounded-md border">
-                                      {(r.changes ?? []).map((change, i) => (
-                                        <RepoStatusRow
-                                          key={`${change.code}-${change.path}-${i}`}
-                                          change={change}
-                                        />
-                                      ))}
-                                    </ul>
-                                  ) : null}
+                                  )}
                                   <div className="flex items-end gap-2">
                                     <div className="flex-1 space-y-1.5">
-                                      <Label htmlFor={`cm-${r.name}`}>
-                                        {t("feature.messageLabel")}
-                                      </Label>
+                                      <Label htmlFor={"cm-" + r.name}>{t("feature.messageLabel")}</Label>
                                       <Input
-                                        id={`cm-${r.name}`}
+                                        id={"cm-" + r.name}
                                         value={msg}
-                                        onChange={(e) =>
-                                          setRepoMsgs((m) => ({
-                                            ...m,
-                                            [r.name]: e.target.value,
-                                          }))
-                                        }
+                                        onChange={(e) => setRepoMsgs((m) => ({ ...m, [r.name]: e.target.value }))}
                                         placeholder="feat: ..."
                                       />
                                     </div>
-                                    <Button
-                                      onClick={() => doCommit(r.name, msg)}
-                                      disabled={busy || !dirty || !msg.trim()}
-                                    >
-                                      {rowBusy ? (
-                                        <Loader2 className="size-4 animate-spin" />
-                                      ) : (
-                                        <GitCommit className="size-4" />
-                                      )}
+                                    <Button onClick={() => doCommit(r.name, msg)} disabled={busy || !dirty || !msg.trim()}>
+                                      {actingRepo === r.name ? <Loader2 className="size-4 animate-spin" /> : <GitCommit className="size-4" />}
                                       {t("feature.commitRepo")}
                                     </Button>
-                                    <Button
-                                      variant="secondary"
-                                      onClick={() => push(r.name)}
-                                      disabled={busy || ahead === 0}
-                                    >
-                                      <Upload className="size-4" />{" "}
-                                      {t("feature.pushRepo")}
+                                    <Button variant="secondary" onClick={() => push(r.name)} disabled={busy || ahead === 0}>
+                                      <Upload className="size-4" /> {t("feature.pushRepo")}
                                     </Button>
                                   </div>
                                 </div>
@@ -1377,54 +940,312 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
                             })
                           )}
                         </div>
+                      </>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </div>
+      )}
 
-                        <div className="space-y-3">
-                          <div>
-                            <div className="font-medium">
-                              {t("feature.mrTitle")}
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              {t("feature.mrDesc")}
-                            </p>
-                          </div>
-                          <div className="space-y-1.5">
-                            <Label htmlFor="mti">
-                              {t("feature.mrTitleLabel")}
-                            </Label>
-                            <Input
-                              id="mti"
-                              value={mrTitle}
-                              onChange={(e) => setMrTitle(e.target.value)}
-                              placeholder={`[${name}] ...`}
-                            />
-                          </div>
-                          <Button onClick={sendRequests} disabled={busy}>
-                            <GitMerge className="size-4" />{" "}
-                            {t("feature.generateMr")}
-                          </Button>
-                          {requests && (
-                            <ul className="divide-y rounded-md border">
-                              {(requests.items ?? []).length === 0 ? (
-                                <li className="px-3 py-2 text-sm text-muted-foreground">
-                                  {t("request.empty")}
-                                </li>
-                              ) : (
-                                (requests.items ?? []).map((r) => (
-                                  <RequestRow key={r.repo} item={r} />
-                                ))
-                              )}
-                            </ul>
-                          )}
-                        </div>
+      {tab === "status" && (
+        <div className="space-y-5">
+          <Card>
+            <CardHeader className="space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <CardTitle>워크트리</CardTitle>
+                  <CardDescription className="space-y-1">
+                    <div>{t("feature.branchLabel", { branch: status?.branch ?? "-" })}</div>
+                    {featurePaths?.worktreePath && (
+                      <div className="max-w-xl truncate font-mono text-xs" title={featurePaths.worktreePath}>
+                        {t("feature.worktreePath")}: {featurePaths.worktreePath}
                       </div>
-                    </details>
-                  </>
-                );
-              })()}
+                    )}
+                  </CardDescription>
+                </div>
+                <Badge variant="outline">{status?.feature ?? name}</Badge>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={openFeatureFolder} disabled={busy || !featurePaths?.worktreePath}>
+                  <FolderOpen className="size-4" /> {t("feature.openWorktreeFolder")}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => copyPath(featurePaths?.worktreePath)} disabled={busy || !featurePaths?.worktreePath}>
+                  <Copy className="size-4" /> {t("feature.copyPath")}
+                </Button>
+                <Button variant="outline" size="sm" onClick={rebase} disabled={busy || statusLoading}>
+                  <GitMerge className="size-4" /> {t("feature.rebase")}
+                </Button>
+                <Button variant="outline" size="sm" onClick={loadStatus} disabled={statusLoading}>
+                  {statusLoading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                  {statusLoading ? t("common.loading") : t("common.refresh")}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {statusLoading && !status ? (
+                <LoadingState label={t("feature.loadingStatus")} />
+              ) : worktreeRepoNames.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("feature.noRepos")}</p>
+              ) : (
+                <div className="divide-y rounded-md border">
+                  {worktreeRepoNames.map((repoName) => {
+                    const r = statusReposByName.get(repoName);
+                    const configured = configuredRepoByName.get(repoName);
+                    const included = (featureMeta?.repositories ?? []).some((item) => item.name === repoName);
+                    return (
+                      <div key={repoName} className="space-y-3 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <Boxes className="size-4 shrink-0 text-muted-foreground" />
+                              <span className="truncate font-medium">{repoName}</span>
+                              {!included && <Badge variant="outline">미추가</Badge>}
+                              {included && r?.status.trim() === "" && <Badge variant="outline">{t("feature.clean")}</Badge>}
+                              {(histCounts[repoName] ?? 0) > 0 && (
+                                <Badge variant="secondary">{t("feature.syncHistoryBadge", { count: histCounts[repoName] })}</Badge>
+                              )}
+                            </div>
+                            <div className="mt-1 truncate text-xs text-muted-foreground">{configured?.DefaultBranch || "-"}</div>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                            {included ? (
+                              <Button variant="outline" size="sm" disabled={busy} onClick={() => recreateFeatureRepo(repoName)}>
+                                <RotateCcw className="size-4" /> {t("feature.repoRecreate")}
+                              </Button>
+                            ) : (
+                              <Button size="sm" disabled={busy} onClick={() => addFeatureRepo(repoName)}>
+                                <Plus className="size-4" /> {t("feature.repoAdd")}
+                              </Button>
+                            )}
+                            <Button variant="ghost" size="sm" className="w-8 px-0" title={t("feature.openFolder")} disabled={busy || !included} onClick={() => openRepoFolder(repoName)}>
+                              <FolderOpen className="size-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="w-8 px-0"
+                              title={t("feature.openProgram") + " (" + programLabel(program) + ")"}
+                              disabled={busy || !included}
+                              onClick={() => openRepoProgram(repoName)}
+                            >
+                              <ExternalLink className="size-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        {r?.error ? (
+                          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">{r.error}</div>
+                        ) : (r?.changes ?? []).length > 0 ? (
+                          <ul className="divide-y rounded-md border">
+                            {(r?.changes ?? []).map((change, i) => (
+                              <RepoStatusRow key={change.code + "-" + change.path + "-" + i} change={change} />
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
-          </>
-          )}
+
+          <Card>
+            <CardHeader className="space-y-4">
+              <div>
+                <CardTitle>에이전트</CardTitle>
+                <CardDescription>에이전트 폴더 생성 상태와 저장소별 준비 상태입니다.</CardDescription>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" onClick={prepare} disabled={busy || diffLoading || agentStatusLoading} variant={agentReady ? "outline" : "default"}>
+                  {agentStatusLoading ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+                  {agentStatusLoading ? t("common.loading") : agentReady ? "Regenerate" : "Create"}
+                </Button>
+                {agentReady && (
+                  <>
+                    <Button variant="outline" size="sm" onClick={() => loadDiff(true)} disabled={busy || diffLoading}>
+                      {diffLoading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                      변경 새로고침
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={applyAgentTemplates} disabled={busy || diffLoading}>
+                      <Wand2 className="size-4" /> 에이전트 템플릿 적용
+                    </Button>
+                    <Button variant="destructive" size="sm" onClick={del} disabled={busy}>
+                      <Trash2 className="size-4" /> 삭제
+                    </Button>
+                    <div className="flex items-center gap-1 rounded-md border bg-background p-1">
+                      <select
+                        value={agentOpenTarget}
+                        onChange={(e) => setAgentOpenTarget(e.target.value as "terminal" | "program")}
+                        className="h-8 rounded-md bg-background px-2 text-sm"
+                      >
+                        <option value="terminal">Terminal</option>
+                        <option value="program">{programLabel(program)}</option>
+                      </select>
+                      <Button variant="secondary" size="sm" onClick={openAgentTarget} disabled={busy} title={program}>
+                        <ExternalLink className="size-4" /> 열기
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {status?.agentNeedsPrepare && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  {t("feature.agentNeedsPrepare")}
+                </div>
+              )}
+              {statusLoading && !status ? (
+                <LoadingState label={t("feature.loadingAgent")} />
+              ) : agentRepos.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("feature.noRepos")}</p>
+              ) : (
+                <div className="divide-y rounded-md border">
+                  {agentRepos.map((repo) => {
+                    const paths = repoPathsByName.get(repo.name);
+                    return (
+                      <div key={repo.name} className="flex items-center justify-between gap-3 p-3">
+                        <div className="min-w-0">
+                          <div className="font-medium">{repo.name}</div>
+                          {paths?.agentPath && (
+                            <div className="mt-1 truncate font-mono text-xs text-muted-foreground" title={paths.agentPath}>
+                              {t("feature.repoAgentPath")}: {paths.agentPath}
+                            </div>
+                          )}
+                          <div className="mt-1">
+                            {!repo.agentReady ? (
+                              <Badge variant="outline">{t("feature.agentRepoMissing")}</Badge>
+                            ) : repo.agentNeedsPrepare ? (
+                              <Badge variant="warning">{t("feature.agentRepoStale")}</Badge>
+                            ) : (
+                              <Badge variant="success">{t("feature.agentRepoReady")}</Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Button variant="ghost" size="sm" className="w-8 px-0" title={t("feature.copyPath")} disabled={busy || !paths?.agentPath} onClick={() => copyPath(paths?.agentPath)}>
+                            <Copy className="size-4" />
+                          </Button>
+                          <Button variant={repo.agentReady ? "outline" : "default"} size="sm" disabled={busy} onClick={() => prepareRepo(repo.name)}>
+                            {preparingRepo === repo.name ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+                            {repo.agentReady ? t("feature.agentRepoRegenerate") : t("feature.agentRepoPrepare")}
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {tab === "settings" && (
+        <div className="space-y-5">
+          <Card>
+            <CardHeader>
+              <CardTitle>터미널 설정</CardTitle>
+              <CardDescription>에이전트 명령 터미널의 프로그램과 기본 명령을 설정합니다.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="terminalProgram">터미널 프로그램</Label>
+                <select
+                  id="terminalProgram"
+                  value={terminalProgram}
+                  onChange={(e) => changeTerminalProgram(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="powershell">PowerShell</option>
+                  <option value="pwsh">PowerShell 7</option>
+                  <option value="cmd">Command Prompt</option>
+                  <option value="git-bash">Git Bash</option>
+                  <option value="wt">Windows Terminal</option>
+                  <option value="default">System default</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="agentCmdSettings">터미널 기본 명령</Label>
+                <Input id="agentCmdSettings" value={agentCommand} onChange={(e) => changeAgentCommand(e.target.value)} placeholder="claude" />
+                <p className="text-xs text-muted-foreground">에이전트 폴더로 이동한 뒤 실행할 명령입니다. 기본값은 claude입니다.</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>워크트리 설정</CardTitle>
+              <CardDescription>동일한 브랜치 옵션과 워크트리 템플릿 적용을 관리합니다.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="repoPolicy">동일한 브랜치 워크트리 생성 옵션</Label>
+                <select
+                  id="repoPolicy"
+                  value={repoPolicy}
+                  onChange={(e) => setRepoPolicy(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="error">{t("features.existingBranchError")}</option>
+                  <option value="reuse">{t("features.existingBranchReuse")}</option>
+                  <option value="recreate">{t("features.existingBranchRecreate")}</option>
+                </select>
+                <p className="text-xs text-muted-foreground">{t("features.existingBranchHint." + repoPolicy)}</p>
+              </div>
+              <Button variant="outline" onClick={applyWorktreeTemplates} disabled={busy || statusLoading}>
+                <Wand2 className="size-4" /> 워크트리 템플릿 적용
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>에이전트 설정</CardTitle>
+              <CardDescription>에이전트 템플릿 적용과 재생성 옵션을 관리합니다.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Toggle checked={backupOnPrepare} onChange={changeBackupOnPrepare} label={t("feature.backupOnPrepare")} />
+              <Button variant="outline" onClick={applyAgentTemplates} disabled={busy || diffLoading || agentStatusLoading || !agentReady}>
+                <Wand2 className="size-4" /> 에이전트 템플릿 적용
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className={dangerOpen ? "border-destructive/40" : "border-amber-300/60"}>
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-4 p-6 text-left"
+              aria-expanded={dangerOpen}
+              onClick={() => {
+                setDangerOpen((open) => {
+                  if (open) setDeleteBranch(false);
+                  return !open;
+                });
+              }}
+            >
+              <div className="flex min-w-0 items-start gap-3">
+                <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600" />
+                <div>
+                  <CardTitle className={dangerOpen ? "text-destructive" : ""}>위험구역</CardTitle>
+                  <CardDescription className="mt-1">{dangerOpen ? t("feature.deleteDesc") : t("feature.dangerCollapsed")}</CardDescription>
+                </div>
+              </div>
+              <ChevronDown className={"size-5 shrink-0 text-muted-foreground transition-transform " + (dangerOpen ? "rotate-180" : "")} />
+            </button>
+            {dangerOpen && (
+              <CardContent className="space-y-4 border-t pt-5">
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{t("feature.deleteDesc")}</div>
+                <Toggle checked={deleteBranch} onChange={setDeleteBranch} label={t("feature.deleteBranch")} />
+                <Button variant="destructive" onClick={deleteFeature} disabled={busy}>
+                  <Trash2 className="size-4" /> {t("feature.delete")}
+                </Button>
+              </CardContent>
+            )}
+          </Card>
         </div>
       )}
     </div>
@@ -1532,8 +1353,8 @@ function RequestRow({ item }: { item: RequestResult }) {
           <Badge variant={methodVariant}>{methodLabel}</Badge>
         </div>
         <div className="mt-0.5 truncate text-xs text-muted-foreground">
-          {item.branch} → {item.target}
-          {item.error ? ` · ${item.error}` : ""}
+          {item.branch} ??{item.target}
+          {item.error ? ` 쨌 ${item.error}` : ""}
         </div>
       </div>
       {item.url && (

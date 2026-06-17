@@ -88,6 +88,81 @@ func TestImportFolderCopiesFolderItselfToFeatureRoot(t *testing.T) {
 	}
 }
 
+func TestImportPathsAcceptsFilesAndFolders(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(file, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "tools")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte("run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	added, err := ImportPaths(root, []string{file, dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 2 {
+		t.Fatalf("expected two imported templates, got %d", len(added))
+	}
+	if _, err := os.Stat(filepath.Join(FilesDir(root), added[0].ID, "AGENTS.md")); err != nil {
+		t.Fatalf("file template missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(FilesDir(root), added[1].ID, "tools", "run.sh")); err != nil {
+		t.Fatalf("folder template missing: %v", err)
+	}
+}
+
+func TestReadWriteTemplateFile(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(src, []byte("initial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	added, err := ImportFiles(root, []string{src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadTemplateFile(root, added[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "initial" {
+		t.Fatalf("expected initial content, got %q", got)
+	}
+	if err := WriteTemplateFile(root, added[0].ID, "edited"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ReadTemplateFile(root, added[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "edited" {
+		t.Fatalf("expected edited content, got %q", got)
+	}
+}
+
+func TestReadTemplateFileRejectsFolderTemplate(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "tools")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "run.sh"), []byte("run"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	item, err := ImportFolder(root, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadTemplateFile(root, item.ID); err == nil {
+		t.Fatal("expected folder template read to fail")
+	}
+}
+
 func TestApplyAgentTargets(t *testing.T) {
 	root := t.TempDir()
 	rootFile := filepath.Join(root, "AGENTS.md")

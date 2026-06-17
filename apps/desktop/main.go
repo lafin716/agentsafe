@@ -20,6 +20,9 @@ func main() {
 		Height:    780,
 		MinWidth:  900,
 		MinHeight: 600,
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop: true,
+		},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

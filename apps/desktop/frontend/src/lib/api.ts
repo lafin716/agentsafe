@@ -46,12 +46,17 @@ type AppBindings = {
   ListWorktreeTemplates(): Promise<WorktreeTemplate[]>;
   ImportWorktreeTemplateFiles(): Promise<WorktreeTemplate[]>;
   ImportWorktreeTemplateFolder(): Promise<WorktreeTemplate>;
+  ImportWorktreeTemplatePaths(paths: string[]): Promise<WorktreeTemplate[]>;
   UpdateWorktreeTemplate(t: WorktreeTemplate): Promise<void>;
   DeleteWorktreeTemplate(id: string): Promise<void>;
+  ReadWorktreeTemplateFile(id: string): Promise<string>;
+  SaveWorktreeTemplateFile(id: string, content: string): Promise<void>;
   OpenWorktreeTemplateFolder(): Promise<string>;
   ApplyWorktreeTemplates(name: string): Promise<void>;
   ApplyAgentTemplates(name: string): Promise<void>;
   WorkspaceTree(path: string): Promise<WorkspaceTreeNode>;
+  ReadWorkspaceFile(path: string): Promise<string>;
+  SaveWorkspaceFile(path: string, content: string): Promise<void>;
   OpenPath(path: string): Promise<string>;
   OpenPathVSCode(path: string): Promise<string>;
   DeleteWorkspacePath(path: string): Promise<void>;
@@ -135,6 +140,11 @@ type AppBindings = {
   OpenWorkspaceVSCode(): Promise<string>;
   OpenInEditor(name: string, editor: string): Promise<string>;
   OpenInTerminal(name: string): Promise<string>;
+  OpenAgentCommandTerminal(
+    name: string,
+    terminalProgram: string,
+    command: string
+  ): Promise<string>;
   OpenFeatureFolder(name: string): Promise<string>;
   OpenRepoFolder(name: string, repo: string): Promise<string>;
   OpenRepoInProgram(name: string, repo: string, program: string): Promise<string>;

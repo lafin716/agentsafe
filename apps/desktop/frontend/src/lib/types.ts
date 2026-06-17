@@ -299,6 +299,7 @@ export interface TerminalSession {
   id: string;
   path: string;
   title: string;
+  external?: boolean;
 }
 
 export interface RequestResult {

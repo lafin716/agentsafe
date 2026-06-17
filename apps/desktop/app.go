@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -97,6 +99,13 @@ func (a *App) runTask(label string, fn func() error) error {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
+		runtime.EventsEmit(ctx, "workspace:file-drop", map[string]any{
+			"x":     x,
+			"y":     y,
+			"paths": paths,
+		})
+	})
 	// Restore the last active workspace from the registry (if it still loads).
 	if r, err := registry.Load(); err == nil && r.Active != "" {
 		if root, _, err := config.LoadFrom(r.Active); err == nil {
@@ -309,6 +318,17 @@ func (a *App) ImportWorktreeTemplateFolder() (wttemplate.Template, error) {
 	return wttemplate.ImportFolder(root, path)
 }
 
+func (a *App) ImportWorktreeTemplatePaths(paths []string) ([]wttemplate.Template, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return []wttemplate.Template{}, nil
+	}
+	return wttemplate.ImportPaths(root, paths)
+}
+
 func (a *App) UpdateWorktreeTemplate(t wttemplate.Template) error {
 	root, err := a.requireRoot()
 	if err != nil {
@@ -323,6 +343,22 @@ func (a *App) DeleteWorktreeTemplate(id string) error {
 		return err
 	}
 	return wttemplate.Delete(root, id)
+}
+
+func (a *App) ReadWorktreeTemplateFile(id string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	return wttemplate.ReadTemplateFile(root, id)
+}
+
+func (a *App) SaveWorktreeTemplateFile(id, content string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return wttemplate.WriteTemplateFile(root, id, content)
 }
 
 func (a *App) OpenWorktreeTemplateFolder() (string, error) {
@@ -440,10 +476,70 @@ func (a *App) DeleteWorkspacePath(path string) error {
 	return fsutil.ForceRemoveAll(target)
 }
 
+const maxEditableWorkspaceFileSize int64 = 2 * 1024 * 1024
+
+func (a *App) ReadWorkspaceFile(path string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("cannot edit a directory")
+	}
+	if info.Size() > maxEditableWorkspaceFileSize {
+		return "", fmt.Errorf("file is too large to edit in the app (max 2 MB)")
+	}
+	b, err := os.ReadFile(target)
+	if err != nil {
+		return "", err
+	}
+	if hasNUL(b) || !utf8.Valid(b) {
+		return "", fmt.Errorf("binary files cannot be edited in the app")
+	}
+	return string(b), nil
+}
+
+func (a *App) SaveWorkspaceFile(path, content string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("cannot edit a directory")
+	}
+	return os.WriteFile(target, []byte(content), info.Mode().Perm())
+}
+
+func hasNUL(b []byte) bool {
+	for _, c := range b {
+		if c == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 type TerminalSession struct {
-	ID    string `json:"id"`
-	Path  string `json:"path"`
-	Title string `json:"title"`
+	ID       string `json:"id"`
+	Path     string `json:"path"`
+	Title    string `json:"title"`
+	External bool   `json:"external,omitempty"`
 }
 
 func (a *App) TerminalOpen(path string) (TerminalSession, error) {
@@ -460,8 +556,21 @@ func (a *App) TerminalOpen(path string) (TerminalSession, error) {
 	} else if statErr != nil {
 		return TerminalSession{}, statErr
 	}
+	if goruntime.GOOS == "windows" {
+		if _, err := openTerminalAt(target); err != nil {
+			return TerminalSession{}, err
+		}
+		return TerminalSession{ID: "external", Path: target, Title: filepath.Base(target), External: true}, nil
+	}
 	shell, args := defaultShell()
-	return a.startPTY(target, "", shell, args)
+	session, err := a.startPTY(target, "", shell, args)
+	if err != nil && (errors.Is(err, pty.ErrUnsupported) || strings.Contains(strings.ToLower(err.Error()), "unsupported")) {
+		if _, openErr := openTerminalAt(target); openErr != nil {
+			return TerminalSession{}, openErr
+		}
+		return TerminalSession{ID: "external", Path: target, Title: filepath.Base(target), External: true}, nil
+	}
+	return session, err
 }
 
 // startPTY launches argv in a pty rooted at target, registers it as a tracked
@@ -2260,6 +2369,23 @@ func (a *App) OpenInTerminal(name string) (string, error) {
 	return openTerminalAt(filepath.Join(root, "agent", fm.FolderKey()))
 }
 
+// OpenAgentCommandTerminal opens the feature's agent workspace in a configured
+// terminal and runs command after changing to the agent directory. The
+// terminalProgram value is a UI preference such as powershell, pwsh, cmd,
+// git-bash, wt, or default.
+func (a *App) OpenAgentCommandTerminal(name, terminalProgram, command string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(root, "agent", fm.FolderKey())
+	return openTerminalCommandAt(dir, terminalProgram, command)
+}
+
 // AgentRun launches the given command in an embedded pty terminal rooted at the
 // feature's agent workspace. The session is tagged with the feature so its exit
 // emits "agent:exit", letting the UI refresh the diff and prompt a sync.
@@ -2276,8 +2402,21 @@ func (a *App) AgentRun(name, command string) (TerminalSession, error) {
 		return TerminalSession{}, err
 	}
 	dir := filepath.Join(root, "agent", fm.FolderKey())
+	if goruntime.GOOS == "windows" {
+		if _, err := openTerminalCommandAt(dir, "powershell", command); err != nil {
+			return TerminalSession{}, err
+		}
+		return TerminalSession{ID: "external", Path: dir, Title: filepath.Base(dir), External: true}, nil
+	}
 	shell, args := commandShell(command)
-	return a.startPTY(dir, name, shell, args)
+	session, err := a.startPTY(dir, name, shell, args)
+	if err != nil && (errors.Is(err, pty.ErrUnsupported) || strings.Contains(strings.ToLower(err.Error()), "unsupported")) {
+		if _, openErr := openTerminalCommandAt(dir, "default", command); openErr != nil {
+			return TerminalSession{}, openErr
+		}
+		return TerminalSession{ID: "external", Path: dir, Title: filepath.Base(dir), External: true}, nil
+	}
+	return session, err
 }
 
 func openTerminalAt(dir string) (string, error) {
@@ -2286,7 +2425,7 @@ func openTerminalAt(dir string) (string, error) {
 	case "darwin":
 		cmd = exec.Command("open", "-a", "Terminal", dir)
 	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", "cmd", "/k", "cd", "/d", dir)
+		cmd = windowsStart("/D", dir, "cmd", "/K")
 	default:
 		cmd = exec.Command("x-terminal-emulator", "--working-directory="+dir)
 	}
@@ -2294,4 +2433,85 @@ func openTerminalAt(dir string) (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+func openTerminalCommandAt(dir, terminalProgram, command string) (string, error) {
+	terminalProgram = strings.TrimSpace(terminalProgram)
+	command = strings.TrimSpace(command)
+	if terminalProgram == "" || terminalProgram == "default" || command == "" {
+		return openTerminalAt(dir)
+	}
+
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "windows":
+		cmd = windowsTerminalCommand(dir, terminalProgram, command)
+	case "darwin":
+		if terminalProgram == "Terminal" || terminalProgram == "terminal" {
+			cmd = exec.Command(
+				"osascript",
+				"-e",
+				fmt.Sprintf(`tell application "Terminal" to do script "cd %s; %s"`, shellQuote(dir), escapeAppleScript(command)),
+			)
+		} else {
+			cmd = exec.Command("open", "-a", terminalProgram, dir)
+		}
+	default:
+		if terminalProgram == "x-terminal-emulator" || terminalProgram == "terminal" {
+			cmd = exec.Command("x-terminal-emulator", "--working-directory="+dir, "-e", "sh", "-lc", command+"; exec sh")
+		} else {
+			cmd = exec.Command(terminalProgram, dir)
+		}
+	}
+	if cmd == nil {
+		return openTerminalAt(dir)
+	}
+	if err := cmd.Start(); err != nil {
+		return openTerminalAt(dir)
+	}
+	return dir, nil
+}
+
+func windowsTerminalCommand(dir, terminalProgram, command string) *exec.Cmd {
+	psCmd := fmt.Sprintf("Set-Location -LiteralPath %s; %s", psQuote(dir), command)
+	switch strings.ToLower(terminalProgram) {
+	case "powershell":
+		return windowsStart("powershell", "-NoExit", "-Command", psCmd)
+	case "pwsh":
+		return windowsStart("pwsh", "-NoExit", "-Command", psCmd)
+	case "cmd":
+		return windowsStart("cmd", "/K", fmt.Sprintf("cd /d %s && %s", cmdQuote(dir), command))
+	case "wt", "windows-terminal":
+		return exec.Command("wt", "-d", dir, "powershell", "-NoExit", "-Command", command)
+	case "git-bash":
+		bash := `C:\Program Files\Git\git-bash.exe`
+		if _, err := os.Stat(bash); err != nil {
+			bash = `C:\Program Files (x86)\Git\git-bash.exe`
+		}
+		return windowsStart(bash, "--cd="+dir, "-c", command+"; exec bash")
+	default:
+		return windowsStart(terminalProgram, dir)
+	}
+}
+
+func windowsStart(args ...string) *exec.Cmd {
+	startArgs := append([]string{"/c", "start", ""}, args...)
+	return exec.Command("cmd", startArgs...)
+}
+
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+func cmdQuote(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+func escapeAppleScript(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `"`, `\"`)
 }
