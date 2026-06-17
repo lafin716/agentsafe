@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   AlertTriangle,
   AppWindow,
@@ -58,16 +65,31 @@ interface Props {
   name: string;
   onBack: () => void;
   onViewHistory: (feature: string) => void;
+  tab: FeatureDetailTab;
+  setTab: Dispatch<SetStateAction<FeatureDetailTab>>;
+  terminalTabs: TerminalSession[];
+  setTerminalTabs: Dispatch<SetStateAction<TerminalSession[]>>;
+  agentSession: TerminalSession | null;
+  setAgentSession: Dispatch<SetStateAction<TerminalSession | null>>;
 }
 
 type PrimaryTab = "work" | "status" | "settings";
-type Tab = PrimaryTab | `terminal:${string}`;
+export type FeatureDetailTab = PrimaryTab | `terminal:${string}`;
 
-export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
+export function FeatureDetailPage({
+  name,
+  onBack,
+  onViewHistory,
+  tab,
+  setTab,
+  terminalTabs,
+  setTerminalTabs,
+  agentSession,
+  setAgentSession,
+}: Props) {
   const { notify } = useToast();
   const { t } = useI18n();
   const confirm = useConfirm();
-  const [tab, setTab] = useState<Tab>("work");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -143,8 +165,6 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       return "claude";
     }
   });
-  const [agentSession, setAgentSession] = useState<TerminalSession | null>(null);
-  const [terminalTabs, setTerminalTabs] = useState<TerminalSession[]>([]);
   const [agentFinished, setAgentFinished] = useState(false);
 
   function changeBackupOnPrepare(v: boolean) {
@@ -238,8 +258,6 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     setDiffAutoAttempted(false);
     setPrepared(null);
     setFeaturePaths(null);
-    setAgentSession(null);
-    setTerminalTabs([]);
     setAgentFinished(false);
     setOpenDiffRepos(new Set());
   }, [name]);
@@ -249,6 +267,14 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     loadCounts();
     loadRepoManager();
   }, [loadStatus, loadCounts, loadRepoManager]);
+
+  useEffect(() => {
+    if (!tab.startsWith("terminal:")) return;
+    const id = tab.slice("terminal:".length);
+    if (!terminalTabs.some((terminal) => terminal.id === id)) {
+      setTab("work");
+    }
+  }, [setTab, tab, terminalTabs]);
 
   const agentStatusLoading = prepared === null && statusLoading && !status;
   const agentReady = prepared ?? (status?.agentReady ?? false);
@@ -288,6 +314,24 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     });
     return off;
   }, [name, notify, t, loadDiff, loadStatus, loadCounts]);
+
+  useEffect(() => {
+    if (!agentSession) return;
+    let cancelled = false;
+    void api
+      .TerminalSnapshot(agentSession.id)
+      .then((snapshot) => {
+        if (cancelled || !snapshot.closed) return;
+        setAgentFinished(true);
+        void Promise.all([loadDiff(), loadStatus(), loadCounts()]);
+      })
+      .catch(() => {
+        /* session may have been closed explicitly */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentSession, loadCounts, loadDiff, loadStatus]);
 
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -408,7 +452,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     return base.replace(/\.app$/i, "");
   }
 
-  function terminalTabId(id: string): Tab {
+  function terminalTabId(id: string): FeatureDetailTab {
     return `terminal:${id}`;
   }
 

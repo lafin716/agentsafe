@@ -318,6 +318,14 @@ export interface TerminalSession {
   external?: boolean;
 }
 
+export interface TerminalSnapshot {
+  id: string;
+  data: string;
+  seq: number;
+  closed?: boolean;
+  error?: string;
+}
+
 export interface RequestResult {
   repo: string;
   provider: string; // "github" | "gitlab" | ""

@@ -1,4 +1,11 @@
-﻿import { useCallback, useEffect, useMemo, useState } from "react";
+﻿import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -15,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
-import type { Config, WorkspaceTreeNode } from "@/lib/types";
+import type { Config, TerminalSession, WorkspaceTreeNode } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -33,13 +40,11 @@ import { TerminalPanel } from "@/components/TerminalPanel";
 
 interface Props {
   config: Config | null;
+  terminals: TerminalSession[];
+  setTerminals: Dispatch<SetStateAction<TerminalSession[]>>;
+  activeTab: string;
+  setActiveTab: Dispatch<SetStateAction<string>>;
 }
-
-type TerminalTab = {
-  id: string;
-  title: string;
-  path: string;
-};
 
 type EditorTab = {
   id: string;
@@ -90,7 +95,13 @@ function defaultTerminalProgram(): string {
   }
 }
 
-export function FileExplorerPage({ config }: Props) {
+export function FileExplorerPage({
+  config,
+  terminals,
+  setTerminals,
+  activeTab,
+  setActiveTab,
+}: Props) {
   const { t } = useI18n();
   const { notify } = useToast();
   const confirm = useConfirm();
@@ -98,9 +109,7 @@ export function FileExplorerPage({ config }: Props) {
   const [selected, setSelected] = useState<WorkspaceTreeNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [terminals, setTerminals] = useState<TerminalTab[]>([]);
   const [editors, setEditors] = useState<EditorTab[]>([]);
-  const [activeTab, setActiveTab] = useState("main");
 
   const activeEditor = useMemo(
     () => editors.find((tab) => tab.id === activeTab) ?? null,
@@ -110,6 +119,11 @@ export function FileExplorerPage({ config }: Props) {
     () => terminals.find((tab) => tab.id === activeTab) ?? null,
     [activeTab, terminals]
   );
+
+  useEffect(() => {
+    if (activeTab === "main" || activeEditor || activeTerminal) return;
+    setActiveTab("main");
+  }, [activeEditor, activeTab, activeTerminal, setActiveTab]);
 
   const loadRoot = useCallback(async () => {
     if (!config) return;

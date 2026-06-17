@@ -59,8 +59,14 @@ type terminalProcess struct {
 	path string
 	// feature is set when this session runs a managed agent for a feature, so its
 	// exit can be reported via the "agent:exit" event. Empty for plain shells.
-	feature string
+	feature    string
+	output     []byte
+	seq        int64
+	closed     bool
+	closeError string
 }
+
+const terminalOutputBufferLimit = 1024 * 1024
 
 func NewApp() *App {
 	return &App{credentials: map[string]gitCredential{}, terminals: map[string]*terminalProcess{}}
@@ -581,6 +587,14 @@ type TerminalSession struct {
 	External bool   `json:"external,omitempty"`
 }
 
+type TerminalSnapshot struct {
+	ID     string `json:"id"`
+	Data   string `json:"data"`
+	Seq    int64  `json:"seq"`
+	Closed bool   `json:"closed,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
 func (a *App) TerminalOpen(path string) (TerminalSession, error) {
 	return a.TerminalOpenWithProgram(path, "default")
 }
@@ -636,6 +650,9 @@ func (a *App) TerminalWrite(id, data string) error {
 	if err != nil {
 		return err
 	}
+	if tp.closed {
+		return fmt.Errorf("terminal %q is closed", id)
+	}
 	_, err = io.WriteString(tp.pty, data)
 	return err
 }
@@ -644,6 +661,9 @@ func (a *App) TerminalResize(id string, cols, rows int) error {
 	tp, err := a.terminal(id)
 	if err != nil {
 		return err
+	}
+	if tp.closed {
+		return nil
 	}
 	if cols <= 0 || rows <= 0 {
 		return nil
@@ -662,6 +682,22 @@ func (a *App) TerminalClose(id string) error {
 	return nil
 }
 
+func (a *App) TerminalSnapshot(id string) (TerminalSnapshot, error) {
+	a.terminalMu.Lock()
+	defer a.terminalMu.Unlock()
+	tp := a.terminals[id]
+	if tp == nil {
+		return TerminalSnapshot{}, fmt.Errorf("terminal %q not found", id)
+	}
+	return TerminalSnapshot{
+		ID:     id,
+		Data:   string(tp.output),
+		Seq:    tp.seq,
+		Closed: tp.closed,
+		Error:  tp.closeError,
+	}, nil
+}
+
 func (a *App) terminal(id string) (*terminalProcess, error) {
 	a.terminalMu.Lock()
 	defer a.terminalMu.Unlock()
@@ -678,14 +714,43 @@ func (a *App) removeTerminal(id string) {
 	a.terminalMu.Unlock()
 }
 
+func (a *App) appendTerminalOutput(id string, data []byte) int64 {
+	a.terminalMu.Lock()
+	defer a.terminalMu.Unlock()
+	tp := a.terminals[id]
+	if tp == nil {
+		return 0
+	}
+	tp.seq++
+	tp.output = append(tp.output, data...)
+	if len(tp.output) > terminalOutputBufferLimit {
+		tp.output = append([]byte(nil), tp.output[len(tp.output)-terminalOutputBufferLimit:]...)
+	}
+	return tp.seq
+}
+
+func (a *App) markTerminalClosed(id, message string) {
+	a.terminalMu.Lock()
+	defer a.terminalMu.Unlock()
+	tp := a.terminals[id]
+	if tp == nil {
+		return
+	}
+	tp.closed = true
+	tp.closeError = message
+}
+
 func (a *App) pipeTerminalOutput(id string, ptyProc ptySession, feature string) {
 	buf := make([]byte, 8192)
 	for {
 		n, err := ptyProc.Read(buf)
 		if n > 0 {
+			chunk := append([]byte(nil), buf[:n]...)
+			seq := a.appendTerminalOutput(id, chunk)
 			runtime.EventsEmit(a.ctx, "terminal:data", map[string]any{
 				"id":   id,
-				"data": string(buf[:n]),
+				"data": string(chunk),
+				"seq":  seq,
 			})
 		}
 		if err != nil {
@@ -693,13 +758,13 @@ func (a *App) pipeTerminalOutput(id string, ptyProc ptySession, feature string) 
 		}
 	}
 	waitErr := ptyProc.Wait()
-	a.removeTerminal(id)
 	status := "closed"
 	message := ""
 	if waitErr != nil {
 		status = "error"
 		message = waitErr.Error()
 	}
+	a.markTerminalClosed(id, message)
 	runtime.EventsEmit(a.ctx, "terminal:close", map[string]any{
 		"id": id, "status": status, "error": message,
 	})

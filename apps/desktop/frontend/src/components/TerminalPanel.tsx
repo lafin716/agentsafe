@@ -57,22 +57,69 @@ export function TerminalPanel({
       void api.TerminalWrite(id, data);
     });
     const rt = runtime();
+    let disposed = false;
+    let snapshotLoaded = false;
+    let lastSeq = 0;
+    let closedWritten = false;
+    const pending: Array<{ data: string; seq?: number }> = [];
+    let pendingClose: { error?: string } | null = null;
+    const writeClosed = (error?: string) => {
+      if (closedWritten) return;
+      closedWritten = true;
+      term.writeln("");
+      term.writeln(error ? `[closed] ${error}` : "[closed]");
+    };
+    const writePayload = (payload: { data: string; seq?: number }) => {
+      if (typeof payload.seq === "number") {
+        if (payload.seq <= lastSeq) return;
+        lastSeq = payload.seq;
+      }
+      term.write(payload.data);
+    };
     const offData = rt?.EventsOn("terminal:data", (...data: unknown[]) => {
-      const payload = data[0] as { id: string; data: string };
-      if (payload.id === id) term.write(payload.data);
+      const payload = data[0] as { id: string; data: string; seq?: number };
+      if (payload.id !== id) return;
+      const next = { data: payload.data, seq: payload.seq };
+      if (!snapshotLoaded) {
+        pending.push(next);
+        return;
+      }
+      writePayload(next);
     });
     const offClose = rt?.EventsOn("terminal:close", (...data: unknown[]) => {
       const payload = data[0] as { id: string; error?: string };
       if (payload.id === id) {
-        term.writeln("");
-        term.writeln(payload.error ? `[closed] ${payload.error}` : "[closed]");
+        if (!snapshotLoaded) {
+          pendingClose = { error: payload.error };
+          return;
+        }
+        writeClosed(payload.error);
       }
     });
+    const restoreSnapshot = async () => {
+      try {
+        const snapshot = await api.TerminalSnapshot(id);
+        if (disposed) return;
+        if (snapshot.data) term.write(snapshot.data);
+        lastSeq = snapshot.seq ?? 0;
+        snapshotLoaded = true;
+        for (const item of pending.splice(0)) writePayload(item);
+        if (snapshot.closed) writeClosed(snapshot.error);
+        else if (pendingClose) writeClosed(pendingClose.error);
+      } catch {
+        if (disposed) return;
+        snapshotLoaded = true;
+        for (const item of pending.splice(0)) writePayload(item);
+        if (pendingClose) writeClosed(pendingClose.error);
+      }
+    };
+    void restoreSnapshot();
     const resizeObserver = new ResizeObserver(fit);
     resizeObserver.observe(container);
     window.setTimeout(fit, 0);
 
     return () => {
+      disposed = true;
       writeDisposable.dispose();
       resizeObserver.disconnect();
       offData?.();

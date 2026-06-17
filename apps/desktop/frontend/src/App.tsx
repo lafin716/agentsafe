@@ -11,7 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
-import type { Config } from "@/lib/types";
+import type { Config, TerminalSession } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
@@ -19,7 +19,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { WorkspacePage } from "@/pages/WorkspacePage";
 import { FeaturesPage } from "@/pages/FeaturesPage";
-import { FeatureDetailPage } from "@/pages/FeatureDetailPage";
+import { FeatureDetailPage, type FeatureDetailTab } from "@/pages/FeatureDetailPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { AgentSecurityPage } from "@/pages/AgentSecurityPage";
 import { BackupsPage } from "@/pages/BackupsPage";
@@ -45,6 +45,17 @@ export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [root, setRoot] = useState("");
   const [view, setView] = useState<View>({ kind: "workspace" });
+  const [featureTerminalTabs, setFeatureTerminalTabs] = useState<
+    Record<string, TerminalSession[]>
+  >({});
+  const [featureAgentSessions, setFeatureAgentSessions] = useState<
+    Record<string, TerminalSession | null>
+  >({});
+  const [featureActiveTabs, setFeatureActiveTabs] = useState<
+    Record<string, FeatureDetailTab>
+  >({});
+  const [explorerTerminals, setExplorerTerminals] = useState<TerminalSession[]>([]);
+  const [explorerActiveTab, setExplorerActiveTab] = useState("main");
 
   const refreshConfig = useCallback(async () => {
     try {
@@ -198,10 +209,45 @@ export default function App() {
               name={view.name}
               onBack={() => setView({ kind: "features" })}
               onViewHistory={(feature) => setView({ kind: "history", feature })}
+              tab={featureActiveTabs[view.name] ?? "work"}
+              setTab={(next) =>
+                setFeatureActiveTabs((prev) => {
+                  const current = prev[view.name] ?? "work";
+                  const value =
+                    typeof next === "function"
+                      ? next(current as FeatureDetailTab)
+                      : next;
+                  return { ...prev, [view.name]: value };
+                })
+              }
+              terminalTabs={featureTerminalTabs[view.name] ?? []}
+              setTerminalTabs={(next) =>
+                setFeatureTerminalTabs((prev) => {
+                  const current = prev[view.name] ?? [];
+                  const value = typeof next === "function" ? next(current) : next;
+                  return { ...prev, [view.name]: value };
+                })
+              }
+              agentSession={featureAgentSessions[view.name] ?? null}
+              setAgentSession={(next) =>
+                setFeatureAgentSessions((prev) => {
+                  const current = prev[view.name] ?? null;
+                  const value = typeof next === "function" ? next(current) : next;
+                  return { ...prev, [view.name]: value };
+                })
+              }
             />
           )}
           {view.kind === "templates" && <WorktreeTemplatesPage config={config} />}
-          {view.kind === "explorer" && <FileExplorerPage config={config} />}
+          {view.kind === "explorer" && (
+            <FileExplorerPage
+              config={config}
+              terminals={explorerTerminals}
+              setTerminals={setExplorerTerminals}
+              activeTab={explorerActiveTab}
+              setActiveTab={setExplorerActiveTab}
+            />
+          )}
           {view.kind === "agentsec" && <AgentSecurityPage config={config} />}
           {view.kind === "history" && (
             <HistoryPage

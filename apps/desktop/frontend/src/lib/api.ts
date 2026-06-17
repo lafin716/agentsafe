@@ -25,6 +25,7 @@ import type {
   SecurityTemplate,
   SyncOptions,
   TerminalSession,
+  TerminalSnapshot,
   WorkspaceEntry,
   WorkspaceTreeNode,
   WorktreeTemplate,
@@ -171,6 +172,7 @@ type AppBindings = {
   ): Promise<TerminalSession>;
   TerminalWrite(id: string, data: string): Promise<void>;
   TerminalResize(id: string, cols: number, rows: number): Promise<void>;
+  TerminalSnapshot(id: string): Promise<TerminalSnapshot>;
   TerminalClose(id: string): Promise<void>;
 };
 
