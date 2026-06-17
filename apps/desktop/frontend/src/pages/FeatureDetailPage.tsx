@@ -60,7 +60,8 @@ interface Props {
   onViewHistory: (feature: string) => void;
 }
 
-type Tab = "work" | "status" | "settings";
+type PrimaryTab = "work" | "status" | "settings";
+type Tab = PrimaryTab | `terminal:${string}`;
 
 export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   const { notify } = useToast();
@@ -143,6 +144,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     }
   });
   const [agentSession, setAgentSession] = useState<TerminalSession | null>(null);
+  const [terminalTabs, setTerminalTabs] = useState<TerminalSession[]>([]);
   const [agentFinished, setAgentFinished] = useState(false);
 
   function changeBackupOnPrepare(v: boolean) {
@@ -237,6 +239,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     setPrepared(null);
     setFeaturePaths(null);
     setAgentSession(null);
+    setTerminalTabs([]);
     setAgentFinished(false);
     setOpenDiffRepos(new Set());
   }, [name]);
@@ -405,20 +408,47 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
     return base.replace(/\.app$/i, "");
   }
 
+  function terminalTabId(id: string): Tab {
+    return `terminal:${id}`;
+  }
+
+  function addTerminalTab(session: TerminalSession, title?: string) {
+    const next = title ? { ...session, title } : session;
+    setTerminalTabs((prev) =>
+      prev.some((tab) => tab.id === next.id) ? prev : [...prev, next]
+    );
+    setTab(terminalTabId(next.id));
+  }
+
   const openTerminal = () =>
     run(async () => {
-      const p = await api.OpenInTerminal(name);
-      notify(t("toast.openedPath", { path: p }), "success");
+      if (!featurePaths?.agentPath) return;
+      const session = await api.TerminalOpenWithProgram(
+        featurePaths.agentPath,
+        terminalProgram.trim()
+      );
+      if (session.external) {
+        notify(t("toast.openedPath", { path: session.path }), "success");
+        return;
+      }
+      addTerminalTab(session, `Terminal · ${name}`);
+      notify(t("toast.openedEmbeddedTerminal", { path: session.path }), "success");
     });
 
   const openAgentCommandTerminal = () =>
     run(async () => {
-      const p = await api.OpenAgentCommandTerminal(
+      const session = await api.AgentRunWithProgram(
         name,
-        terminalProgram.trim(),
-        agentCommand.trim()
+        agentCommand.trim(),
+        terminalProgram.trim()
       );
-      notify(t("toast.openedPath", { path: p }), "success");
+      if (session.external) {
+        notify(t("toast.openedPath", { path: session.path }), "success");
+        return;
+      }
+      addTerminalTab(session, agentCommand.trim() || `Terminal · ${name}`);
+      setAgentFinished(false);
+      notify(t("toast.agentStarted"), "success");
     });
 
   const openProgram = () =>
@@ -439,13 +469,18 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
   // exit is detected via the "agent:exit" event subscribed above.
   const runAgent = () =>
     run(async () => {
-      const session = await api.AgentRun(name, agentCommand.trim());
+      const session = await api.AgentRunWithProgram(
+        name,
+        agentCommand.trim(),
+        terminalProgram.trim()
+      );
       if (session.external) {
         setAgentSession(null);
         notify(t("toast.openedPath", { path: session.path }), "success");
         return;
       }
       setAgentSession(session);
+      addTerminalTab(session, agentCommand.trim() || `Terminal · ${name}`);
       setAgentFinished(false);
       notify(t("toast.agentStarted"), "success");
     });
@@ -456,6 +491,18 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
         await api.TerminalClose(agentSession.id);
       }
       setAgentSession(null);
+      setTerminalTabs((prev) => prev.filter((tab) => tab.id !== agentSession?.id));
+      if (agentSession) {
+        setTab((prev) => (prev === terminalTabId(agentSession.id) ? "work" : prev));
+      }
+    });
+
+  const closeTerminalTab = (id: string) =>
+    run(async () => {
+      await api.TerminalClose(id);
+      setTerminalTabs((prev) => prev.filter((tab) => tab.id !== id));
+      if (agentSession?.id === id) setAgentSession(null);
+      setTab((prev) => (prev === terminalTabId(id) ? "work" : prev));
     });
 
   const openRepoFolder = (repo: string) =>
@@ -647,7 +694,7 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
       notify(t("toast.requestsSent"), "success");
     });
 
-  const tabs: { id: Tab; label: string }[] = [
+  const tabs: { id: PrimaryTab; label: string }[] = [
     { id: "work", label: "작업" },
     { id: "status", label: "상태" },
     { id: "settings", label: "설정" },
@@ -695,8 +742,50 @@ export function FeatureDetailPage({ name, onBack, onViewHistory }: Props) {
               {t.label}
             </button>
           ))}
+          {terminalTabs.map((terminal) => {
+            const id = terminalTabId(terminal.id);
+            return (
+              <div
+                key={terminal.id}
+                className={
+                  "flex items-center gap-1 rounded-md px-2 py-1.5 text-sm transition-colors " +
+                  (tab === id
+                    ? "bg-secondary font-medium text-secondary-foreground"
+                    : "text-muted-foreground hover:text-foreground")
+                }
+                title={terminal.path}
+              >
+                <button
+                  type="button"
+                  className="flex min-w-0 items-center gap-1"
+                  onClick={() => setTab(id)}
+                >
+                  <Terminal className="size-3.5 shrink-0" />
+                  <span className="max-w-32 truncate">{terminal.title}</span>
+                </button>
+                <button
+                  type="button"
+                  className="rounded p-0.5 opacity-70 hover:bg-accent hover:opacity-100"
+                  onClick={() => void closeTerminalTab(terminal.id)}
+                  title={t("common.close")}
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            );
+          })}
         </div>
       </div>
+
+      {tab.startsWith("terminal:") && (() => {
+        const id = tab.slice("terminal:".length);
+        const active = terminalTabs.find((terminal) => terminal.id === id);
+        return active ? (
+          <Card className="overflow-hidden">
+            <TerminalPanel id={active.id} path={active.path} />
+          </Card>
+        ) : null;
+      })()}
 
       {tab === "work" && (
         <div className="space-y-5">

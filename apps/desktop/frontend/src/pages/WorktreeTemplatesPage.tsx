@@ -1,4 +1,4 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -14,7 +14,14 @@ import {
   X,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
-import type { Config, Repository, WorktreeTemplate, WorktreeTemplateTargetMode } from "@/lib/types";
+import type {
+  Config,
+  Repository,
+  WorktreeTemplate,
+  WorktreeTemplateTargetMode,
+  WorktreeTemplateTree,
+  WorktreeTemplateTreeNode,
+} from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -23,17 +30,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -54,10 +52,14 @@ type LogicalFolder = {
 };
 
 type EditorState = {
-  id: string;
+  templateId: string;
+  relPath: string;
   name: string;
   content: string;
+  savedContent: string;
 };
+
+type Counts = { files: number; folders: number };
 
 function buildTree(repos: Repository[], t: (key: string) => string): LogicalFolder {
   const featureRepos = repos.map((repo) => ({
@@ -84,18 +86,36 @@ function buildTree(repos: Repository[], t: (key: string) => string): LogicalFold
       {
         id: "features",
         label: t("templates.featuresFolder"),
-        description: t("templates.featuresFolderDesc"),
-        targetMode: "allRepos",
+        description: "Templates copied to each feature root folder.",
+        targetMode: "featureRoot",
         repoNames: [],
-        children: featureRepos,
+        children: [
+          {
+            id: "features/all-repos",
+            label: "All repositories",
+            description: t("templates.featuresFolderDesc"),
+            targetMode: "allRepos",
+            repoNames: [],
+          },
+          ...featureRepos,
+        ],
       },
       {
         id: "agents",
         label: t("templates.agentsFolder"),
-        description: t("templates.agentsFolderDesc"),
-        targetMode: "agentAllRepos",
+        description: "Templates copied to each agent root folder.",
+        targetMode: "agentRoot",
         repoNames: [],
-        children: agentRepos,
+        children: [
+          {
+            id: "agents/all-repos",
+            label: "All agent repositories",
+            description: t("templates.agentsFolderDesc"),
+            targetMode: "agentAllRepos",
+            repoNames: [],
+          },
+          ...agentRepos,
+        ],
       },
     ],
   };
@@ -111,49 +131,66 @@ function matchesFolder(item: WorktreeTemplate, folder: LogicalFolder): boolean {
   return folder.repoNames.every((repo) => (item.repoNames ?? []).includes(repo));
 }
 
-function targetLabel(item: WorktreeTemplate, t: (key: string) => string): string {
-  switch (item.targetMode) {
-    case "featureRoot":
-      return t("templates.targetFeatureRoot");
-    case "workspaceRoot":
-      return t("templates.targetWorkspaceRoot");
-    case "allRepos":
-      return t("templates.targetAllRepos");
-    case "selectedRepos":
-      return `${t("templates.targetSelectedRepos")}: ${(item.repoNames ?? []).join(", ")}`;
-    case "agentRoot":
-      return t("templates.targetAgentRoot");
-    case "agentAllRepos":
-      return t("templates.targetAgentAllRepos");
-    case "agentSelectedRepos":
-      return `${t("templates.targetAgentSelectedRepos")}: ${(item.repoNames ?? []).join(", ")}`;
-    default:
-      return String(item.targetMode);
-  }
+function nodeKey(templateId: string, relPath: string) {
+  return `${templateId}:${relPath || "."}`;
+}
+
+function countForFolder(trees: WorktreeTemplateTree[], folder: LogicalFolder): Counts {
+  return trees.reduce(
+    (sum, tree) => {
+      if (!matchesFolder(tree.template, folder)) return sum;
+      return {
+        files: sum.files + (tree.root.files ?? 0),
+        folders: sum.folders + (tree.root.folders ?? 0),
+      };
+    },
+    { files: 0, folders: 0 }
+  );
+}
+
+function CountBadges({ counts }: { counts: Counts }) {
+  if (counts.files === 0 && counts.folders === 0) return null;
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-1">
+      <Badge variant="secondary" className="gap-1 px-1.5 text-[10px]">
+        <FileText className="size-3" /> {counts.files}
+      </Badge>
+      <Badge variant="outline" className="gap-1 px-1.5 text-[10px]">
+        <Folder className="size-3" /> {counts.folders}
+      </Badge>
+    </span>
+  );
 }
 
 export function WorktreeTemplatesPage({ config }: Props) {
   const { t } = useI18n();
   const { notify } = useToast();
   const confirm = useConfirm();
-  const [templates, setTemplates] = useState<WorktreeTemplate[]>([]);
+  const [templateTrees, setTemplateTrees] = useState<WorktreeTemplateTree[]>([]);
   const [repos, setRepos] = useState<Repository[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState("root");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(["root", "features", "agents"]));
-  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(["root", "features", "agents"]));
+  const [expandedTemplateNodes, setExpandedTemplateNodes] = useState<Set<string>>(new Set());
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
   const dropRef = useRef<HTMLDivElement | null>(null);
 
+  const templates = useMemo(() => templateTrees.map((tree) => tree.template), [templateTrees]);
+
   const load = useCallback(async () => {
     if (!config) return;
     try {
-      const [items, configured] = await Promise.all([
-        api.ListWorktreeTemplates(),
+      const [trees, configured] = await Promise.all([
+        api.ListWorktreeTemplateTrees(),
         api.ListRepos(),
       ]);
-      setTemplates(items ?? []);
+      setTemplateTrees(trees ?? []);
       setRepos(configured ?? []);
+      setExpandedTemplateNodes((prev) => {
+        const next = new Set(prev);
+        for (const tree of trees ?? []) next.add(nodeKey(tree.template.id, ""));
+        return next;
+      });
     } catch (e) {
       notify(errMessage(e), "error");
     }
@@ -166,17 +203,11 @@ export function WorktreeTemplatesPage({ config }: Props) {
   const tree = useMemo(() => buildTree(repos, t), [repos, t]);
   const folders = useMemo(() => flattenFolders(tree), [tree]);
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) ?? tree;
-  const visibleTemplates = useMemo(
-    () => templates.filter((item) => matchesFolder(item, selectedFolder)),
-    [templates, selectedFolder]
+  const isRootSelected = selectedFolder.id === "root";
+  const visibleTrees = useMemo(
+    () => templateTrees.filter((item) => matchesFolder(item.template, selectedFolder)),
+    [templateTrees, selectedFolder]
   );
-  const selectedTemplate = visibleTemplates.find((item) => item.id === selectedTemplateId) ?? visibleTemplates[0];
-
-  useEffect(() => {
-    if (!visibleTemplates.some((item) => item.id === selectedTemplateId)) {
-      setSelectedTemplateId(visibleTemplates[0]?.id ?? "");
-    }
-  }, [selectedTemplateId, visibleTemplates]);
 
   if (!config) {
     return (
@@ -190,8 +221,10 @@ export function WorktreeTemplatesPage({ config }: Props) {
   }
 
   function patchLocal(id: string, patch: Partial<WorktreeTemplate>) {
-    setTemplates((items) =>
-      items.map((item) => (item.id === id ? { ...item, ...patch } : item))
+    setTemplateTrees((items) =>
+      items.map((tree) =>
+        tree.template.id === id ? { ...tree, template: { ...tree.template, ...patch } } : tree
+      )
     );
   }
 
@@ -228,11 +261,15 @@ export function WorktreeTemplatesPage({ config }: Props) {
 
   async function assignImported(items: WorktreeTemplate[]) {
     if (items.length === 0) return;
+    if (isRootSelected) {
+      notify("Select a feature, repository, agent root, or agent repository before uploading.", "error");
+      return;
+    }
     await Promise.all(items.map((item) => api.UpdateWorktreeTemplate(withSelectedTarget(item))));
-    setSelectedTemplateId(items[0].id);
   }
 
   async function importFiles() {
+    if (isRootSelected) return;
     try {
       setBusy(true);
       const added = await api.ImportWorktreeTemplateFiles();
@@ -249,6 +286,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
   }
 
   async function importFolder() {
+    if (isRootSelected) return;
     try {
       setBusy(true);
       const added = await api.ImportWorktreeTemplateFolder();
@@ -265,6 +303,10 @@ export function WorktreeTemplatesPage({ config }: Props) {
   }
 
   async function importPaths(paths: string[]) {
+    if (isRootSelected) {
+      notify("Upload is disabled on the root folder. Select a destination below root first.", "error");
+      return;
+    }
     const clean = paths.filter((path) => path.trim().length > 0);
     if (clean.length === 0) return;
     try {
@@ -295,7 +337,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
       if (target && !dropRef.current?.contains(target)) return;
       void importPaths(payload.paths);
     });
-  }, [selectedFolder.id]);
+  }, [selectedFolder.id, isRootSelected]);
 
   async function openTemplateFolder() {
     try {
@@ -317,7 +359,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
     try {
       setBusy(true);
       await api.DeleteWorktreeTemplate(item.id);
-      if (editor?.id === item.id) setEditor(null);
+      if (editor?.templateId === item.id) setEditor(null);
       notify(t("toast.templateDeleted"), "success");
       await load();
     } catch (e) {
@@ -339,7 +381,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
       setBusy(true);
       await api.ClearWorktreeTemplates();
       setEditor(null);
-      setSelectedTemplateId("");
+      setExpandedTemplateNodes(new Set());
       notify(t("toast.templatesCleared"), "success");
       await load();
     } catch (e) {
@@ -349,11 +391,18 @@ export function WorktreeTemplatesPage({ config }: Props) {
     }
   }
 
-  async function openEditor(item: WorktreeTemplate) {
+  async function openEditor(item: WorktreeTemplate, node: WorktreeTemplateTreeNode) {
+    if (node.isDir || !node.relPath) return;
     try {
       setBusy(true);
-      const content = await api.ReadWorktreeTemplateFile(item.id);
-      setEditor({ id: item.id, name: item.name, content });
+      const content = await api.ReadWorktreeTemplateTreeFile(item.id, node.relPath);
+      setEditor({
+        templateId: item.id,
+        relPath: node.relPath,
+        name: `${item.name} / ${node.relPath}`,
+        content,
+        savedContent: content,
+      });
     } catch (e) {
       notify(errMessage(e), "error");
     } finally {
@@ -365,8 +414,14 @@ export function WorktreeTemplatesPage({ config }: Props) {
     if (!editor) return;
     try {
       setBusy(true);
-      await api.SaveWorktreeTemplateFile(editor.id, editor.content);
+      await api.SaveWorktreeTemplateTreeFile(
+        editor.templateId,
+        editor.relPath,
+        editor.content
+      );
+      setEditor({ ...editor, savedContent: editor.content });
       notify(t("templates.editorSaved"), "success");
+      await load();
     } catch (e) {
       notify(errMessage(e), "error");
     } finally {
@@ -374,10 +429,18 @@ export function WorktreeTemplatesPage({ config }: Props) {
     }
   }
 
+  function toggleTemplateNode(id: string) {
+    const next = new Set(expandedTemplateNodes);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setExpandedTemplateNodes(next);
+  }
+
   function FolderNode({ node, depth }: { node: LogicalFolder; depth: number }) {
-    const open = expanded.has(node.id);
+    const open = expandedFolders.has(node.id);
     const active = selectedFolder.id === node.id;
     const hasChildren = (node.children ?? []).length > 0;
+    const counts = countForFolder(templateTrees, node);
     return (
       <div>
         <button
@@ -394,10 +457,10 @@ export function WorktreeTemplatesPage({ config }: Props) {
             onClick={(e) => {
               e.stopPropagation();
               if (!hasChildren) return;
-              const next = new Set(expanded);
+              const next = new Set(expandedFolders);
               if (next.has(node.id)) next.delete(node.id);
               else next.add(node.id);
-              setExpanded(next);
+              setExpandedFolders(next);
             }}
           >
             {hasChildren ? open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" /> : null}
@@ -408,6 +471,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
             <Folder className="size-4 text-amber-600" />
           )}
           <span className="truncate">{node.label}</span>
+          {node.id !== "root" && <CountBadges counts={counts} />}
         </button>
         {hasChildren && open && (
           <div>
@@ -420,8 +484,93 @@ export function WorktreeTemplatesPage({ config }: Props) {
     );
   }
 
+  function TemplateFileNode({
+    tree,
+    node,
+    depth,
+    isRoot = false,
+  }: {
+    tree: WorktreeTemplateTree;
+    node: WorktreeTemplateTreeNode;
+    depth: number;
+    isRoot?: boolean;
+  }) {
+    const key = nodeKey(tree.template.id, node.relPath);
+    const open = expandedTemplateNodes.has(key) || isRoot;
+    const hasChildren = (node.children ?? []).length > 0;
+    const displayName = isRoot ? tree.template.name : node.name;
+    return (
+      <div>
+        <div
+          className={cn(
+            "flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent/70",
+            editor?.templateId === tree.template.id && editor.relPath === node.relPath && "bg-secondary"
+          )}
+          style={{ paddingLeft: 8 + depth * 16 }}
+        >
+          <button
+            type="button"
+            className="flex size-4 shrink-0 items-center justify-center"
+            onClick={() => node.isDir && toggleTemplateNode(key)}
+          >
+            {node.isDir && hasChildren ? open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" /> : null}
+          </button>
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+            onClick={() => (node.isDir ? toggleTemplateNode(key) : openEditor(tree.template, node))}
+            onDoubleClick={() => !node.isDir && openEditor(tree.template, node)}
+          >
+            {node.isDir ? (
+              open ? <FolderOpen className="size-4 shrink-0 text-amber-600" /> : <Folder className="size-4 shrink-0 text-amber-600" />
+            ) : (
+              <FileText className="size-4 shrink-0 text-muted-foreground" />
+            )}
+            <span className="truncate font-medium">{displayName}</span>
+            {node.isDir && <CountBadges counts={{ files: node.files ?? 0, folders: node.folders ?? 0 }} />}
+          </button>
+          {isRoot && (
+            <div className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
+              <Button
+                variant={tree.template.enabled ? "secondary" : "outline"}
+                size="sm"
+                onClick={() => patchAndSave(tree.template, { enabled: !tree.template.enabled })}
+                disabled={busy}
+              >
+                {tree.template.enabled ? t("templates.enabled") : t("templates.disabled")}
+              </Button>
+              <Button
+                variant={tree.template.overwrite ? "secondary" : "outline"}
+                size="sm"
+                onClick={() => patchAndSave(tree.template, { overwrite: !tree.template.overwrite })}
+                disabled={busy}
+              >
+                {tree.template.overwrite ? t("templates.overwriteOn") : t("templates.overwriteOff")}
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => remove(tree.template)} disabled={busy}>
+                <Trash2 className="size-4" /> {t("common.delete")}
+              </Button>
+            </div>
+          )}
+          {!node.isDir && !isRoot && (
+            <Button variant="ghost" size="sm" onClick={() => openEditor(tree.template, node)} disabled={busy}>
+              <Edit3 className="size-4" /> {t("templates.openEditor")}
+            </Button>
+          )}
+        </div>
+        {node.isDir && open && hasChildren && (
+          <div>
+            {(node.children ?? []).map((child) => (
+              <TemplateFileNode key={child.relPath} tree={tree} node={child} depth={depth + 1} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="grid h-[calc(100vh-9rem)] grid-cols-[minmax(240px,320px)_1fr] gap-4">
+    <div className="grid h-[calc(100vh-9rem)] grid-cols-[minmax(260px,360px)_1fr] gap-4">
       <Card className="overflow-hidden">
         <CardHeader>
           <CardTitle>{t("templates.logicalTree")}</CardTitle>
@@ -445,12 +594,16 @@ export function WorktreeTemplatesPage({ config }: Props) {
               </Button>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={importFiles} disabled={busy}>
-                <Upload className="size-4" /> {t("templates.addFiles")}
-              </Button>
-              <Button size="sm" onClick={importFolder} disabled={busy}>
-                <FolderPlus className="size-4" /> {t("templates.addFolder")}
-              </Button>
+              {!isRootSelected && (
+                <>
+                  <Button size="sm" onClick={importFiles} disabled={busy}>
+                    <Upload className="size-4" /> {t("templates.addFiles")}
+                  </Button>
+                  <Button size="sm" onClick={importFolder} disabled={busy}>
+                    <FolderPlus className="size-4" /> {t("templates.addFolder")}
+                  </Button>
+                </>
+              )}
               <Button variant="outline" size="sm" onClick={openTemplateFolder}>
                 <FolderOpen className="size-4" /> {t("templates.openFolder")}
               </Button>
@@ -461,108 +614,80 @@ export function WorktreeTemplatesPage({ config }: Props) {
           </CardHeader>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("templates.uploadTitle")}</CardTitle>
-            <CardDescription>{t("templates.uploadDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div
-              ref={dropRef}
-              data-template-dropzone="true"
-              style={{ "--wails-drop-target": "drop" } as CSSProperties}
-              className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/30 p-6 text-center"
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                const paths = Array.from(e.dataTransfer.files)
-                  .map((file) => (file as File & { path?: string }).path ?? "")
-                  .filter(Boolean);
-                void importPaths(paths);
-              }}
-            >
-              <Upload className="size-8 text-muted-foreground" />
-              <div>
-                <div className="font-medium">{t("templates.dropFiles")}</div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {t("templates.dropFilesHint")}
-                </p>
+        {isRootSelected ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>How to use template folders</CardTitle>
+              <CardDescription>Uploads are disabled on the root folder.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Select a destination below Root before uploading templates.</p>
+              <ul className="list-disc space-y-1 pl-5">
+                <li>Select <span className="font-medium text-foreground">features</span> to copy files to each feature root.</li>
+                <li>Select a repository under features to copy files to that worktree repository.</li>
+                <li>Select <span className="font-medium text-foreground">agents</span> to copy files to each agent root.</li>
+                <li>Select an agent repository to copy files to that sanitized repository folder.</li>
+              </ul>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("templates.uploadTitle")}</CardTitle>
+              <CardDescription>{t("templates.uploadDesc")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div
+                ref={dropRef}
+                data-template-dropzone="true"
+                style={{ "--wails-drop-target": "drop" } as CSSProperties}
+                className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/30 p-6 text-center"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const paths = Array.from(e.dataTransfer.files)
+                    .map((file) => (file as File & { path?: string }).path ?? "")
+                    .filter(Boolean);
+                  void importPaths(paths);
+                }}
+              >
+                <Upload className="size-8 text-muted-foreground" />
+                <div>
+                  <div className="font-medium">{t("templates.dropFiles")}</div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {t("templates.dropFilesHint")}
+                  </p>
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("templates.listTitle")}</CardTitle>
-            <CardDescription>{t("templates.listDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {visibleTemplates.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t("templates.emptyInFolder")}</p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("repo.colName")}</TableHead>
-                    <TableHead>{t("templates.sourcePath")}</TableHead>
-                    <TableHead>{t("templates.enabled")}</TableHead>
-                    <TableHead>{t("templates.overwrite")}</TableHead>
-                    <TableHead className="text-right">{t("repo.colAction")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visibleTemplates.map((item) => (
-                    <TableRow key={item.id}>
-                      <TableCell className="min-w-48">
-                        <div className="flex items-center gap-2">
-                          <FileText className="size-4 text-muted-foreground" />
-                          <span className="font-medium">{item.name}</span>
-                          <Badge variant={item.enabled ? "success" : "outline"}>
-                            {item.enabled ? t("templates.enabled") : t("templates.disabled")}
-                          </Badge>
-                        </div>
-                      </TableCell>
-                      <TableCell className="max-w-72 truncate font-mono text-xs text-muted-foreground" title={item.sourcePath}>
-                        {item.sourcePath}
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant={item.enabled ? "secondary" : "outline"}
-                          size="sm"
-                          onClick={() => patchAndSave(item, { enabled: !item.enabled })}
-                          disabled={busy}
-                        >
-                          {item.enabled ? t("templates.enabled") : t("templates.disabled")}
-                        </Button>
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant={item.overwrite ? "secondary" : "outline"}
-                          size="sm"
-                          onClick={() => patchAndSave(item, { overwrite: !item.overwrite })}
-                          disabled={busy}
-                        >
-                          {item.overwrite ? t("templates.overwriteOn") : t("templates.overwriteOff")}
-                        </Button>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-2">
-                          <Button variant="outline" size="sm" onClick={() => openEditor(item)} disabled={busy}>
-                            <Edit3 className="size-4" /> {t("templates.openEditor")}
-                          </Button>
-                          <Button variant="destructive" size="sm" onClick={() => remove(item)} disabled={busy}>
-                            <Trash2 className="size-4" /> {t("common.delete")}
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
+        {(!isRootSelected || visibleTrees.length > 0) && (
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("templates.listTitle")}</CardTitle>
+              <CardDescription>{t("templates.listDesc")}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {visibleTrees.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("templates.emptyInFolder")}</p>
+              ) : (
+                <div className="space-y-2 rounded-md border p-2">
+                  {visibleTrees.map((tree) => (
+                    <TemplateFileNode
+                      key={tree.template.id}
+                      tree={tree}
+                      node={tree.root}
+                      depth={0}
+                      isRoot
+                    />
                   ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {editor && (
           <Card>
@@ -579,13 +704,13 @@ export function WorktreeTemplatesPage({ config }: Props) {
               <Textarea
                 value={editor.content}
                 onChange={(e) => setEditor({ ...editor, content: e.target.value })}
-                className="min-h-[360px]"
+                className="min-h-[360px] font-mono text-sm"
               />
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setEditor(null)}>
                   {t("common.close")}
                 </Button>
-                <Button onClick={saveEditor} disabled={busy}>
+                <Button onClick={saveEditor} disabled={busy || editor.content === editor.savedContent}>
                   <Save className="size-4" /> {t("templates.saveFile")}
                 </Button>
               </div>

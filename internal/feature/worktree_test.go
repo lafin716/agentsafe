@@ -35,7 +35,7 @@ func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		worktree := config.WorktreePath(root, "demo", "repo")
+		worktree := config.WorktreePath(root, config.FeatureKey("demo"), "repo")
 		if branch, err := aggit.CurrentBranch(worktree); err != nil || branch != "feature/demo" {
 			t.Fatalf("branch = %q, err = %v", branch, err)
 		}
@@ -60,7 +60,7 @@ func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(config.WorktreePath(root, "demo", "repo"), "feature.txt")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(config.WorktreePath(root, config.FeatureKey("demo"), "repo"), "feature.txt")); !os.IsNotExist(err) {
 			t.Fatalf("recreated branch retained old commit, stat err = %v", err)
 		}
 	})
@@ -74,7 +74,7 @@ func TestCreateTracksBaseUntilFirstPush(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	worktree := config.WorktreePath(root, "demo", "repo")
+	worktree := config.WorktreePath(root, config.FeatureKey("demo"), "repo")
 	if upstream, err := aggit.Upstream(worktree, "feature/demo"); err != nil || upstream != "origin/main" {
 		t.Fatalf("upstream = %q, err = %v; want origin/main", upstream, err)
 	}
@@ -90,7 +90,7 @@ func TestCreateTracksBaseUntilFirstPush(t *testing.T) {
 	}
 }
 
-func TestCreateUsesOriginalFeatureNameForWorktreeFolder(t *testing.T) {
+func TestCreateUsesFeatHashForWorktreeFolder(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	name := "테스트2"
 	if err := CreateWithOptions(root, cfg, name, CreateOptions{
@@ -102,13 +102,14 @@ func TestCreateUsesOriginalFeatureNameForWorktreeFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.FolderKey() != name {
-		t.Fatalf("folder key = %q, want %q", meta.FolderKey(), name)
+	key := config.FeatureKey(name)
+	if meta.FolderKey() != key {
+		t.Fatalf("folder key = %q, want %q", meta.FolderKey(), key)
 	}
 	if meta.Branch != "feature/"+name {
 		t.Fatalf("branch = %q, want %q", meta.Branch, "feature/"+name)
 	}
-	want := filepath.ToSlash(filepath.Join("feature", name, "repo"))
+	want := filepath.ToSlash(filepath.Join("feature", key, "repo"))
 	if len(meta.Repositories) != 1 || meta.Repositories[0].WorktreePath != want {
 		t.Fatalf("worktree path = %+v, want %s", meta.Repositories, want)
 	}
@@ -153,7 +154,7 @@ func TestCheckCreateReportsAllExistingBranchesWithoutCreatingWorktrees(t *testin
 	if err == nil || !strings.Contains(err.Error(), "choose reuse or recreate") {
 		t.Fatalf("expected existing branch error, got %v", err)
 	}
-	if _, err := os.Stat(config.WorktreePath(root, "demo", "one")); !os.IsNotExist(err) {
+	if _, err := os.Stat(config.WorktreePath(root, config.FeatureKey("demo"), "one")); !os.IsNotExist(err) {
 		t.Fatalf("first repository worktree was partially created, stat err = %v", err)
 	}
 }
@@ -192,10 +193,10 @@ func TestCreateReusesRemoteOnlyBranch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(config.WorktreePath(root, "demo", "repo"), "remote.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(config.WorktreePath(root, config.FeatureKey("demo"), "repo"), "remote.txt")); err != nil {
 		t.Fatalf("remote branch content missing: %v", err)
 	}
-	worktree := config.WorktreePath(root, "demo", "repo")
+	worktree := config.WorktreePath(root, config.FeatureKey("demo"), "repo")
 	if upstream, err := aggit.Upstream(worktree, "feature/demo"); err != nil || upstream != "origin/feature/demo" {
 		t.Fatalf("upstream = %q, err = %v; want origin/feature/demo", upstream, err)
 	}
@@ -215,7 +216,7 @@ func TestConfigureRepositoryWorktreeAddAndRecreate(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "agent", "demo"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "agent", config.FeatureKey("demo")), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	session := struct {
@@ -249,7 +250,7 @@ func TestConfigureRepositoryWorktreeAddAndRecreate(t *testing.T) {
 		t.Fatal("expected agent workspace to require prepare after repository add")
 	}
 
-	secondWorktree := config.WorktreePath(root, "demo", "two")
+	secondWorktree := config.WorktreePath(root, config.FeatureKey("demo"), "two")
 	if err := os.WriteFile(filepath.Join(secondWorktree, "dirty.txt"), []byte("dirty"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +387,7 @@ func TestCreateUsesCurrentRepositoryBranchWhenBaseAndDefaultAreEmpty(t *testing.
 	if len(meta.Repositories) != 1 || meta.Repositories[0].BaseBranch != "release" {
 		t.Fatalf("base branch = %+v, want release", meta.Repositories)
 	}
-	if _, err := os.Stat(filepath.Join(config.WorktreePath(root, "demo", "repo"), "release.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(config.WorktreePath(root, config.FeatureKey("demo"), "repo"), "release.txt")); err != nil {
 		t.Fatalf("worktree was not based on current branch: %v", err)
 	}
 }

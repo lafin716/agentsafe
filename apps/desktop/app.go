@@ -284,6 +284,14 @@ func (a *App) ListWorktreeTemplates() ([]wttemplate.Template, error) {
 	return wttemplate.List(root)
 }
 
+func (a *App) ListWorktreeTemplateTrees() ([]wttemplate.TemplateTree, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	return wttemplate.ListTrees(root)
+}
+
 func (a *App) ImportWorktreeTemplateFiles() ([]wttemplate.Template, error) {
 	root, err := a.requireRoot()
 	if err != nil {
@@ -364,6 +372,22 @@ func (a *App) SaveWorktreeTemplateFile(id, content string) error {
 		return err
 	}
 	return wttemplate.WriteTemplateFile(root, id, content)
+}
+
+func (a *App) ReadWorktreeTemplateTreeFile(id, relPath string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	return wttemplate.ReadTemplateTreeFile(root, id, relPath)
+}
+
+func (a *App) SaveWorktreeTemplateTreeFile(id, relPath, content string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return wttemplate.WriteTemplateTreeFile(root, id, relPath, content)
 }
 
 func (a *App) OpenWorktreeTemplateFolder() (string, error) {
@@ -558,6 +582,10 @@ type TerminalSession struct {
 }
 
 func (a *App) TerminalOpen(path string) (TerminalSession, error) {
+	return a.TerminalOpenWithProgram(path, "default")
+}
+
+func (a *App) TerminalOpenWithProgram(path, terminalProgram string) (TerminalSession, error) {
 	root, err := a.requireRoot()
 	if err != nil {
 		return TerminalSession{}, err
@@ -571,7 +599,7 @@ func (a *App) TerminalOpen(path string) (TerminalSession, error) {
 	} else if statErr != nil {
 		return TerminalSession{}, statErr
 	}
-	shell, args := defaultShell()
+	shell, args := shellForTerminalProgram(terminalProgram)
 	session, err := a.startPTY(target, "", shell, args)
 	if err != nil && isPTYUnsupported(err) {
 		if _, openErr := openTerminalAt(target); openErr != nil {
@@ -686,11 +714,29 @@ func (a *App) pipeTerminalOutput(id string, ptyProc ptySession, feature string) 
 }
 
 func defaultShell() (string, []string) {
+	return shellForTerminalProgram("default")
+}
+
+func shellForTerminalProgram(program string) (string, []string) {
+	program = strings.ToLower(strings.TrimSpace(program))
 	if goruntime.GOOS == "windows" {
-		if shell := os.Getenv("COMSPEC"); shell != "" {
-			return shell, nil
+		switch program {
+		case "powershell":
+			return "powershell", []string{"-NoLogo"}
+		case "pwsh":
+			return "pwsh", []string{"-NoLogo"}
+		case "cmd":
+			return "cmd.exe", nil
+		case "git-bash":
+			return windowsGitBashShell()
+		case "wt", "windows-terminal":
+			return "powershell", []string{"-NoLogo"}
+		default:
+			if shell := os.Getenv("COMSPEC"); shell != "" {
+				return shell, nil
+			}
+			return "cmd.exe", nil
 		}
-		return "cmd.exe", nil
 	}
 	if shell := os.Getenv("SHELL"); shell != "" {
 		return shell, []string{"-l"}
@@ -698,14 +744,48 @@ func defaultShell() (string, []string) {
 	return "/bin/sh", []string{"-l"}
 }
 
+func windowsGitBashShell() (string, []string) {
+	candidates := []string{
+		`C:\Program Files\Git\bin\bash.exe`,
+		`C:\Program Files\Git\usr\bin\bash.exe`,
+		`C:\Program Files (x86)\Git\bin\bash.exe`,
+		`C:\Program Files (x86)\Git\usr\bin\bash.exe`,
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, []string{"--login", "-i"}
+		}
+	}
+	return "bash", []string{"--login", "-i"}
+}
+
 // commandShell wraps a command line so it runs through the user's login shell,
 // resolving PATH/aliases and keeping a TTY for interactive agents.
 func commandShell(command string) (string, []string) {
+	return commandShellForProgram(command, "default")
+}
+
+func commandShellForProgram(command, program string) (string, []string) {
+	program = strings.ToLower(strings.TrimSpace(program))
 	if goruntime.GOOS == "windows" {
-		if shell := os.Getenv("COMSPEC"); shell != "" {
-			return shell, []string{"/c", command}
+		switch program {
+		case "powershell":
+			return "powershell", []string{"-NoLogo", "-Command", command}
+		case "pwsh":
+			return "pwsh", []string{"-NoLogo", "-Command", command}
+		case "git-bash":
+			shell, args := windowsGitBashShell()
+			return shell, append(args, "-lc", command)
+		case "cmd":
+			return "cmd.exe", []string{"/c", command}
+		case "wt", "windows-terminal":
+			return "powershell", []string{"-NoLogo", "-Command", command}
+		default:
+			if shell := os.Getenv("COMSPEC"); shell != "" {
+				return shell, []string{"/c", command}
+			}
+			return "cmd.exe", []string{"/c", command}
 		}
-		return "cmd.exe", []string{"/c", command}
 	}
 	if shell := os.Getenv("SHELL"); shell != "" {
 		return shell, []string{"-lc", command}
@@ -2394,6 +2474,10 @@ func (a *App) OpenAgentCommandTerminal(name, terminalProgram, command string) (s
 // feature's agent workspace. The session is tagged with the feature so its exit
 // emits "agent:exit", letting the UI refresh the diff and prompt a sync.
 func (a *App) AgentRun(name, command string) (TerminalSession, error) {
+	return a.AgentRunWithProgram(name, command, "default")
+}
+
+func (a *App) AgentRunWithProgram(name, command, terminalProgram string) (TerminalSession, error) {
 	root, err := a.requireRoot()
 	if err != nil {
 		return TerminalSession{}, err
@@ -2406,10 +2490,10 @@ func (a *App) AgentRun(name, command string) (TerminalSession, error) {
 		return TerminalSession{}, err
 	}
 	dir := filepath.Join(root, "agent", fm.FolderKey())
-	shell, args := commandShell(command)
+	shell, args := commandShellForProgram(command, terminalProgram)
 	session, err := a.startPTY(dir, name, shell, args)
 	if err != nil && isPTYUnsupported(err) {
-		if _, openErr := openTerminalCommandAt(dir, "default", command); openErr != nil {
+		if _, openErr := openTerminalCommandAt(dir, terminalProgram, command); openErr != nil {
 			return TerminalSession{}, openErr
 		}
 		return TerminalSession{ID: "external", Path: dir, Title: filepath.Base(dir), External: true}, nil

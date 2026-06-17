@@ -4,30 +4,34 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/agentsafe/agentsafe/internal/config"
 )
 
 func TestFolderKeyFallsBackToName(t *testing.T) {
 	if got := (Metadata{Name: "테스트이름"}).FolderKey(); got != "테스트이름" {
 		t.Errorf("FolderKey() with empty Key = %q, want Name", got)
 	}
-	if got := (Metadata{Name: "테스트이름", Key: "feature-abc123"}).FolderKey(); got != "feature-abc123" {
+	if got := (Metadata{Name: "테스트이름", Key: "feat-abc123"}).FolderKey(); got != "feat-abc123" {
 		t.Errorf("FolderKey() = %q, want Key", got)
 	}
 }
 
-func TestUniqueFeatureKeyResolvesCollisions(t *testing.T) {
+func TestUniqueFeatureKeyUsesFeatHashAndResolvesCollisions(t *testing.T) {
 	root := t.TempDir()
+	name := "테스트2"
+	want := config.FeatureKey(name)
 
-	first := uniqueFeatureKey(root, "테스트2")
-	if first != "테스트2" {
-		t.Fatalf("uniqueFeatureKey returned %q, want original name", first)
+	first := uniqueFeatureKey(root, name)
+	if first != want {
+		t.Fatalf("uniqueFeatureKey returned %q, want %q", first, want)
 	}
 	// Simulate the worktree folder being created for the first feature.
 	if err := os.MkdirAll(filepath.Join(root, "feature", first), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	second := uniqueFeatureKey(root, "테스트2")
+	second := uniqueFeatureKey(root, name)
 	if second == first {
 		t.Errorf("expected a distinct key on collision, got %q twice", first)
 	}

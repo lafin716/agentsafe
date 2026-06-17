@@ -75,6 +75,21 @@ export interface WorktreeTemplate {
   overwrite: boolean;
 }
 
+export interface WorktreeTemplateTreeNode {
+  name: string;
+  relPath: string;
+  isDir: boolean;
+  size: number;
+  files: number;
+  folders: number;
+  children: WorktreeTemplateTreeNode[] | null;
+}
+
+export interface WorktreeTemplateTree {
+  template: WorktreeTemplate;
+  root: WorktreeTemplateTreeNode;
+}
+
 export interface WorkspaceTreeNode {
   name: string;
   path: string;

@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/fsutil"
@@ -38,6 +40,21 @@ type Store struct {
 	Templates []Template `json:"templates"`
 }
 
+type TemplateTree struct {
+	Template Template         `json:"template"`
+	Root     TemplateTreeNode `json:"root"`
+}
+
+type TemplateTreeNode struct {
+	Name     string             `json:"name"`
+	RelPath  string             `json:"relPath"`
+	IsDir    bool               `json:"isDir"`
+	Size     int64              `json:"size"`
+	Files    int                `json:"files"`
+	Folders  int                `json:"folders"`
+	Children []TemplateTreeNode `json:"children"`
+}
+
 type Repo struct {
 	Name         string
 	WorktreePath string
@@ -56,6 +73,28 @@ func List(root string) ([]Template, error) {
 		return []Template{}, nil
 	}
 	return store.Templates, nil
+}
+
+func ListTrees(root string) ([]TemplateTree, error) {
+	templates, err := List(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TemplateTree, 0, len(templates))
+	for _, t := range templates {
+		dir := filepath.Join(FilesDir(root), t.ID)
+		node, err := templateTreeNode(dir, dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				node = TemplateTreeNode{Name: t.Name, IsDir: true}
+			} else {
+				return nil, err
+			}
+		}
+		node.Name = t.Name
+		out = append(out, TemplateTree{Template: t, Root: node})
+	}
+	return out, nil
 }
 
 func ImportFiles(root string, paths []string) ([]Template, error) {
@@ -205,6 +244,46 @@ func WriteTemplateFile(root, id, content string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
+	}
+	return os.WriteFile(path, []byte(content), info.Mode().Perm())
+}
+
+func ReadTemplateTreeFile(root, id, relPath string) (string, error) {
+	path, err := templateTreeFilePath(root, id, relPath)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("cannot edit a directory")
+	}
+	if info.Size() > maxEditableTemplateFileSize {
+		return "", fmt.Errorf("file is too large to edit in the app (max 2 MB)")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if !utf8.Valid(b) || hasNUL(b) {
+		return "", fmt.Errorf("file is not valid UTF-8 text")
+	}
+	return string(b), nil
+}
+
+func WriteTemplateTreeFile(root, id, relPath, content string) error {
+	path, err := templateTreeFilePath(root, id, relPath)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("cannot edit a directory")
 	}
 	return os.WriteFile(path, []byte(content), info.Mode().Perm())
 }
@@ -436,6 +515,103 @@ func singleTemplateFilePath(root, id string) (string, error) {
 		return "", fmt.Errorf("template %q is a folder template; open the template folder to edit it", id)
 	}
 	return filepath.Join(dir, entry.Name()), nil
+}
+
+const maxEditableTemplateFileSize int64 = 2 * 1024 * 1024
+
+func templateTreeFilePath(root, id, relPath string) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", fmt.Errorf("template id is required")
+	}
+	templates, err := List(root)
+	if err != nil {
+		return "", err
+	}
+	found := false
+	for _, t := range templates {
+		if t.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("template %q not found", id)
+	}
+	clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(relPath)))
+	if clean == "." || clean == "" || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
+		return "", fmt.Errorf("invalid template file path %q", relPath)
+	}
+	base := filepath.Join(FilesDir(root), id)
+	target := filepath.Join(base, clean)
+	absBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if err := fsutil.EnsureInside(absBase, absTarget); err != nil {
+		return "", err
+	}
+	return absTarget, nil
+}
+
+func templateTreeNode(base, target string) (TemplateTreeNode, error) {
+	info, err := os.Stat(target)
+	if err != nil {
+		return TemplateTreeNode{}, err
+	}
+	rel, _ := filepath.Rel(base, target)
+	if rel == "." {
+		rel = ""
+	}
+	node := TemplateTreeNode{
+		Name:    filepath.Base(target),
+		RelPath: filepath.ToSlash(rel),
+		IsDir:   info.IsDir(),
+		Size:    info.Size(),
+	}
+	if !info.IsDir() {
+		node.Files = 1
+		return node, nil
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		return node, err
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].IsDir() != entries[j].IsDir() {
+			return entries[i].IsDir()
+		}
+		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
+	})
+	node.Children = []TemplateTreeNode{}
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		child, err := templateTreeNode(base, filepath.Join(target, entry.Name()))
+		if err != nil {
+			continue
+		}
+		if child.IsDir {
+			node.Folders++
+		}
+		node.Files += child.Files
+		node.Folders += child.Folders
+		node.Children = append(node.Children, child)
+	}
+	return node, nil
+}
+
+func hasNUL(b []byte) bool {
+	for _, c := range b {
+		if c == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func isWorktreeTarget(mode string) bool {

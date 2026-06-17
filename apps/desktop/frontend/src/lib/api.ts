@@ -28,6 +28,7 @@ import type {
   WorkspaceEntry,
   WorkspaceTreeNode,
   WorktreeTemplate,
+  WorktreeTemplateTree,
 } from "./types";
 
 type AppBindings = {
@@ -44,6 +45,7 @@ type AppBindings = {
   SelectWorkspaceBundleTargetDir(): Promise<string>;
   ImportWorkspaceBundleFrom(zipPath: string, target: string): Promise<Config>;
   ListWorktreeTemplates(): Promise<WorktreeTemplate[]>;
+  ListWorktreeTemplateTrees(): Promise<WorktreeTemplateTree[]>;
   ImportWorktreeTemplateFiles(): Promise<WorktreeTemplate[]>;
   ImportWorktreeTemplateFolder(): Promise<WorktreeTemplate>;
   ImportWorktreeTemplatePaths(paths: string[]): Promise<WorktreeTemplate[]>;
@@ -52,6 +54,12 @@ type AppBindings = {
   ClearWorktreeTemplates(): Promise<void>;
   ReadWorktreeTemplateFile(id: string): Promise<string>;
   SaveWorktreeTemplateFile(id: string, content: string): Promise<void>;
+  ReadWorktreeTemplateTreeFile(id: string, relPath: string): Promise<string>;
+  SaveWorktreeTemplateTreeFile(
+    id: string,
+    relPath: string,
+    content: string
+  ): Promise<void>;
   OpenWorktreeTemplateFolder(): Promise<string>;
   ApplyWorkspaceRootTemplates(): Promise<void>;
   ApplyWorktreeTemplates(name: string): Promise<void>;
@@ -151,7 +159,16 @@ type AppBindings = {
   OpenRepoFolder(name: string, repo: string): Promise<string>;
   OpenRepoInProgram(name: string, repo: string, program: string): Promise<string>;
   TerminalOpen(path: string): Promise<TerminalSession>;
+  TerminalOpenWithProgram(
+    path: string,
+    terminalProgram: string
+  ): Promise<TerminalSession>;
   AgentRun(name: string, command: string): Promise<TerminalSession>;
+  AgentRunWithProgram(
+    name: string,
+    command: string,
+    terminalProgram: string
+  ): Promise<TerminalSession>;
   TerminalWrite(id: string, data: string): Promise<void>;
   TerminalResize(id: string, cols: number, rows: number): Promise<void>;
   TerminalClose(id: string): Promise<void>;

@@ -82,6 +82,14 @@ function editorId(path: string): string {
   return `editor:${path}`;
 }
 
+function defaultTerminalProgram(): string {
+  try {
+    return localStorage.getItem("agentsafe.terminalProgram") || "powershell";
+  } catch {
+    return "powershell";
+  }
+}
+
 export function FileExplorerPage({ config }: Props) {
   const { t } = useI18n();
   const { notify } = useToast();
@@ -260,7 +268,10 @@ export function FileExplorerPage({ config }: Props) {
     if (!selected) return;
     try {
       setBusy(true);
-      const session = await api.TerminalOpen(selected.path);
+      const session = await api.TerminalOpenWithProgram(
+        selected.path,
+        defaultTerminalProgram()
+      );
       if (session.external) {
         notify(t("toast.openedPath", { path: session.path }), "success");
         return;

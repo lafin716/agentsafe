@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, FolderOpen, Languages, Save, Stethoscope, Upload } from "lucide-react";
+import { Download, FolderOpen, Languages, Save, Stethoscope, Terminal, Upload } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -27,10 +27,27 @@ interface Props {
 export function SettingsPage({ config, onChanged }: Props) {
   const { locale, setLocale, t } = useI18n();
   const { notify } = useToast();
+  const [terminalProgram, setTerminalProgram] = useState(() => {
+    try {
+      return localStorage.getItem("agentsafe.terminalProgram") || "powershell";
+    } catch {
+      return "powershell";
+    }
+  });
 
   function choose(l: Locale) {
     if (l === locale) return;
     setLocale(l);
+    notify(t("settings.saved"), "success");
+  }
+
+  function changeTerminalProgram(v: string) {
+    setTerminalProgram(v);
+    try {
+      localStorage.setItem("agentsafe.terminalProgram", v);
+    } catch {
+      /* ignore */
+    }
     notify(t("settings.saved"), "success");
   }
 
@@ -67,6 +84,35 @@ export function SettingsPage({ config, onChanged }: Props) {
         config={config}
         onChanged={onChanged}
       />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Terminal className="size-5" /> Default terminal
+          </CardTitle>
+          <CardDescription>
+            Choose the shell used by embedded terminal tabs across the app.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-1.5">
+            <Label htmlFor="defaultTerminalProgram">Terminal program</Label>
+            <select
+              id="defaultTerminalProgram"
+              value={terminalProgram}
+              onChange={(e) => changeTerminalProgram(e.target.value)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="powershell">PowerShell</option>
+              <option value="pwsh">PowerShell 7</option>
+              <option value="cmd">Command Prompt</option>
+              <option value="git-bash">Git Bash</option>
+              <option value="wt">Windows Terminal</option>
+              <option value="default">System default</option>
+            </select>
+          </div>
+        </CardContent>
+      </Card>
 
       {config ? (
         <GitSettings config={config} onChanged={onChanged} />
