@@ -421,7 +421,7 @@ func worktreeTemplateCmd() *cobra.Command {
 	var overwrite bool
 	var disabled bool
 	applyFlags := func(cmd *cobra.Command) {
-		cmd.Flags().StringVar(&target, "target", wttemplate.TargetAllRepos, "target: featureRoot, allRepos, selectedRepos, agentRoot, agentAllRepos, or agentSelectedRepos")
+		cmd.Flags().StringVar(&target, "target", wttemplate.TargetAllRepos, "target: workspaceRoot, featureRoot, allRepos, selectedRepos, agentRoot, agentAllRepos, or agentSelectedRepos")
 		cmd.Flags().StringSliceVar(&repos, "repo", nil, "repository name for selectedRepos/agentSelectedRepos (repeat or comma-separate)")
 		cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
 		cmd.Flags().BoolVar(&disabled, "disabled", false, "import as disabled")
@@ -494,6 +494,20 @@ func worktreeTemplateCmd() *cobra.Command {
 		fmt.Printf("Deleted worktree template %s\n", args[0])
 		return nil
 	}}
+	clear := &cobra.Command{Use: "clear", Short: "Delete all worktree templates", RunE: func(cmd *cobra.Command, args []string) error {
+		root, _, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		if err := wttemplate.Clear(root); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok", Message: "cleared worktree templates"})
+		}
+		fmt.Println("Cleared worktree templates")
+		return nil
+	}}
 	var applyTarget string
 	apply := &cobra.Command{Use: "apply FEATURE", Short: "Apply templates to an existing worktree/agent workspace", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
@@ -526,7 +540,7 @@ func worktreeTemplateCmd() *cobra.Command {
 		return nil
 	}}
 	apply.Flags().StringVar(&applyTarget, "target", "all", "apply target: worktree, agent, or all")
-	c.AddCommand(list, addFile, addFolder, del, apply)
+	c.AddCommand(list, addFile, addFolder, del, clear, apply)
 	return c
 }
 

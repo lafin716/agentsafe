@@ -49,9 +49,11 @@ type AppBindings = {
   ImportWorktreeTemplatePaths(paths: string[]): Promise<WorktreeTemplate[]>;
   UpdateWorktreeTemplate(t: WorktreeTemplate): Promise<void>;
   DeleteWorktreeTemplate(id: string): Promise<void>;
+  ClearWorktreeTemplates(): Promise<void>;
   ReadWorktreeTemplateFile(id: string): Promise<string>;
   SaveWorktreeTemplateFile(id: string, content: string): Promise<void>;
   OpenWorktreeTemplateFolder(): Promise<string>;
+  ApplyWorkspaceRootTemplates(): Promise<void>;
   ApplyWorktreeTemplates(name: string): Promise<void>;
   ApplyAgentTemplates(name: string): Promise<void>;
   WorkspaceTree(path: string): Promise<WorkspaceTreeNode>;

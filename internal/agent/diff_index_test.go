@@ -9,6 +9,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/fsutil"
+	"github.com/agentsafe/agentsafe/internal/wttemplate"
 )
 
 func writeIndexedFile(t *testing.T, path, content string) {
@@ -267,5 +268,46 @@ func TestPrepareStoresFileIndex(t *testing.T) {
 	}
 	if entry.Agent.Hash != entry.Worktree.Hash {
 		t.Fatalf("unmasked prepared hashes differ: %#v", entry)
+	}
+}
+
+func TestDiffIgnoresAgentRepoTemplates(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default(root, "test")
+	repoName := "repo"
+	featureName := "demo"
+	worktreeRel := filepath.Join("feature", featureName, repoName)
+	worktree := filepath.Join(root, worktreeRel)
+	writeIndexedFile(t, filepath.Join(worktree, "README.md"), "base")
+	cfg.Repositories = []config.Repository{{Name: repoName}}
+	if err := feature.Save(root, feature.Metadata{
+		Name: featureName, Key: featureName, Branch: "feature/demo", Revision: 1,
+		Repositories: []feature.RepoMeta{{
+			Name: repoName, WorktreePath: filepath.ToSlash(worktreeRel), Branch: "feature/demo", BaseBranch: "main", Revision: 1,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(root, "CLAUDE.md")
+	if err := os.WriteFile(src, []byte("template"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	added, err := wttemplate.ImportFiles(root, []string{src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added[0].TargetMode = wttemplate.TargetAgentAllRepos
+	if err := wttemplate.Update(root, added[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareRepository(root, cfg, featureName, repoName, PrepareOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	changes, err := Diff(root, cfg, featureName, repoName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := changes[repoName]; len(got) != 0 {
+		t.Fatalf("agent template should be ignored, got changes %#v", got)
 	}
 }

@@ -10,10 +10,12 @@ import (
 
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/fsutil"
+	aggit "github.com/agentsafe/agentsafe/internal/git"
 	"github.com/agentsafe/agentsafe/internal/output"
 )
 
 const (
+	TargetWorkspaceRoot      = "workspaceRoot"
 	TargetFeatureRoot        = "featureRoot"
 	TargetAllRepos           = "allRepos"
 	TargetSelectedRepos      = "selectedRepos"
@@ -179,6 +181,10 @@ func Delete(root, id string) error {
 	return fsutil.ForceRemoveAll(filepath.Join(FilesDir(root), id))
 }
 
+func Clear(root string) error {
+	return fsutil.ForceRemoveAll(BaseDir(root))
+}
+
 func ReadTemplateFile(root, id string) (string, error) {
 	path, err := singleTemplateFilePath(root, id)
 	if err != nil {
@@ -207,6 +213,27 @@ func Apply(root, featureKey string, repos []Repo) error {
 	return apply(root, featureKey, repos, isWorktreeTarget)
 }
 
+func ApplyWorkspaceRoot(root string) error {
+	templates, err := List(root)
+	if err != nil {
+		return err
+	}
+	for _, t := range templates {
+		if !t.Enabled || t.TargetMode != TargetWorkspaceRoot {
+			continue
+		}
+		src := filepath.Join(FilesDir(root), t.ID)
+		if _, err := os.Stat(src); err != nil {
+			return fmt.Errorf("template %s source missing: %w", t.Name, err)
+		}
+		output.Printf("[template] applying %s to %s\n", t.Name, root)
+		if err := copyTree(src, root, t.Overwrite); err != nil {
+			return fmt.Errorf("apply template %s: %w", t.Name, err)
+		}
+	}
+	return nil
+}
+
 func ApplyAgent(root, featureKey string, repos []Repo) error {
 	return apply(root, featureKey, repos, isAgentTarget)
 }
@@ -231,6 +258,11 @@ func apply(root, featureKey string, repos []Repo, include func(string) bool) err
 			output.Printf("[template] applying %s to %s\n", t.Name, dst)
 			if err := copyTree(src, dst, t.Overwrite); err != nil {
 				return fmt.Errorf("apply template %s: %w", t.Name, err)
+			}
+			if isRepoWorktreeTarget(t.TargetMode) {
+				if err := addTemplateExcludes(dst, templateIgnorePatterns(root, t)); err != nil {
+					return fmt.Errorf("ignore template %s: %w", t.Name, err)
+				}
 			}
 		}
 	}
@@ -260,6 +292,11 @@ func applyToRepos(root string, repos []Repo, allMode, selectedMode string) error
 			if err := copyTree(src, dst, t.Overwrite); err != nil {
 				return fmt.Errorf("apply template %s: %w", t.Name, err)
 			}
+			if allMode == TargetAllRepos {
+				if err := addTemplateExcludes(dst, templateIgnorePatterns(root, t)); err != nil {
+					return fmt.Errorf("ignore template %s: %w", t.Name, err)
+				}
+			}
 		}
 	}
 	return nil
@@ -275,6 +312,8 @@ func destinations(root, featureKey string, repos []Repo, t Template) []string {
 		return repoDestinations(repos, t, TargetAllRepos)
 	case TargetAgentAllRepos, TargetAgentSelectedRepos:
 		return repoDestinations(repos, t, TargetAgentAllRepos)
+	case TargetWorkspaceRoot:
+		return []string{root}
 	default:
 		return nil
 	}
@@ -359,7 +398,7 @@ func validateTemplate(t Template) error {
 		return fmt.Errorf("template name is required")
 	}
 	switch t.TargetMode {
-	case TargetFeatureRoot, TargetAllRepos, TargetSelectedRepos, TargetAgentRoot, TargetAgentAllRepos, TargetAgentSelectedRepos:
+	case TargetWorkspaceRoot, TargetFeatureRoot, TargetAllRepos, TargetSelectedRepos, TargetAgentRoot, TargetAgentAllRepos, TargetAgentSelectedRepos:
 		return nil
 	default:
 		return fmt.Errorf("invalid template target mode %q", t.TargetMode)
@@ -405,6 +444,121 @@ func isWorktreeTarget(mode string) bool {
 
 func isAgentTarget(mode string) bool {
 	return mode == TargetAgentRoot || mode == TargetAgentAllRepos || mode == TargetAgentSelectedRepos
+}
+
+func isRepoWorktreeTarget(mode string) bool {
+	return mode == TargetAllRepos || mode == TargetSelectedRepos
+}
+
+func AgentIgnorePatterns(root, repoName string) ([]string, error) {
+	templates, err := List(root)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, t := range templates {
+		if !t.Enabled {
+			continue
+		}
+		switch t.TargetMode {
+		case TargetAgentAllRepos:
+			out = append(out, templateIgnorePatterns(root, t)...)
+		case TargetAgentSelectedRepos:
+			if containsRepo(t.RepoNames, repoName) {
+				out = append(out, templateIgnorePatterns(root, t)...)
+			}
+		}
+	}
+	return dedupeStrings(out), nil
+}
+
+func templateIgnorePatterns(root string, t Template) []string {
+	dir := filepath.Join(FilesDir(root), t.ID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := filepath.ToSlash(entry.Name())
+		if entry.IsDir() {
+			name += "/"
+		}
+		out = append(out, "/"+name)
+	}
+	return out
+}
+
+func addTemplateExcludes(worktreePath string, patterns []string) error {
+	if len(patterns) == 0 {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, ".git")); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	excludePath, err := aggit.Output(worktreePath, "rev-parse", "--git-path", "info/exclude")
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(worktreePath, filepath.FromSlash(excludePath))
+	}
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return err
+	}
+	existingBytes, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	existing := string(existingBytes)
+	var b strings.Builder
+	if existing != "" {
+		b.WriteString(existing)
+		if !strings.HasSuffix(existing, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	wroteHeader := false
+	for _, p := range dedupeStrings(patterns) {
+		if strings.Contains("\n"+existing+"\n", "\n"+p+"\n") {
+			continue
+		}
+		if !wroteHeader && !strings.Contains(existing, "# agentsafe worktree templates") {
+			b.WriteString("# agentsafe worktree templates\n")
+			wroteHeader = true
+		}
+		b.WriteString(p)
+		b.WriteByte('\n')
+	}
+	if b.String() == existing {
+		return nil
+	}
+	return os.WriteFile(excludePath, []byte(b.String()), 0o644)
+}
+
+func containsRepo(names []string, repoName string) bool {
+	for _, name := range names {
+		if name == repoName {
+			return true
+		}
+	}
+	return false
+}
+
+func dedupeStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func copyTree(srcRoot, dstRoot string, overwrite bool) error {

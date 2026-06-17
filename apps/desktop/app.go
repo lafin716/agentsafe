@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -17,7 +16,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"gopkg.in/yaml.v3"
 
@@ -57,8 +55,7 @@ type gitCredential struct {
 }
 
 type terminalProcess struct {
-	cmd  *exec.Cmd
-	file *os.File
+	pty  ptySession
 	path string
 	// feature is set when this session runs a managed agent for a feature, so its
 	// exit can be reported via the "agent:exit" event. Empty for plain shells.
@@ -345,6 +342,14 @@ func (a *App) DeleteWorktreeTemplate(id string) error {
 	return wttemplate.Delete(root, id)
 }
 
+func (a *App) ClearWorktreeTemplates() error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return wttemplate.Clear(root)
+}
+
 func (a *App) ReadWorktreeTemplateFile(id string) (string, error) {
 	root, err := a.requireRoot()
 	if err != nil {
@@ -387,6 +392,16 @@ func (a *App) ApplyWorktreeTemplates(name string) error {
 	}
 	return a.runTask("Apply worktree templates: "+name, func() error {
 		return wttemplate.Apply(root, fm.FolderKey(), desktopWorktreeTemplateRepos(root, fm.Repositories))
+	})
+}
+
+func (a *App) ApplyWorkspaceRootTemplates() error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	return a.runTask("Apply workspace root templates", func() error {
+		return wttemplate.ApplyWorkspaceRoot(root)
 	})
 }
 
@@ -556,15 +571,9 @@ func (a *App) TerminalOpen(path string) (TerminalSession, error) {
 	} else if statErr != nil {
 		return TerminalSession{}, statErr
 	}
-	if goruntime.GOOS == "windows" {
-		if _, err := openTerminalAt(target); err != nil {
-			return TerminalSession{}, err
-		}
-		return TerminalSession{ID: "external", Path: target, Title: filepath.Base(target), External: true}, nil
-	}
 	shell, args := defaultShell()
 	session, err := a.startPTY(target, "", shell, args)
-	if err != nil && (errors.Is(err, pty.ErrUnsupported) || strings.Contains(strings.ToLower(err.Error()), "unsupported")) {
+	if err != nil && isPTYUnsupported(err) {
 		if _, openErr := openTerminalAt(target); openErr != nil {
 			return TerminalSession{}, openErr
 		}
@@ -577,10 +586,7 @@ func (a *App) TerminalOpen(path string) (TerminalSession, error) {
 // terminal, and streams its output. When feature is non-empty the session is
 // tagged as a managed agent run so its exit is also reported via "agent:exit".
 func (a *App) startPTY(target, feature, name string, args []string) (TerminalSession, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = target
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	ptyFile, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	ptyProc, err := startPTYProcess(target, name, args, 80, 24)
 	if err != nil {
 		return TerminalSession{}, err
 	}
@@ -590,10 +596,10 @@ func (a *App) startPTY(target, feature, name string, args []string) (TerminalSes
 	if a.terminals == nil {
 		a.terminals = map[string]*terminalProcess{}
 	}
-	a.terminals[id] = &terminalProcess{cmd: cmd, file: ptyFile, path: target, feature: feature}
+	a.terminals[id] = &terminalProcess{pty: ptyProc, path: target, feature: feature}
 	a.terminalMu.Unlock()
 
-	go a.pipeTerminalOutput(id, ptyFile, cmd, feature)
+	go a.pipeTerminalOutput(id, ptyProc, feature)
 	return TerminalSession{ID: id, Path: target, Title: filepath.Base(target)}, nil
 }
 
@@ -602,7 +608,7 @@ func (a *App) TerminalWrite(id, data string) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(tp.file, data)
+	_, err = io.WriteString(tp.pty, data)
 	return err
 }
 
@@ -614,7 +620,7 @@ func (a *App) TerminalResize(id string, cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return nil
 	}
-	return pty.Setsize(tp.file, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
+	return tp.pty.Resize(cols, rows)
 }
 
 func (a *App) TerminalClose(id string) error {
@@ -623,10 +629,8 @@ func (a *App) TerminalClose(id string) error {
 		return nil
 	}
 	a.removeTerminal(id)
-	_ = tp.file.Close()
-	if tp.cmd.Process != nil {
-		_ = tp.cmd.Process.Kill()
-	}
+	_ = tp.pty.Kill()
+	_ = tp.pty.Close()
 	return nil
 }
 
@@ -646,10 +650,10 @@ func (a *App) removeTerminal(id string) {
 	a.terminalMu.Unlock()
 }
 
-func (a *App) pipeTerminalOutput(id string, ptyFile *os.File, cmd *exec.Cmd, feature string) {
+func (a *App) pipeTerminalOutput(id string, ptyProc ptySession, feature string) {
 	buf := make([]byte, 8192)
 	for {
-		n, err := ptyFile.Read(buf)
+		n, err := ptyProc.Read(buf)
 		if n > 0 {
 			runtime.EventsEmit(a.ctx, "terminal:data", map[string]any{
 				"id":   id,
@@ -660,7 +664,7 @@ func (a *App) pipeTerminalOutput(id string, ptyFile *os.File, cmd *exec.Cmd, fea
 			break
 		}
 	}
-	waitErr := cmd.Wait()
+	waitErr := ptyProc.Wait()
 	a.removeTerminal(id)
 	status := "closed"
 	message := ""
@@ -678,7 +682,7 @@ func (a *App) pipeTerminalOutput(id string, ptyFile *os.File, cmd *exec.Cmd, fea
 			"id": id, "feature": feature, "status": status, "error": message,
 		})
 	}
-	_ = ptyFile.Close()
+	_ = ptyProc.Close()
 }
 
 func defaultShell() (string, []string) {
@@ -2402,15 +2406,9 @@ func (a *App) AgentRun(name, command string) (TerminalSession, error) {
 		return TerminalSession{}, err
 	}
 	dir := filepath.Join(root, "agent", fm.FolderKey())
-	if goruntime.GOOS == "windows" {
-		if _, err := openTerminalCommandAt(dir, "powershell", command); err != nil {
-			return TerminalSession{}, err
-		}
-		return TerminalSession{ID: "external", Path: dir, Title: filepath.Base(dir), External: true}, nil
-	}
 	shell, args := commandShell(command)
 	session, err := a.startPTY(dir, name, shell, args)
-	if err != nil && (errors.Is(err, pty.ErrUnsupported) || strings.Contains(strings.ToLower(err.Error()), "unsupported")) {
+	if err != nil && isPTYUnsupported(err) {
 		if _, openErr := openTerminalCommandAt(dir, "default", command); openErr != nil {
 			return TerminalSession{}, openErr
 		}

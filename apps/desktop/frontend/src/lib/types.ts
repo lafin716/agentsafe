@@ -56,6 +56,7 @@ export interface Config {
 }
 
 export type WorktreeTemplateTargetMode =
+  | "workspaceRoot"
   | "featureRoot"
   | "allRepos"
   | "selectedRepos"

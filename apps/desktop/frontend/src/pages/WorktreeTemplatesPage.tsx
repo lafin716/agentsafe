@@ -78,7 +78,7 @@ function buildTree(repos: Repository[], t: (key: string) => string): LogicalFold
     id: "root",
     label: t("templates.rootFolder"),
     description: t("templates.rootFolderDesc"),
-    targetMode: "featureRoot",
+    targetMode: "workspaceRoot",
     repoNames: [],
     children: [
       {
@@ -115,6 +115,8 @@ function targetLabel(item: WorktreeTemplate, t: (key: string) => string): string
   switch (item.targetMode) {
     case "featureRoot":
       return t("templates.targetFeatureRoot");
+    case "workspaceRoot":
+      return t("templates.targetWorkspaceRoot");
     case "allRepos":
       return t("templates.targetAllRepos");
     case "selectedRepos":
@@ -325,6 +327,28 @@ export function WorktreeTemplatesPage({ config }: Props) {
     }
   }
 
+  async function clearAll() {
+    if (
+      !(await confirm({
+        message: t("templates.clearConfirm"),
+        danger: true,
+      }))
+    )
+      return;
+    try {
+      setBusy(true);
+      await api.ClearWorktreeTemplates();
+      setEditor(null);
+      setSelectedTemplateId("");
+      notify(t("toast.templatesCleared"), "success");
+      await load();
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function openEditor(item: WorktreeTemplate) {
     try {
       setBusy(true);
@@ -429,6 +453,9 @@ export function WorktreeTemplatesPage({ config }: Props) {
               </Button>
               <Button variant="outline" size="sm" onClick={openTemplateFolder}>
                 <FolderOpen className="size-4" /> {t("templates.openFolder")}
+              </Button>
+              <Button variant="destructive" size="sm" onClick={clearAll} disabled={busy || templates.length === 0}>
+                <Trash2 className="size-4" /> {t("templates.clearAll")}
               </Button>
             </div>
           </CardHeader>

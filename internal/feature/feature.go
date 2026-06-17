@@ -265,7 +265,10 @@ func validateCreatePolicy(check CreateCheck, policy ExistingBranchPolicy) error 
 // and ensures it does not collide with an existing feature's folder by
 // appending a numeric suffix when needed.
 func uniqueFeatureKey(root, name string) string {
-	base := config.FeatureKey(name)
+	base := strings.TrimSpace(name)
+	if base == "" {
+		base = config.FeatureKey(name)
+	}
 	candidate := base
 	for i := 2; featureKeyTaken(root, candidate); i++ {
 		candidate = fmt.Sprintf("%s-%d", base, i)

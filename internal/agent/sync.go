@@ -12,6 +12,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/fsutil"
 	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/ui"
+	"github.com/agentsafe/agentsafe/internal/wttemplate"
 )
 
 type Options struct {
@@ -58,6 +59,16 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 			}
 			pats := []string{".git/"}
 			pats = append(pats, cfg.Agent.DefaultExclude...)
+			templatePats, templateErr := wttemplate.AgentIgnorePatterns(root, r.name)
+			if templateErr != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = templateErr
+				}
+				mu.Unlock()
+				continue
+			}
+			pats = append(pats, templatePats...)
 			matcher := NewIgnoreMatcher(pats)
 			source := config.AgentPath(root, fm.FolderKey(), r.name)
 			target := filepath.Join(root, r.worktreePath)

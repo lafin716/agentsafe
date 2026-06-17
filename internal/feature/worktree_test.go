@@ -90,6 +90,33 @@ func TestCreateTracksBaseUntilFirstPush(t *testing.T) {
 	}
 }
 
+func TestCreateUsesOriginalFeatureNameForWorktreeFolder(t *testing.T) {
+	root, cfg := testWorkspace(t, "repo")
+	name := "테스트2"
+	if err := CreateWithOptions(root, cfg, name, CreateOptions{
+		Base: "main", ExistingBranch: ExistingBranchError,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := Load(root, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.FolderKey() != name {
+		t.Fatalf("folder key = %q, want %q", meta.FolderKey(), name)
+	}
+	if meta.Branch != "feature/"+name {
+		t.Fatalf("branch = %q, want %q", meta.Branch, "feature/"+name)
+	}
+	want := filepath.ToSlash(filepath.Join("feature", name, "repo"))
+	if len(meta.Repositories) != 1 || meta.Repositories[0].WorktreePath != want {
+		t.Fatalf("worktree path = %+v, want %s", meta.Repositories, want)
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(want))); err != nil {
+		t.Fatalf("worktree folder missing: %v", err)
+	}
+}
+
 func TestCheckCreateReportsAllExistingBranchesWithoutCreatingWorktrees(t *testing.T) {
 	root, firstCfg := testWorkspace(t, "one")
 	secondRoot, secondCfg := testWorkspace(t, "two")

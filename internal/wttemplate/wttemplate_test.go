@@ -3,7 +3,10 @@ package wttemplate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	aggit "github.com/agentsafe/agentsafe/internal/git"
 )
 
 func TestApplyTargetsAndOverwrite(t *testing.T) {
@@ -199,5 +202,164 @@ func TestApplyAgentTargets(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(web, "CLAUDE.md")); !os.IsNotExist(err) {
 		t.Fatalf("unselected agent repo received template, err=%v", err)
+	}
+}
+
+func TestApplyWorkspaceRootTargetsOnlyWorkspaceRoot(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "ROOT.md")
+	if err := os.WriteFile(src, []byte("root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	added, err := ImportFiles(root, []string{src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := added[0]
+	item.TargetMode = TargetWorkspaceRoot
+	if err := Update(root, item); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(root, "demo", []Repo{{Name: "api", WorktreePath: filepath.Join(root, "feature", "demo", "api")}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "feature", "demo", "ROOT.md")); !os.IsNotExist(err) {
+		t.Fatalf("workspace root template was applied to feature root, err=%v", err)
+	}
+	if err := ApplyWorkspaceRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "ROOT.md")); err != nil {
+		t.Fatalf("workspace root template missing: %v", err)
+	}
+}
+
+func TestClearDeletesTemplateStore(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(src, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportFiles(root, []string{src}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Clear(root); err != nil {
+		t.Fatal(err)
+	}
+	items, err := List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("templates after clear = %d, want 0", len(items))
+	}
+}
+
+func TestAgentIgnorePatternsIncludesAgentRepoTemplates(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "CLAUDE.md")
+	dir := filepath.Join(root, "tools")
+	if err := os.WriteFile(file, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte("run"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	added, err := ImportPaths(root, []string{file, dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added[0].TargetMode = TargetAgentAllRepos
+	if err := Update(root, added[0]); err != nil {
+		t.Fatal(err)
+	}
+	added[1].TargetMode = TargetAgentSelectedRepos
+	added[1].RepoNames = []string{"api"}
+	if err := Update(root, added[1]); err != nil {
+		t.Fatal(err)
+	}
+	api, err := AgentIgnorePatterns(root, "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(api, "/CLAUDE.md") || !containsString(api, "/tools/") {
+		t.Fatalf("api ignore patterns = %#v, want file and folder templates", api)
+	}
+	web, err := AgentIgnorePatterns(root, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(web, "/CLAUDE.md") || containsString(web, "/tools/") {
+		t.Fatalf("web ignore patterns = %#v, want all-repo only", web)
+	}
+}
+
+func TestWorktreeRepoTemplatesAreAddedToGitInfoExclude(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	testGit(t, "", "init", "-b", "main", repo)
+	testGit(t, repo, "config", "user.email", "test@example.com")
+	testGit(t, repo, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("readme"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	testGit(t, repo, "add", ".")
+	testGit(t, repo, "commit", "-m", "initial")
+
+	src := filepath.Join(root, "CLAUDE.md")
+	if err := os.WriteFile(src, []byte("template"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	added, err := ImportFiles(root, []string{src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := added[0]
+	item.TargetMode = TargetAllRepos
+	if err := Update(root, item); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(root, "demo", []Repo{{Name: "repo", WorktreePath: repo}}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := aggit.StatusShort(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "" {
+		t.Fatalf("template file should be git-ignored, status=%q", status)
+	}
+	excludePath, err := aggit.Output(repo, "rev-parse", "--git-path", "info/exclude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(repo, excludePath)
+	}
+	b, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString([]string{string(b)}, "/CLAUDE.md") {
+		t.Fatalf("exclude missing template path: %s", string(b))
+	}
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle || (len(values) == 1 && strings.Contains(value, needle)) {
+			return true
+		}
+	}
+	return false
+}
+
+func testGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if _, err := aggit.Run(dir, args...); err != nil {
+		t.Fatalf("git %v: %v", args, err)
 	}
 }
