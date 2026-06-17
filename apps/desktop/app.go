@@ -30,6 +30,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/repo"
 	"github.com/agentsafe/agentsafe/internal/workspacebundle"
 	"github.com/agentsafe/agentsafe/internal/wttemplate"
+	"github.com/agentsafe/agentsafe/packages/core"
 )
 
 // App exposes agentsafe's core packages to the Wails frontend.
@@ -187,6 +188,11 @@ func (a *App) RemoveWorkspace(path string) error {
 
 // CurrentRoot reports the currently opened workspace root (empty if none).
 func (a *App) CurrentRoot() string { return a.root }
+
+// RunCore exposes the shared Go core service to the Wails frontend.
+func (a *App) RunCore(text string) (*core.RunResult, error) {
+	return core.NewService().Run(context.Background(), core.RunInput{Text: text})
+}
 
 // GetConfig returns the config for the open workspace.
 func (a *App) GetConfig() (config.Config, error) {

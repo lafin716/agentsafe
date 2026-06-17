@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/repo"
 	"github.com/agentsafe/agentsafe/internal/wttemplate"
+	"github.com/agentsafe/agentsafe/packages/core"
 )
 
 type simpleResult struct {
@@ -54,8 +56,30 @@ func NewRootCommand() *cobra.Command {
 		output.Set(f)
 		return nil
 	}
-	rootCmd.AddCommand(initCmd(), repoCmd(), pullCmd(), featureCmd(), worktreeTemplateCmd(), statusCmd(), agentCmd(), commitCmd(), pushCmd(), mrCmd())
+	rootCmd.AddCommand(initCmd(), repoCmd(), pullCmd(), featureCmd(), worktreeTemplateCmd(), statusCmd(), agentCmd(), commitCmd(), pushCmd(), mrCmd(), coreCmd())
 	return rootCmd
+}
+
+func coreCmd() *cobra.Command {
+	c := &cobra.Command{Use: "core", Short: "Run shared core operations"}
+	run := &cobra.Command{
+		Use:   "run TEXT",
+		Short: "Run the shared Go core service",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := core.NewService().Run(context.Background(), core.RunInput{Text: args[0]})
+			if err != nil {
+				return err
+			}
+			if output.IsStructured() {
+				return output.Emit(result)
+			}
+			fmt.Println(result.Output)
+			return nil
+		},
+	}
+	c.AddCommand(run)
+	return c
 }
 
 func cwdConfig() (string, config.Config, error) {
