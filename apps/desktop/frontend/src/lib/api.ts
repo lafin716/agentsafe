@@ -164,6 +164,10 @@ type AppBindings = {
     path: string,
     terminalProgram: string
   ): Promise<TerminalSession>;
+  TerminalOpenFeatureAgent(
+    name: string,
+    terminalProgram: string
+  ): Promise<TerminalSession>;
   AgentRun(name: string, command: string): Promise<TerminalSession>;
   AgentRunWithProgram(
     name: string,

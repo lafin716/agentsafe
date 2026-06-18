@@ -32,11 +32,20 @@ export function TerminalPanel({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const isWindows = navigator.userAgent.includes("Windows");
     const term = new XTerm({
       cursorBlink: true,
-      convertEol: true,
-      fontFamily: "Menlo, Monaco, Consolas, monospace",
-      fontSize: 12,
+      convertEol: false,
+      scrollback: 5000,
+      fontFamily:
+        '"Cascadia Mono", "Cascadia Code", Consolas, "Lucida Console", Menlo, Monaco, monospace',
+      fontSize: 14,
+      letterSpacing: 0.2,
+      lineHeight: 1.2,
+      allowTransparency: false,
+      customGlyphs: true,
+      drawBoldTextInBrightColors: true,
+      ...(isWindows ? { windowsPty: { backend: "conpty" as const } } : {}),
       theme: { background: "#0f172a", foreground: "#e2e8f0" },
     });
     const fitAddon = new FitAddon();
@@ -47,15 +56,21 @@ export function TerminalPanel({
 
     const fit = () => {
       try {
+        if (!container.isConnected || container.clientWidth <= 0 || container.clientHeight <= 0) {
+          return;
+        }
         fitAddon.fit();
         void api.TerminalResize(id, term.cols, term.rows);
       } catch {
         /* element may be hidden during layout */
       }
     };
-    const writeDisposable = term.onData((data) => {
-      void api.TerminalWrite(id, data);
-    });
+    const queueFit = () => {
+      window.requestAnimationFrame(() => {
+        fit();
+        window.setTimeout(fit, 50);
+      });
+    };
     const rt = runtime();
     let disposed = false;
     let snapshotLoaded = false;
@@ -63,6 +78,10 @@ export function TerminalPanel({
     let closedWritten = false;
     const pending: Array<{ data: string; seq?: number }> = [];
     let pendingClose: { error?: string } | null = null;
+    const writeDisposable = term.onData((data) => {
+      if (closedWritten) return;
+      void api.TerminalWrite(id, data);
+    });
     const writeClosed = (error?: string) => {
       if (closedWritten) return;
       closedWritten = true;
@@ -116,7 +135,11 @@ export function TerminalPanel({
     void restoreSnapshot();
     const resizeObserver = new ResizeObserver(fit);
     resizeObserver.observe(container);
-    window.setTimeout(fit, 0);
+    queueFit();
+    window.setTimeout(fit, 250);
+    void document.fonts?.ready.then(() => {
+      if (!disposed) queueFit();
+    });
 
     return () => {
       disposed = true;
@@ -134,7 +157,7 @@ export function TerminalPanel({
       <div className="border-b px-3 py-2 font-mono text-xs text-muted-foreground">
         {path}
       </div>
-      <div ref={containerRef} className="min-h-0 flex-1 bg-slate-950 p-2" />
+      <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden bg-slate-950 p-2" />
     </div>
   );
 }

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
-import { ChevronRight, Code2, FolderOpen, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
+import { Fragment, useCallback, useEffect, useState } from "react";
+import { ChevronDown, ChevronRight, Code2, FolderOpen, Plus, RefreshCw, Terminal, Trash2, X } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
 import { useConfirm } from "@/components/ui/confirm";
-import type { FeatureCreateCheck, FeatureDeleteResult, FeatureEntry } from "@/lib/types";
+import type { FeatureCreateCheck, FeatureDeleteResult, FeatureEntry, TerminalSession } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -24,9 +24,18 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/i18n/I18nProvider";
+import { TerminalPanel } from "@/components/TerminalPanel";
 
 interface Props {
   onOpen: (name: string) => void;
+}
+
+function defaultTerminalProgram(): string {
+  try {
+    return localStorage.getItem("agentsafe.terminalProgram") || "powershell";
+  } catch {
+    return "powershell";
+  }
 }
 
 export function FeaturesPage({ onOpen }: Props) {
@@ -38,6 +47,8 @@ export function FeaturesPage({ onOpen }: Props) {
   const [name, setName] = useState("");
   const [createCheck, setCreateCheck] = useState<FeatureCreateCheck | null>(null);
   const [existingBranch, setExistingBranch] = useState<"reuse" | "recreate">("reuse");
+  const [inlineTerminals, setInlineTerminals] = useState<Record<string, TerminalSession>>({});
+  const [expandedTerminals, setExpandedTerminals] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -52,13 +63,56 @@ export function FeaturesPage({ onOpen }: Props) {
     load();
   }, [load]);
 
-  async function openTerminal(name: string) {
+  async function toggleTerminal(name: string) {
+    const existing = inlineTerminals[name];
+    if (existing) {
+      setExpandedTerminals((prev) => {
+        const next = new Set(prev);
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
+        return next;
+      });
+      return;
+    }
     try {
-      await api.OpenInTerminal(name);
-      notify(t("toast.openedTerminal", { name }), "success");
+      setBusy(true);
+      const session = await api.TerminalOpenFeatureAgent(name, defaultTerminalProgram());
+      setInlineTerminals((prev) => ({
+        ...prev,
+        [name]: { ...session, title: `Terminal · ${name}` },
+      }));
+      setExpandedTerminals((prev) => {
+        const next = new Set(prev);
+        next.add(name);
+        return next;
+      });
+      notify(t("toast.openedEmbeddedTerminal", { path: session.path }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
     }
+  }
+
+  async function closeInlineTerminal(name: string) {
+    const session = inlineTerminals[name];
+    if (session) {
+      try {
+        await api.TerminalClose(session.id);
+      } catch {
+        /* terminal may already be closed */
+      }
+    }
+    setInlineTerminals((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+    setExpandedTerminals((prev) => {
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
   }
 
   async function openVSCode(name: string) {
@@ -224,74 +278,113 @@ export function FeaturesPage({ onOpen }: Props) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {features.map((f) => (
-                  <TableRow
-                    key={f.name}
-                    className="cursor-pointer"
-                    onClick={() => onOpen(f.name)}
-                  >
-                    <TableCell className="font-medium">{f.name}</TableCell>
-                    <TableCell>{f.branch}</TableCell>
-                    <TableCell>{f.repoCount}</TableCell>
-                    <TableCell>
-                      {f.agentReady ? (
-                        <Badge variant="success">{t("features.agentReady")}</Badge>
-                      ) : (
-                        <Badge variant="outline">{t("features.agentNone")}</Badge>
+                {features.map((f) => {
+                  const inlineTerminal = inlineTerminals[f.name];
+                  const terminalExpanded = expandedTerminals.has(f.name);
+                  return (
+                    <Fragment key={f.name}>
+                      <TableRow
+                        className="cursor-pointer"
+                        onClick={() => onOpen(f.name)}
+                      >
+                        <TableCell className="font-medium">{f.name}</TableCell>
+                        <TableCell>{f.branch}</TableCell>
+                        <TableCell>{f.repoCount}</TableCell>
+                        <TableCell>
+                          {f.agentReady ? (
+                            <Badge variant="success">{t("features.agentReady")}</Badge>
+                          ) : (
+                            <Badge variant="outline">{t("features.agentNone")}</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title={t("features.openFolder")}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openFolder(f.name);
+                              }}
+                            >
+                              <FolderOpen className="size-4" />
+                            </Button>
+                            <Button
+                              variant={terminalExpanded ? "secondary" : "ghost"}
+                              size="icon"
+                              title={t("features.openTerminal")}
+                              disabled={busy && !inlineTerminal}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void toggleTerminal(f.name);
+                              }}
+                            >
+                              <Terminal className="size-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title={t("features.openVSCode")}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openVSCode(f.name);
+                              }}
+                            >
+                              <Code2 className="size-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title={t("feature.delete")}
+                              disabled={busy}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteFeature(f.name);
+                              }}
+                            >
+                              <Trash2 className="size-4 text-destructive" />
+                            </Button>
+                            {terminalExpanded ? (
+                              <ChevronDown className="size-4 text-muted-foreground" />
+                            ) : (
+                              <ChevronRight className="size-4 text-muted-foreground" />
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                      {inlineTerminal && terminalExpanded && (
+                        <TableRow>
+                          <TableCell colSpan={5} className="bg-muted/20 p-0" onClick={(e) => e.stopPropagation()}>
+                            <div className="border-t">
+                              <div className="flex items-center justify-between gap-3 border-b bg-background px-3 py-2">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium">{inlineTerminal.title}</div>
+                                  <div className="truncate font-mono text-xs text-muted-foreground" title={inlineTerminal.path}>
+                                    {inlineTerminal.path}
+                                  </div>
+                                </div>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => void closeInlineTerminal(f.name)}
+                                  title={t("common.close")}
+                                >
+                                  <X className="size-4" /> {t("common.close")}
+                                </Button>
+                              </div>
+                              <TerminalPanel
+                                id={inlineTerminal.id}
+                                path={inlineTerminal.path}
+                                className="flex h-80 flex-col"
+                              />
+                            </div>
+                          </TableCell>
+                        </TableRow>
                       )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t("features.openFolder")}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openFolder(f.name);
-                          }}
-                        >
-                          <FolderOpen className="size-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t("features.openTerminal")}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openTerminal(f.name);
-                          }}
-                        >
-                          <Terminal className="size-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t("features.openVSCode")}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openVSCode(f.name);
-                          }}
-                        >
-                          <Code2 className="size-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t("feature.delete")}
-                          disabled={busy}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteFeature(f.name);
-                          }}
-                        >
-                          <Trash2 className="size-4 text-destructive" />
-                        </Button>
-                        <ChevronRight className="size-4 text-muted-foreground" />
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                    </Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

@@ -18,7 +18,6 @@ import {
   Save,
   Terminal as TerminalIcon,
   Trash2,
-  Wand2,
   X,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
@@ -303,19 +302,6 @@ export function FileExplorerPage({
     }
   }
 
-  async function applyRootTemplates() {
-    try {
-      setBusy(true);
-      await api.ApplyWorkspaceRootTemplates();
-      notify(t("toast.templatesApplied"), "success");
-      await loadRoot();
-    } catch (e) {
-      notify(errMessage(e), "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function closeTerminal(id: string) {
     try {
       await api.TerminalClose(id);
@@ -524,11 +510,6 @@ export function FileExplorerPage({
                     <Button variant="outline" onClick={openEmbeddedTerminal} disabled={busy}>
                       <TerminalIcon className="size-4" /> {t("explorer.openTerminal")}
                     </Button>
-                    {root && selected.path === root.path && (
-                      <Button variant="outline" onClick={applyRootTemplates} disabled={busy}>
-                        <Wand2 className="size-4" /> {t("explorer.applyRootTemplates")}
-                      </Button>
-                    )}
                     <Button variant="outline" onClick={copyPath} disabled={busy}>
                       <Copy className="size-4" /> {t("feature.copyPath")}
                     </Button>

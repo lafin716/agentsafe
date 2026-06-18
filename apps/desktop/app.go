@@ -55,8 +55,9 @@ type gitCredential struct {
 }
 
 type terminalProcess struct {
-	pty  ptySession
-	path string
+	pty     ptySession
+	path    string
+	writeMu sync.Mutex
 	// feature is set when this session runs a managed agent for a feature, so its
 	// exit can be reported via the "agent:exit" event. Empty for plain shells.
 	feature    string
@@ -67,6 +68,7 @@ type terminalProcess struct {
 }
 
 const terminalOutputBufferLimit = 1024 * 1024
+const terminalWriteTimeout = 2 * time.Second
 
 func NewApp() *App {
 	return &App{credentials: map[string]gitCredential{}, terminals: map[string]*terminalProcess{}}
@@ -624,6 +626,31 @@ func (a *App) TerminalOpenWithProgram(path, terminalProgram string) (TerminalSes
 	return session, err
 }
 
+// TerminalOpenFeatureAgent opens an embedded terminal rooted at a feature's
+// prepared agent workspace. It is used by the feature/worktree list's inline
+// terminal so it follows the same terminal-program preference as other embedded
+// terminals without falling back to a separate OS terminal window.
+func (a *App) TerminalOpenFeatureAgent(name, terminalProgram string) (TerminalSession, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return TerminalSession{}, err
+	}
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return TerminalSession{}, err
+	}
+	target := filepath.Join(root, "agent", fm.FolderKey())
+	info, err := os.Stat(target)
+	if err != nil {
+		return TerminalSession{}, fmt.Errorf("agent workspace is not prepared for %q: %w", name, err)
+	}
+	if !info.IsDir() {
+		return TerminalSession{}, fmt.Errorf("agent workspace is not a directory: %s", target)
+	}
+	shell, args := shellForTerminalProgram(terminalProgram)
+	return a.startPTY(target, "", shell, args)
+}
+
 // startPTY launches argv in a pty rooted at target, registers it as a tracked
 // terminal, and streams its output. When feature is non-empty the session is
 // tagged as a managed agent run so its exit is also reported via "agent:exit".
@@ -651,10 +678,28 @@ func (a *App) TerminalWrite(id, data string) error {
 		return err
 	}
 	if tp.closed {
-		return fmt.Errorf("terminal %q is closed", id)
+		return nil
 	}
-	_, err = io.WriteString(tp.pty, data)
-	return err
+	errCh := make(chan error, 1)
+	go func() {
+		tp.writeMu.Lock()
+		defer tp.writeMu.Unlock()
+		_, err := io.WriteString(tp.pty, data)
+		errCh <- err
+	}()
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(terminalWriteTimeout):
+		// Some interactive Windows TUI programs can leave ConPTY writes blocked
+		// after Ctrl+C. Do not let a Wails binding goroutine freeze the UI.
+		a.markTerminalClosed(id, "terminal input timed out")
+		runtime.EventsEmit(a.ctx, "terminal:close", map[string]any{
+			"id": id, "status": "error", "error": "terminal input timed out",
+		})
+		go func() { _ = tp.pty.Close() }()
+		return nil
+	}
 }
 
 func (a *App) TerminalResize(id string, cols, rows int) error {
@@ -787,15 +832,15 @@ func shellForTerminalProgram(program string) (string, []string) {
 	if goruntime.GOOS == "windows" {
 		switch program {
 		case "powershell":
-			return "powershell", []string{"-NoLogo"}
+			return "powershell", []string{"-NoLogo", "-NoProfile"}
 		case "pwsh":
-			return "pwsh", []string{"-NoLogo"}
+			return "pwsh", []string{"-NoLogo", "-NoProfile"}
 		case "cmd":
 			return "cmd.exe", nil
 		case "git-bash":
 			return windowsGitBashShell()
 		case "wt", "windows-terminal":
-			return "powershell", []string{"-NoLogo"}
+			return "powershell", []string{"-NoLogo", "-NoProfile"}
 		default:
 			if shell := os.Getenv("COMSPEC"); shell != "" {
 				return shell, nil
@@ -835,16 +880,16 @@ func commandShellForProgram(command, program string) (string, []string) {
 	if goruntime.GOOS == "windows" {
 		switch program {
 		case "powershell":
-			return "powershell", []string{"-NoLogo", "-Command", command}
+			return "powershell", []string{"-NoLogo", "-NoProfile", "-Command", command}
 		case "pwsh":
-			return "pwsh", []string{"-NoLogo", "-Command", command}
+			return "pwsh", []string{"-NoLogo", "-NoProfile", "-Command", command}
 		case "git-bash":
-			shell, args := windowsGitBashShell()
-			return shell, append(args, "-lc", command)
+			shell, _ := windowsGitBashShell()
+			return shell, []string{"--login", "-lc", command}
 		case "cmd":
 			return "cmd.exe", []string{"/c", command}
 		case "wt", "windows-terminal":
-			return "powershell", []string{"-NoLogo", "-Command", command}
+			return "powershell", []string{"-NoLogo", "-NoProfile", "-Command", command}
 		default:
 			if shell := os.Getenv("COMSPEC"); shell != "" {
 				return shell, []string{"/c", command}
