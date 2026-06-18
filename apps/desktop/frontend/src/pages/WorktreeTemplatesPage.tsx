@@ -527,7 +527,6 @@ export function WorktreeTemplatesPage({ config }: Props) {
               <FileText className="size-4 shrink-0 text-muted-foreground" />
             )}
             <span className="truncate font-medium">{displayName}</span>
-            {node.isDir && <CountBadges counts={{ files: node.files ?? 0, folders: node.folders ?? 0 }} />}
           </button>
           {isRoot && (
             <div className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
@@ -552,7 +551,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
               </Button>
             </div>
           )}
-          {!node.isDir && !isRoot && (
+          {!node.isDir && (
             <Button variant="ghost" size="sm" onClick={() => openEditor(tree.template, node)} disabled={busy}>
               <Edit3 className="size-4" /> {t("templates.openEditor")}
             </Button>
@@ -674,15 +673,19 @@ export function WorktreeTemplatesPage({ config }: Props) {
                 <p className="text-sm text-muted-foreground">{t("templates.emptyInFolder")}</p>
               ) : (
                 <div className="space-y-2 rounded-md border p-2">
-                  {visibleTrees.map((tree) => (
-                    <TemplateFileNode
-                      key={tree.template.id}
-                      tree={tree}
-                      node={tree.root}
-                      depth={0}
-                      isRoot
-                    />
-                  ))}
+                  {visibleTrees.map((tree) => {
+                    const effectiveRoot =
+                      tree.root.children?.length === 1 ? tree.root.children[0] : tree.root;
+                    return (
+                      <TemplateFileNode
+                        key={tree.template.id}
+                        tree={tree}
+                        node={effectiveRoot}
+                        depth={0}
+                        isRoot
+                      />
+                    );
+                  })}
                 </div>
               )}
             </CardContent>

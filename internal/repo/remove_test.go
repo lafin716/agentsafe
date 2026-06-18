@@ -33,8 +33,16 @@ func TestRemoveDeletesClonedFilesAndWorktree(t *testing.T) {
 	if err := feature.CreateWithOptions(root, cfg, "feat", feature.CreateOptions{Base: "main"}); err != nil {
 		t.Fatal(err)
 	}
+	created, err := feature.Load(root, "feat")
+	if err != nil {
+		t.Fatalf("load created feature: %v", err)
+	}
+	if len(created.Repositories) != 1 {
+		t.Fatalf("created feature repositories = %+v", created.Repositories)
+	}
 
-	worktree := config.WorktreePath(root, "feat", "backend")
+	worktree := filepath.Join(root, filepath.FromSlash(created.Repositories[0].WorktreePath))
+	featureDir := filepath.Join(root, "feature", created.FolderKey())
 	if _, err := os.Stat(worktree); err != nil {
 		t.Fatalf("expected worktree to exist: %v", err)
 	}
@@ -52,7 +60,7 @@ func TestRemoveDeletesClonedFilesAndWorktree(t *testing.T) {
 	for _, p := range []string{
 		config.RepoPath(root, "backend"),
 		worktree,
-		filepath.Join(root, "feature", "feat"),
+		featureDir,
 	} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Fatalf("path %s should be removed, stat err = %v", p, err)

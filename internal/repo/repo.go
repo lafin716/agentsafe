@@ -71,10 +71,15 @@ func Remove(root string, cfg config.Config, name string, deleteFiles bool) (conf
 				if idx < 0 {
 					continue
 				}
+				rm := m.Repositories[idx]
+				folderKey := m.FolderKey()
 				// Remove the registered worktree via git first (it handles its
 				// own read-only files and deregisters the worktree), then force
 				// remove any leftovers. This mirrors feature.DeleteWithResult.
-				worktree := config.WorktreePath(root, fe.Name, name)
+				worktree := config.WorktreePath(root, folderKey, name)
+				if rm.WorktreePath != "" {
+					worktree = filepath.Join(root, filepath.FromSlash(rm.WorktreePath))
+				}
 				if _, statErr := os.Stat(worktree); statErr == nil {
 					if err := aggit.RemoveWorktree(repoPath, worktree, true); err != nil {
 						_ = aggit.WorktreePrune(repoPath)
@@ -84,8 +89,9 @@ func Remove(root string, cfg config.Config, name string, deleteFiles bool) (conf
 					}
 				}
 				for _, p := range []string{
-					config.AgentPath(root, fe.Name, name),
+					config.AgentPath(root, folderKey, name),
 					config.HistoryRepoDir(root, fe.Name, name),
+					config.HistoryRepoDir(root, folderKey, name),
 				} {
 					if err := fsutil.ForceRemoveAll(p); err != nil {
 						res.Warnings = append(res.Warnings, fmt.Sprintf("%s: %v", p, err))
@@ -96,7 +102,9 @@ func Remove(root string, cfg config.Config, name string, deleteFiles bool) (conf
 					res.Warnings = append(res.Warnings, fmt.Sprintf("feature %s metadata: %v", fe.Name, err))
 				}
 				// Drop now-empty parent directories so no stray folder is left.
+				removeIfEmpty(filepath.Join(root, "feature", folderKey))
 				removeIfEmpty(filepath.Join(root, "feature", fe.Name))
+				removeIfEmpty(filepath.Join(root, "agent", folderKey))
 				removeIfEmpty(filepath.Join(root, "agent", fe.Name))
 			}
 		}

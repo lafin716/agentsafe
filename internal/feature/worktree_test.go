@@ -394,6 +394,7 @@ func TestCreateUsesCurrentRepositoryBranchWhenBaseAndDefaultAreEmpty(t *testing.
 
 func testWorkspace(t *testing.T, repoName string) (string, config.Config) {
 	t.Helper()
+	setTestGitTimeout(t)
 	root := t.TempDir()
 	remote := filepath.Join(t.TempDir(), repoName+".git")
 	testGit(t, "", "init", "--bare", remote)
@@ -431,5 +432,12 @@ func testGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	if _, err := aggit.Run(dir, args...); err != nil {
 		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+}
+
+func setTestGitTimeout(t *testing.T) {
+	t.Helper()
+	if os.Getenv("AGENTSAFE_GIT_TIMEOUT_SECONDS") == "" {
+		t.Setenv("AGENTSAFE_GIT_TIMEOUT_SECONDS", "10")
 	}
 }

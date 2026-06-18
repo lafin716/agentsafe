@@ -1,5 +1,13 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Code2, FolderOpen, Plus, RefreshCw, Terminal, Trash2, X } from "lucide-react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useState,
+  type Dispatch,
+  type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
+} from "react";
+import { ChevronUp, Code2, FolderOpen, Plus, RefreshCw, Terminal, Trash2, X } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
 import { useConfirm } from "@/components/ui/confirm";
 import type { FeatureCreateCheck, FeatureDeleteResult, FeatureEntry, TerminalSession } from "@/lib/types";
@@ -28,6 +36,17 @@ import { TerminalPanel } from "@/components/TerminalPanel";
 
 interface Props {
   onOpen: (name: string) => void;
+  // Terminal sessions are shared (per feature) with the feature detail page so
+  // opening/closing in either view stays in sync and survives navigation.
+  terminalTabs: Record<string, TerminalSession[]>;
+  setTerminalTabs: Dispatch<SetStateAction<Record<string, TerminalSession[]>>>;
+  // Inline-panel UI state, lifted to App so the panel reappears as left.
+  expanded: Set<string>;
+  setExpanded: Dispatch<SetStateAction<Set<string>>>;
+  activeTerminal: Record<string, string>;
+  setActiveTerminal: Dispatch<SetStateAction<Record<string, string>>>;
+  heights: Record<string, number>;
+  setHeights: Dispatch<SetStateAction<Record<string, number>>>;
 }
 
 function defaultTerminalProgram(): string {
@@ -38,7 +57,21 @@ function defaultTerminalProgram(): string {
   }
 }
 
-export function FeaturesPage({ onOpen }: Props) {
+const DEFAULT_TERMINAL_HEIGHT = 320;
+const MIN_TERMINAL_HEIGHT = 160;
+const MAX_TERMINAL_HEIGHT = 900;
+
+export function FeaturesPage({
+  onOpen,
+  terminalTabs,
+  setTerminalTabs,
+  expanded,
+  setExpanded,
+  activeTerminal,
+  setActiveTerminal,
+  heights,
+  setHeights,
+}: Props) {
   const { notify } = useToast();
   const { t } = useI18n();
   const confirm = useConfirm();
@@ -47,8 +80,6 @@ export function FeaturesPage({ onOpen }: Props) {
   const [name, setName] = useState("");
   const [createCheck, setCreateCheck] = useState<FeatureCreateCheck | null>(null);
   const [existingBranch, setExistingBranch] = useState<"reuse" | "recreate">("reuse");
-  const [inlineTerminals, setInlineTerminals] = useState<Record<string, TerminalSession>>({});
-  const [expandedTerminals, setExpandedTerminals] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -63,25 +94,25 @@ export function FeaturesPage({ onOpen }: Props) {
     load();
   }, [load]);
 
-  async function toggleTerminal(name: string) {
-    const existing = inlineTerminals[name];
-    if (existing) {
-      setExpandedTerminals((prev) => {
-        const next = new Set(prev);
-        if (next.has(name)) next.delete(name);
-        else next.add(name);
-        return next;
-      });
-      return;
-    }
+  // openNewTerminal starts an additional pty session for the feature, appends it
+  // as a tab in the shared per-feature list, makes it active, and expands the panel.
+  async function openNewTerminal(name: string) {
     try {
       setBusy(true);
       const session = await api.TerminalOpenFeatureAgent(name, defaultTerminalProgram());
-      setInlineTerminals((prev) => ({
-        ...prev,
-        [name]: { ...session, title: `Terminal · ${name}` },
-      }));
-      setExpandedTerminals((prev) => {
+      // External terminals open an OS window with no embeddable pty; don't add a tab.
+      if (session.external) {
+        notify(t("toast.openedPath", { path: session.path }), "success");
+        return;
+      }
+      const tab: TerminalSession = { ...session, title: `Terminal · ${name}` };
+      setTerminalTabs((prev) => {
+        const current = prev[name] ?? [];
+        if (current.some((t) => t.id === tab.id)) return prev;
+        return { ...prev, [name]: [...current, tab] };
+      });
+      setActiveTerminal((prev) => ({ ...prev, [name]: tab.id }));
+      setExpanded((prev) => {
         const next = new Set(prev);
         next.add(name);
         return next;
@@ -94,25 +125,71 @@ export function FeaturesPage({ onOpen }: Props) {
     }
   }
 
-  async function closeInlineTerminal(name: string) {
-    const session = inlineTerminals[name];
-    if (session) {
-      try {
-        await api.TerminalClose(session.id);
-      } catch {
-        /* terminal may already be closed */
-      }
+  // togglePanel shows/hides the inline panel (keeping pty sessions alive). When no
+  // terminal exists yet it opens the first one.
+  function togglePanel(name: string) {
+    if ((terminalTabs[name] ?? []).length === 0) {
+      void openNewTerminal(name);
+      return;
     }
-    setInlineTerminals((prev) => {
-      const next = { ...prev };
-      delete next[name];
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
       return next;
     });
-    setExpandedTerminals((prev) => {
+  }
+
+  // collapsePanel hides the panel but keeps the pty sessions alive, so re-opening
+  // restores the same session output (via TerminalPanel's snapshot replay).
+  function collapsePanel(name: string) {
+    setExpanded((prev) => {
       const next = new Set(prev);
       next.delete(name);
       return next;
     });
+  }
+
+  async function closeTerminal(name: string, id: string) {
+    try {
+      await api.TerminalClose(id);
+    } catch {
+      /* terminal may already be closed */
+    }
+    const remaining = (terminalTabs[name] ?? []).filter((tab) => tab.id !== id);
+    setTerminalTabs((prev) => ({
+      ...prev,
+      [name]: (prev[name] ?? []).filter((tab) => tab.id !== id),
+    }));
+    setActiveTerminal((prev) => {
+      if (prev[name] !== id) return prev;
+      const next = { ...prev };
+      if (remaining.length > 0) next[name] = remaining[remaining.length - 1].id;
+      else delete next[name];
+      return next;
+    });
+    if (remaining.length === 0) collapsePanel(name);
+  }
+
+  // startResize drags the terminal panel taller/shorter. TerminalPanel's internal
+  // ResizeObserver picks up the height change and refits xterm automatically.
+  function startResize(name: string, e: ReactPointerEvent) {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = heights[name] ?? DEFAULT_TERMINAL_HEIGHT;
+    const onMove = (ev: PointerEvent) => {
+      const next = Math.min(
+        MAX_TERMINAL_HEIGHT,
+        Math.max(MIN_TERMINAL_HEIGHT, startHeight + (ev.clientY - startY))
+      );
+      setHeights((prev) => ({ ...prev, [name]: next }));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 
   async function openVSCode(name: string) {
@@ -279,8 +356,11 @@ export function FeaturesPage({ onOpen }: Props) {
               </TableHeader>
               <TableBody>
                 {features.map((f) => {
-                  const inlineTerminal = inlineTerminals[f.name];
-                  const terminalExpanded = expandedTerminals.has(f.name);
+                  const terminals = terminalTabs[f.name] ?? [];
+                  const terminalExpanded = expanded.has(f.name);
+                  const activeTerminalSession =
+                    terminals.find((tab) => tab.id === activeTerminal[f.name]) ??
+                    terminals[terminals.length - 1];
                   return (
                     <Fragment key={f.name}>
                       <TableRow
@@ -310,18 +390,25 @@ export function FeaturesPage({ onOpen }: Props) {
                             >
                               <FolderOpen className="size-4" />
                             </Button>
-                            <Button
-                              variant={terminalExpanded ? "secondary" : "ghost"}
-                              size="icon"
-                              title={t("features.openTerminal")}
-                              disabled={busy && !inlineTerminal}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void toggleTerminal(f.name);
-                              }}
-                            >
-                              <Terminal className="size-4" />
-                            </Button>
+                            <div className="relative">
+                              <Button
+                                variant={terminalExpanded ? "secondary" : "ghost"}
+                                size="icon"
+                                title={t("features.openTerminal")}
+                                disabled={busy && terminals.length === 0}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  togglePanel(f.name);
+                                }}
+                              >
+                                <Terminal className="size-4" />
+                              </Button>
+                              {terminals.length > 0 && (
+                                <span className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium leading-none text-primary-foreground">
+                                  {terminals.length}
+                                </span>
+                              )}
+                            </div>
                             <Button
                               variant="ghost"
                               size="icon"
@@ -345,39 +432,87 @@ export function FeaturesPage({ onOpen }: Props) {
                             >
                               <Trash2 className="size-4 text-destructive" />
                             </Button>
-                            {terminalExpanded ? (
-                              <ChevronDown className="size-4 text-muted-foreground" />
-                            ) : (
-                              <ChevronRight className="size-4 text-muted-foreground" />
-                            )}
                           </div>
                         </TableCell>
                       </TableRow>
-                      {inlineTerminal && terminalExpanded && (
+                      {terminalExpanded && terminals.length > 0 && (
                         <TableRow>
                           <TableCell colSpan={5} className="bg-muted/20 p-0" onClick={(e) => e.stopPropagation()}>
                             <div className="border-t">
-                              <div className="flex items-center justify-between gap-3 border-b bg-background px-3 py-2">
-                                <div className="min-w-0">
-                                  <div className="truncate text-sm font-medium">{inlineTerminal.title}</div>
-                                  <div className="truncate font-mono text-xs text-muted-foreground" title={inlineTerminal.path}>
-                                    {inlineTerminal.path}
+                              <div className="flex items-center gap-1 overflow-x-auto border-b bg-background px-2 py-1.5">
+                                {terminals.map((term) => (
+                                  <div
+                                    key={term.id}
+                                    className={
+                                      "flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-sm transition-colors " +
+                                      (activeTerminalSession?.id === term.id
+                                        ? "bg-secondary font-medium text-secondary-foreground"
+                                        : "text-muted-foreground hover:text-foreground")
+                                    }
+                                    title={term.path}
+                                  >
+                                    <button
+                                      type="button"
+                                      className="flex min-w-0 items-center gap-1"
+                                      onClick={() =>
+                                        setActiveTerminal((prev) => ({ ...prev, [f.name]: term.id }))
+                                      }
+                                    >
+                                      <Terminal className="size-3.5 shrink-0" />
+                                      <span className="max-w-32 truncate">{term.title}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="rounded p-0.5 opacity-70 hover:bg-accent hover:opacity-100"
+                                      onClick={() => void closeTerminal(f.name, term.id)}
+                                      title={t("common.close")}
+                                    >
+                                      <X className="size-3" />
+                                    </button>
                                   </div>
-                                </div>
+                                ))}
                                 <Button
                                   variant="ghost"
-                                  size="sm"
-                                  onClick={() => void closeInlineTerminal(f.name)}
-                                  title={t("common.close")}
+                                  size="icon"
+                                  className="size-7 shrink-0"
+                                  title={t("features.openTerminal")}
+                                  disabled={busy}
+                                  onClick={() => void openNewTerminal(f.name)}
                                 >
-                                  <X className="size-4" /> {t("common.close")}
+                                  <Plus className="size-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="ml-auto shrink-0"
+                                  onClick={() => collapsePanel(f.name)}
+                                  title={t("features.collapseTerminal")}
+                                >
+                                  <ChevronUp className="size-4" />
                                 </Button>
                               </div>
-                              <TerminalPanel
-                                id={inlineTerminal.id}
-                                path={inlineTerminal.path}
-                                className="flex h-80 flex-col"
-                              />
+                              <div
+                                className="relative w-full overflow-hidden"
+                                style={{ height: heights[f.name] ?? DEFAULT_TERMINAL_HEIGHT }}
+                              >
+                                {activeTerminalSession && (
+                                  <div className="absolute inset-0 flex flex-col">
+                                    <TerminalPanel
+                                      key={activeTerminalSession.id}
+                                      id={activeTerminalSession.id}
+                                      path={activeTerminalSession.path}
+                                      className="flex h-full flex-col"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                              <div
+                                className="flex h-2 cursor-row-resize items-center justify-center border-t bg-muted/40 hover:bg-muted"
+                                onPointerDown={(e) => startResize(f.name, e)}
+                                title={t("features.resizeTerminal")}
+                              >
+                                <div className="h-0.5 w-10 rounded bg-muted-foreground/40" />
+                              </div>
                             </div>
                           </TableCell>
                         </TableRow>

@@ -80,6 +80,7 @@ func TestPullOneRejectsUnknownRepository(t *testing.T) {
 
 func setupRemoteRepository(t *testing.T, name string) (root, seed string, cfg config.Config) {
 	t.Helper()
+	setTestGitTimeout(t)
 	root = t.TempDir()
 	remote := filepath.Join(t.TempDir(), name+".git")
 	runGit(t, "", "init", "--bare", remote)
@@ -108,5 +109,12 @@ func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	if _, err := aggit.Run(dir, args...); err != nil {
 		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+}
+
+func setTestGitTimeout(t *testing.T) {
+	t.Helper()
+	if os.Getenv("AGENTSAFE_GIT_TIMEOUT_SECONDS") == "" {
+		t.Setenv("AGENTSAFE_GIT_TIMEOUT_SECONDS", "10")
 	}
 }

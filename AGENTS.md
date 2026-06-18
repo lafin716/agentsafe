@@ -21,6 +21,20 @@ reviewed changes back. Shipped as both a CLI (`agr`) and a Wails desktop app.
 
 Git timeout (default 120s, agentsafe runs Git non-interactively): set `AGENTSAFE_GIT_TIMEOUT_SECONDS`.
 
+### Test guidance for agents
+
+- Prefer targeted tests while iterating. `internal/feature` and `internal/repo`
+  contain real Git/worktree integration tests that create bare remotes, clones,
+  commits, pushes, and worktrees; on Windows these can take several minutes.
+- For full-suite verification in automation, use a shorter Git timeout unless a
+  longer timeout is intentionally being tested:
+  `AGENTSAFE_GIT_TIMEOUT_SECONDS=10 go test ./... -timeout=360s`.
+- If `go test ./...` times out, isolate with package-level runs first (for
+  example `go test ./internal/feature -run TestName -count=1 -v`) instead of
+  repeatedly rerunning the whole suite.
+- Test helpers in Git-heavy packages should set `AGENTSAFE_GIT_TIMEOUT_SECONDS`
+  only when it is unset, so explicit developer/CI values still win.
+
 ## Architecture
 
 **One core, two frontends.** All real logic lives in `internal/`. The two frontends are
@@ -43,6 +57,12 @@ identically:
 - `feature/<feature>/<repo>` — Git worktrees for a feature branch
 - `agent/<feature>/<repo>` — sanitized copies the AI agent edits; `*.bak-<timestamp>` are backups
 - `agentsafe.yaml` — unified agent security config (see below)
+
+Feature worktree/agent folders use `feature.Metadata.FolderKey()` (for example
+`feat-<hash>`) for newly created features, not necessarily the user-facing
+feature name. When cleaning up or locating worktrees, prefer stored
+`RepoMeta.WorktreePath` and `Metadata.FolderKey()` over rebuilding paths from
+`Metadata.Name`. Metadata file paths still use the feature name.
 
 **Core pipeline** (mirrors the CLI verbs): `pull` (clone/fetch into `main/`) →
 `feature create` (worktrees) → `agent prepare` (sanitized copy into `agent/`) →

@@ -56,6 +56,15 @@ export default function App() {
   >({});
   const [explorerTerminals, setExplorerTerminals] = useState<TerminalSession[]>([]);
   const [explorerActiveTab, setExplorerActiveTab] = useState("main");
+  // Worktree-list inline terminal UI state. Lifted to App level so the inline
+  // panel (and its tabs) survive navigation away from the features list.
+  const [featuresExpanded, setFeaturesExpanded] = useState<Set<string>>(new Set());
+  const [featuresActiveTerminal, setFeaturesActiveTerminal] = useState<
+    Record<string, string>
+  >({});
+  const [featuresTerminalHeights, setFeaturesTerminalHeights] = useState<
+    Record<string, number>
+  >({});
 
   const refreshConfig = useCallback(async () => {
     try {
@@ -202,7 +211,17 @@ export default function App() {
             />
           )}
           {view.kind === "features" && opened && (
-            <FeaturesPage onOpen={(name) => setView({ kind: "feature", name })} />
+            <FeaturesPage
+              onOpen={(name) => setView({ kind: "feature", name })}
+              terminalTabs={featureTerminalTabs}
+              setTerminalTabs={setFeatureTerminalTabs}
+              expanded={featuresExpanded}
+              setExpanded={setFeaturesExpanded}
+              activeTerminal={featuresActiveTerminal}
+              setActiveTerminal={setFeaturesActiveTerminal}
+              heights={featuresTerminalHeights}
+              setHeights={setFeaturesTerminalHeights}
+            />
           )}
           {view.kind === "feature" && (
             <FeatureDetailPage
