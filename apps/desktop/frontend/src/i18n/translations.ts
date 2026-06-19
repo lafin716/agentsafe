@@ -29,6 +29,10 @@ const en: Dict = {
   "header.backups": "Backups",
   "header.history": "Sync history",
   "header.settings": "Settings",
+  "sidebar.collapse": "Collapse",
+  "sidebar.collapseToIcons": "Collapse to icons",
+  "sidebar.hide": "Hide sidebar",
+  "sidebar.expand": "Expand sidebar",
 
   // common
   "common.reload": "Reload",
@@ -533,6 +537,10 @@ const ko: Dict = {
   "header.backups": "백업 관리",
   "header.history": "동기화 이력",
   "header.settings": "설정",
+  "sidebar.collapse": "접기",
+  "sidebar.collapseToIcons": "아이콘만 표시",
+  "sidebar.hide": "사이드바 숨기기",
+  "sidebar.expand": "사이드바 펼치기",
 
   // common
   "common.reload": "새로고침",

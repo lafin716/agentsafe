@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Archive,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
   FileText,
   FolderGit2,
   FolderOpen,
@@ -39,12 +42,26 @@ type View =
   | { kind: "history"; feature?: string }
   | { kind: "settings" };
 
+type SidebarMode = "full" | "icons" | "hidden";
+
+function loadSidebarMode(): SidebarMode {
+  try {
+    const saved = localStorage.getItem("agentsafe.sidebarMode");
+    return saved === "full" || saved === "icons" || saved === "hidden"
+      ? saved
+      : "full";
+  } catch {
+    return "full";
+  }
+}
+
 export default function App() {
   const { notify } = useToast();
   const { t } = useI18n();
   const [config, setConfig] = useState<Config | null>(null);
   const [root, setRoot] = useState("");
   const [view, setView] = useState<View>({ kind: "workspace" });
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>(loadSidebarMode);
   const [featureTerminalTabs, setFeatureTerminalTabs] = useState<
     Record<string, TerminalSession[]>
   >({});
@@ -101,6 +118,30 @@ export default function App() {
   }, []);
 
   const opened = !!config;
+  const sidebarFull = sidebarMode === "full";
+  const sidebarIcons = sidebarMode === "icons";
+  const sidebarHidden = sidebarMode === "hidden";
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("agentsafe.sidebarMode", sidebarMode);
+    } catch {
+      /* localStorage unavailable */
+    }
+  }, [sidebarMode]);
+
+  function nextSidebarMode() {
+    setSidebarMode((mode) =>
+      mode === "full" ? "icons" : mode === "icons" ? "hidden" : "full"
+    );
+  }
+
+  const sidebarToggleLabel =
+    sidebarMode === "full"
+      ? t("sidebar.collapseToIcons")
+      : sidebarMode === "icons"
+        ? t("sidebar.hide")
+        : t("sidebar.expand");
 
   const nav = [
     { id: "workspace" as const, label: t("nav.workspace"), icon: FolderGit2 },
@@ -119,56 +160,118 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
-      <aside className="flex w-56 shrink-0 flex-col border-r bg-card">
-        <div className="flex items-center gap-2 px-4 py-4">
-          <img
-            src={agentsafeLogo}
-            alt=""
-            className="size-7 object-contain"
-            aria-hidden="true"
-          />
-          <span className="text-base font-semibold">agentsafe</span>
-        </div>
-        <div className="pb-3">
-          <WorkspaceSwitcher
-            config={config}
-            onSwitched={onWorkspaceLoaded}
-            onRemovedActive={onRemovedActive}
-          />
-        </div>
-        <nav className="flex flex-col gap-1 px-2">
-          {nav.map((item) => {
-            const active =
-              view.kind === item.id ||
-              (item.id === "features" && view.kind === "feature");
-            const disabled =
-              (item.id === "features" ||
-                item.id === "templates" ||
-                item.id === "explorer" ||
-                item.id === "agentsec" ||
-                item.id === "backups" ||
-                item.id === "history") &&
-              !opened;
-            return (
-              <button
-                key={item.id}
-                disabled={disabled}
-                onClick={() => setView({ kind: item.id })}
-                className={cn(
-                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                  active
-                    ? "bg-secondary font-medium text-secondary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                  disabled && "cursor-not-allowed opacity-40 hover:bg-transparent"
-                )}
-              >
-                <item.icon className="size-4" />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
+      <aside
+        className={cn(
+          "relative flex shrink-0 flex-col bg-card transition-[width] duration-300 ease-in-out",
+          sidebarHidden ? "w-0 border-r-0" : "border-r",
+          sidebarFull && "w-56",
+          sidebarIcons && "w-16"
+        )}
+      >
+        {!sidebarHidden && (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden pb-16">
+            <div
+              className={cn(
+                "flex items-center gap-2 py-4",
+                sidebarFull ? "px-4" : "justify-center px-2"
+              )}
+            >
+              <img
+                src={agentsafeLogo}
+                alt=""
+                className="size-7 object-contain"
+                aria-hidden="true"
+              />
+              {sidebarFull && <span className="text-base font-semibold">agentsafe</span>}
+            </div>
+            {sidebarFull && (
+              <div className="pb-3">
+                <WorkspaceSwitcher
+                  config={config}
+                  onSwitched={onWorkspaceLoaded}
+                  onRemovedActive={onRemovedActive}
+                />
+              </div>
+            )}
+            <nav
+              className={cn(
+                "flex flex-col gap-1",
+                sidebarFull ? "px-2" : "items-center px-2"
+              )}
+            >
+              {nav.map((item) => {
+                const active =
+                  view.kind === item.id ||
+                  (item.id === "features" && view.kind === "feature");
+                const disabled =
+                  (item.id === "features" ||
+                    item.id === "templates" ||
+                    item.id === "explorer" ||
+                    item.id === "agentsec" ||
+                    item.id === "backups" ||
+                    item.id === "history") &&
+                  !opened;
+                return (
+                  <button
+                    key={item.id}
+                    disabled={disabled}
+                    title={sidebarIcons ? item.label : undefined}
+                    aria-label={item.label}
+                    onClick={() => setView({ kind: item.id })}
+                    className={cn(
+                      "flex items-center rounded-md text-sm transition-colors",
+                      sidebarFull
+                        ? "w-full gap-2 px-3 py-2"
+                        : "size-10 justify-center",
+                      active
+                        ? "bg-secondary font-medium text-secondary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                      disabled && "cursor-not-allowed opacity-40 hover:bg-transparent"
+                    )}
+                  >
+                    <item.icon className="size-4 shrink-0" />
+                    {sidebarFull && <span className="truncate">{item.label}</span>}
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+        )}
+        {!sidebarHidden && (
+          <button
+            type="button"
+            onClick={nextSidebarMode}
+            title={sidebarToggleLabel}
+            aria-label={sidebarToggleLabel}
+            className={cn(
+              "absolute bottom-4 z-20 flex h-10 items-center justify-center rounded-lg border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground",
+              sidebarFull ? "left-4 right-4 gap-2 px-3" : "left-3 size-10"
+            )}
+          >
+            {sidebarFull ? (
+              <>
+                <ChevronLeft className="size-4" />
+                <span className="text-xs font-medium">{t("sidebar.collapse")}</span>
+              </>
+            ) : (
+              <ChevronsLeft className="size-4" />
+            )}
+          </button>
+        )}
       </aside>
+      {sidebarHidden && (
+        <div className="group fixed bottom-6 left-0 z-40 flex h-14 w-10 items-center">
+          <button
+            type="button"
+            onClick={nextSidebarMode}
+            title={sidebarToggleLabel}
+            aria-label={sidebarToggleLabel}
+            className="flex h-10 w-12 -translate-x-8 items-center justify-center rounded-r-lg border bg-background text-muted-foreground shadow-md transition-transform duration-200 ease-out hover:bg-accent hover:text-accent-foreground group-hover:translate-x-0 focus:translate-x-0 focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            <ChevronRight className="size-4" />
+          </button>
+        </div>
+      )}
 
       <main className="flex flex-1 flex-col overflow-hidden">
         <header className="flex items-center justify-between border-b px-6 py-3">
