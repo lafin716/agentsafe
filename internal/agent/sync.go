@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
@@ -233,6 +234,31 @@ func SyncAndCommit(root string, cfg config.Config, featureName, message string, 
 		return nil
 	}
 	return feature.Commit(root, featureName, message, opt.Repo)
+}
+
+// SyncCommitPush chains sync → commit → push into one operation. When message is
+// empty a templated default is used. risky/masked files stay gated by opt: with
+// IncludeRisky/AllowMaskedSync false, Sync aborts before any commit or push so
+// masked secrets never reach the worktree. A dry run stops after the sync diff.
+// feature.Commit/Push are no-ops ("clean"/"nothing to push") when there is
+// nothing to do, so an empty change set is not an error.
+func SyncCommitPush(root string, cfg config.Config, featureName, message string, opt Options) error {
+	if strings.TrimSpace(message) == "" {
+		message = DefaultCommitMessage(featureName)
+	}
+	if err := SyncAndCommit(root, cfg, featureName, message, opt); err != nil {
+		return err
+	}
+	if opt.DryRun {
+		return nil
+	}
+	return feature.Push(root, featureName, opt.Repo)
+}
+
+// DefaultCommitMessage builds the templated commit message used when the caller
+// does not supply one (e.g. the desktop one-click button or `agent ship`).
+func DefaultCommitMessage(featureName string) string {
+	return fmt.Sprintf("agent(%s): auto-sync %s", featureName, time.Now().Format(time.RFC3339))
 }
 
 // RestoreFromWorktree overwrites one file in the prepared agent workspace with

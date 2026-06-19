@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Copy,
   ExternalLink,
+  Eye,
   FolderOpen,
   GitCommit,
   GitMerge,
@@ -34,6 +35,7 @@ import {
 import { api, errMessage } from "@/lib/api";
 import type {
   Change,
+  ChangeFileView,
   DiffResult,
   FeatureDeleteResult,
   FeatureMetadata,
@@ -107,6 +109,13 @@ export function FeatureDetailPage({
   const [status, setStatus] = useState<FeatureStatusResult | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
   const [openDiffRepos, setOpenDiffRepos] = useState<Set<string>>(new Set());
+  const [fileView, setFileView] = useState<{
+    repo: string;
+    change: Change;
+    loading: boolean;
+    data?: ChangeFileView;
+    error?: string;
+  } | null>(null);
   // Sync-history stack depth per repository, for the count badges.
   const [histCounts, setHistCounts] = useState<Record<string, number>>({});
   // Local override of prepared state. null = no user action yet (fall back to
@@ -394,12 +403,45 @@ export function FeatureDetailPage({
       await Promise.all([loadDiff(), loadStatus(), loadCounts()]);
     });
 
+  // syncCommitPush runs the whole delivery pipeline in one action: sync reviewed
+  // agent changes back to the worktrees, commit them (templated message when the
+  // field is empty), then push every branch. risky/masked files stay gated by the
+  // toggles above, so with them off the sync aborts before any commit or push.
+  const syncCommitPush = () =>
+    run(async () => {
+      await api.SyncCommitPush(name, dryRun ? "" : commitMsg.trim(), {
+        repo: "",
+        dryRun,
+        includeRisky,
+        allowMaskedSync: allowMasked,
+      });
+      notify(
+        dryRun ? t("toast.dryRunCompleted") : t("toast.syncCommitPushed"),
+        "success"
+      );
+      if (!dryRun) {
+        setCommitMsg("");
+        setAgentFinished(false);
+      }
+      await Promise.all([loadDiff(), loadStatus(), loadCounts()]);
+    });
+
   const restoreFromWorktree = (repo: string, path: string) =>
     run(async () => {
       await api.AgentRestoreFromWorktree(name, repo, path);
       notify(t("toast.agentRestoredFromWorktree", { path }), "success");
       await loadDiff();
     });
+
+  const openChangeFileView = (repo: string, change: Change) => {
+    setFileView({ repo, change, loading: true });
+    api
+      .AgentChangeFileView(name, repo, change.path)
+      .then((data) => setFileView({ repo, change, loading: false, data }))
+      .catch((e) =>
+        setFileView({ repo, change, loading: false, error: errMessage(e) })
+      );
+  };
 
   const del = () =>
     run(async () => {
@@ -956,6 +998,7 @@ export function FeatureDetailPage({
                                 <ChangeRow
                                   key={c.path + i}
                                   change={c}
+                                  onView={() => openChangeFileView(r.name, c)}
                                   onRestore={() => restoreFromWorktree(r.name, c.path)}
                                   disabled={busy || diffLoading}
                                 />
@@ -979,6 +1022,9 @@ export function FeatureDetailPage({
                       <Toggle checked={allowMasked} onChange={setAllowMasked} label={t("feature.allowMasked")} />
                       <Button variant="outline" size="sm" onClick={sync} disabled={busy}>
                         <Upload className="size-4" /> {dryRun ? t("feature.previewSync") : t("feature.sync")}
+                      </Button>
+                      <Button size="sm" onClick={syncCommitPush} disabled={busy}>
+                        <Upload className="size-4" /> {t("feature.syncCommitPush")}
                       </Button>
                     </div>
                   </div>
@@ -1381,16 +1427,59 @@ export function FeatureDetailPage({
           </Card>
         </div>
       )}
+      {fileView && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setFileView(null)}
+        >
+          <div
+            className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border bg-card shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b p-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="truncate text-lg font-semibold">{fileView.change.path}</h2>
+                  {fileView.change.risky && <Badge variant="warning">{t("feature.risky")}</Badge>}
+                  {fileView.change.masked && <Badge variant="destructive">{t("feature.masked")}</Badge>}
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {t("feature.fileViewDesc", { repo: fileView.repo })}
+                </p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setFileView(null)} title={t("common.close")}>
+                <X className="size-4" />
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-4">
+              {fileView.loading ? (
+                <LoadingState label={t("common.loading")} />
+              ) : fileView.error ? (
+                <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                  {fileView.error}
+                </div>
+              ) : fileView.data ? (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <FileViewSidePanel title={t("feature.fileViewAgent")} side={fileView.data.agent} />
+                  <FileViewSidePanel title={t("feature.fileViewWorktree")} side={fileView.data.worktree} />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 function ChangeRow({
   change,
+  onView,
   onRestore,
   disabled,
 }: {
   change: Change;
+  onView: () => void;
   onRestore: () => void;
   disabled: boolean;
 }) {
@@ -1418,6 +1507,16 @@ function ChangeRow({
           size="sm"
           className="h-7"
           disabled={disabled}
+          onClick={onView}
+          title={t("feature.viewFileDiff")}
+        >
+          <Eye className="size-3.5" /> {t("feature.viewFileDiffShort")}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7"
+          disabled={disabled}
           onClick={onRestore}
           title={t("feature.restoreFromWorktree")}
         >
@@ -1425,6 +1524,35 @@ function ChangeRow({
         </Button>
       </div>
     </li>
+  );
+}
+
+function FileViewSidePanel({
+  title,
+  side,
+}: {
+  title: string;
+  side: { path: string; exists: boolean; content?: string; error?: string };
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="min-w-0 overflow-hidden rounded-md border">
+      <div className="border-b bg-muted/40 px-3 py-2">
+        <div className="font-medium">{title}</div>
+        <div className="truncate font-mono text-xs text-muted-foreground" title={side.path}>
+          {side.path}
+        </div>
+      </div>
+      {!side.exists ? (
+        <div className="p-4 text-sm text-muted-foreground">{t("feature.fileMissing")}</div>
+      ) : side.error ? (
+        <div className="p-4 text-sm text-destructive">{side.error}</div>
+      ) : (
+        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words bg-slate-950 p-3 font-mono text-xs text-slate-100">
+          {side.content ?? ""}
+        </pre>
+      )}
+    </div>
   );
 }
 

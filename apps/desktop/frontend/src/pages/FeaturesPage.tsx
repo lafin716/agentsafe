@@ -7,7 +7,19 @@ import {
   type PointerEvent as ReactPointerEvent,
   type SetStateAction,
 } from "react";
-import { ChevronUp, Code2, FolderOpen, Plus, RefreshCw, Terminal, Trash2, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronUp,
+  Code2,
+  FolderOpen,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Terminal,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { api, errMessage } from "@/lib/api";
 import { useConfirm } from "@/components/ui/confirm";
 import type { FeatureCreateCheck, FeatureDeleteResult, FeatureEntry, TerminalSession } from "@/lib/types";
@@ -80,6 +92,8 @@ export function FeaturesPage({
   const [name, setName] = useState("");
   const [createCheck, setCreateCheck] = useState<FeatureCreateCheck | null>(null);
   const [existingBranch, setExistingBranch] = useState<"reuse" | "recreate">("reuse");
+  const [syncing, setSyncing] = useState<Record<string, boolean>>({});
+  const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     try {
@@ -169,6 +183,35 @@ export function FeaturesPage({
       return next;
     });
     if (remaining.length === 0) collapsePanel(name);
+  }
+
+  async function syncFeature(name: string) {
+    try {
+      setSyncing((prev) => ({ ...prev, [name]: true }));
+      setSyncErrors((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      await api.AgentSync(name, {
+        repo: "",
+        dryRun: false,
+        includeRisky: false,
+        allowMaskedSync: false,
+      });
+      notify(t("toast.syncCompleted"), "success");
+      await load();
+    } catch (e) {
+      const message = errMessage(e);
+      const blocked = /risky|masked|blocked|include-risky|allow-masked/i.test(message);
+      const nextMessage = blocked
+        ? `${t("features.syncBlockedDetail")}\n${message}`
+        : message;
+      setSyncErrors((prev) => ({ ...prev, [name]: nextMessage }));
+      notify(nextMessage, "error");
+    } finally {
+      setSyncing((prev) => ({ ...prev, [name]: false }));
+    }
   }
 
   // startResize drags the terminal panel taller/shorter. TerminalPanel's internal
@@ -358,6 +401,8 @@ export function FeaturesPage({
                 {features.map((f) => {
                   const terminals = terminalTabs[f.name] ?? [];
                   const terminalExpanded = expanded.has(f.name);
+                  const syncBusy = syncing[f.name] ?? false;
+                  const syncError = syncErrors[f.name];
                   const activeTerminalSession =
                     terminals.find((tab) => tab.id === activeTerminal[f.name]) ??
                     terminals[terminals.length - 1];
@@ -482,6 +527,21 @@ export function FeaturesPage({
                                   <Plus className="size-4" />
                                 </Button>
                                 <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="shrink-0"
+                                  disabled={busy || syncBusy}
+                                  onClick={() => void syncFeature(f.name)}
+                                  title={t("features.syncAgentChanges")}
+                                >
+                                  {syncBusy ? (
+                                    <Loader2 className="size-4 animate-spin" />
+                                  ) : (
+                                    <Upload className="size-4" />
+                                  )}
+                                  {syncBusy ? t("features.syncing") : t("features.syncAgentChanges")}
+                                </Button>
+                                <Button
                                   variant="ghost"
                                   size="icon"
                                   className="ml-auto shrink-0"
@@ -491,6 +551,22 @@ export function FeaturesPage({
                                   <ChevronUp className="size-4" />
                                 </Button>
                               </div>
+                              {syncError && (
+                                <div className="flex items-start justify-between gap-3 border-b border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+                                  <div className="flex min-w-0 gap-2">
+                                    <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                                    <span className="whitespace-pre-wrap break-words">{syncError}</span>
+                                  </div>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="shrink-0 bg-white"
+                                    onClick={() => onOpen(f.name)}
+                                  >
+                                    {t("features.openDetail")}
+                                  </Button>
+                                </div>
+                              )}
                               <div
                                 className="relative w-full overflow-hidden"
                                 style={{ height: heights[f.name] ?? DEFAULT_TERMINAL_HEIGHT }}

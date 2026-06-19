@@ -687,7 +687,38 @@ func agentCmd() *cobra.Command {
 		return e.Start()
 	}}
 	open.Flags().StringVar(&editor, "editor", "", "editor command (code/cursor)")
-	c.AddCommand(agentInit, del, diff, sync, open, templateCmd())
+	var shipOpt agent.Options
+	var shipMessage string
+	var shipNoPush bool
+	ship := &cobra.Command{Use: "ship FEATURE", Short: "Sync reviewed agent changes back to worktrees, commit, then push — in one step", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, cfg, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		shipOpt.Yes = true // non-interactive: intended for one-shot automation / Stop hooks
+		if shipNoPush {
+			msg := shipMessage
+			if strings.TrimSpace(msg) == "" {
+				msg = agent.DefaultCommitMessage(args[0])
+			}
+			if err := agent.SyncAndCommit(root, cfg, args[0], msg, shipOpt); err != nil {
+				return err
+			}
+		} else if err := agent.SyncCommitPush(root, cfg, args[0], shipMessage, shipOpt); err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(simpleResult{Status: "ok"})
+		}
+		return nil
+	}}
+	ship.Flags().StringVar(&shipOpt.Repo, "repo", "", "limit to repository")
+	ship.Flags().BoolVar(&shipOpt.DryRun, "dry-run", false, "show changes without applying (no commit/push)")
+	ship.Flags().BoolVar(&shipOpt.IncludeRisky, "include-risky", false, "allow risky files to sync")
+	ship.Flags().BoolVar(&shipOpt.AllowMaskedSync, "allow-masked-sync", false, "allow masked files to sync")
+	ship.Flags().StringVarP(&shipMessage, "message", "m", "", "commit message (default: templated auto-sync message)")
+	ship.Flags().BoolVar(&shipNoPush, "no-push", false, "sync and commit only, skip push")
+	c.AddCommand(agentInit, del, diff, sync, open, ship, templateCmd())
 	return c
 }
 

@@ -2,6 +2,7 @@
 // Wails exposes each exported Go method on App as a Promise-returning function.
 import type {
   BackupEntry,
+  ChangeFileView,
   Config,
   DiffResult,
   SyncHistoryEntry,
@@ -117,8 +118,14 @@ type AppBindings = {
     backup: boolean
   ): Promise<PrepareMetadata>;
   AgentDiff(name: string, repoFilter: string): Promise<DiffResult>;
+  AgentChangeFileView(
+    name: string,
+    repoName: string,
+    path: string
+  ): Promise<ChangeFileView>;
   AgentSync(name: string, opt: SyncOptions): Promise<void>;
   SyncAndCommit(name: string, message: string, opt: SyncOptions): Promise<void>;
+  SyncCommitPush(name: string, message: string, opt: SyncOptions): Promise<void>;
   AgentRestoreFromWorktree(name: string, repoName: string, path: string): Promise<void>;
   AgentDelete(name: string): Promise<void>;
   AllSyncHistory(): Promise<SyncHistoryEntry[]>;

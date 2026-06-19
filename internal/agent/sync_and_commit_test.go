@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/agentsafe/agentsafe/internal/config"
@@ -69,5 +70,31 @@ func TestSyncAndCommitDryRunDoesNothing(t *testing.T) {
 	}
 	if string(got) != "content" {
 		t.Fatalf("worktree file = %q, want content (dry-run must not apply)", got)
+	}
+}
+
+// A dry-run ship neither applies the sync, commits, nor pushes — so it needs no
+// git repository and must leave the worktree untouched.
+func TestSyncCommitPushDryRunDoesNothing(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default(root, "ws")
+	worktree := prepareForSync(t, root, cfg)
+
+	if err := SyncCommitPush(root, cfg, "demo", "", Options{Yes: true, DryRun: true}); err != nil {
+		t.Fatalf("SyncCommitPush dry-run: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(worktree, "file.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "content" {
+		t.Fatalf("worktree file = %q, want content (dry-run must not apply)", got)
+	}
+}
+
+func TestDefaultCommitMessageIncludesFeature(t *testing.T) {
+	msg := DefaultCommitMessage("checkout")
+	if !strings.Contains(msg, "checkout") {
+		t.Fatalf("DefaultCommitMessage = %q, want it to include the feature name", msg)
 	}
 }

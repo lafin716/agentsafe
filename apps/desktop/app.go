@@ -1321,6 +1321,18 @@ type DiffResult struct {
 	Repositories []RepoDiff `json:"repositories"`
 }
 
+type FileViewSide struct {
+	Path    string `json:"path"`
+	Exists  bool   `json:"exists"`
+	Content string `json:"content,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+type ChangeFileView struct {
+	Agent    FileViewSide `json:"agent"`
+	Worktree FileViewSide `json:"worktree"`
+}
+
 func (a *App) AgentDiff(name, repoFilter string) (DiffResult, error) {
 	root, err := a.requireRoot()
 	if err != nil {
@@ -1348,6 +1360,76 @@ func (a *App) AgentDiff(name, repoFilter string) (DiffResult, error) {
 		result.Repositories = append(result.Repositories, RepoDiff{Name: r, Changes: changes})
 	}
 	return result, nil
+}
+
+func (a *App) AgentChangeFileView(name, repoName, path string) (ChangeFileView, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return ChangeFileView{}, err
+	}
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return ChangeFileView{}, err
+	}
+	var repoMeta *feature.RepoMeta
+	for i := range fm.Repositories {
+		if fm.Repositories[i].Name == repoName {
+			repoMeta = &fm.Repositories[i]
+			break
+		}
+	}
+	if repoMeta == nil {
+		return ChangeFileView{}, fmt.Errorf("repository %q is not part of feature %q", repoName, name)
+	}
+	rel := filepath.FromSlash(path)
+	agentRoot := config.AgentPath(root, fm.FolderKey(), repoName)
+	worktreeRoot := filepath.Join(root, filepath.FromSlash(repoMeta.WorktreePath))
+	agentPath := filepath.Join(agentRoot, rel)
+	worktreePath := filepath.Join(worktreeRoot, rel)
+	if err := fsutil.EnsureInside(agentRoot, agentPath); err != nil {
+		return ChangeFileView{}, err
+	}
+	if err := fsutil.EnsureInside(worktreeRoot, worktreePath); err != nil {
+		return ChangeFileView{}, err
+	}
+	return ChangeFileView{
+		Agent:    readFileViewSide(agentPath),
+		Worktree: readFileViewSide(worktreePath),
+	}, nil
+}
+
+func readFileViewSide(path string) FileViewSide {
+	side := FileViewSide{Path: path}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			side.Exists = false
+			return side
+		}
+		side.Error = err.Error()
+		return side
+	}
+	if info.IsDir() {
+		side.Exists = true
+		side.Error = "path is a directory"
+		return side
+	}
+	side.Exists = true
+	if info.Size() > maxEditableWorkspaceFileSize {
+		side.Error = "file is too large to preview in the app (max 2 MB)"
+		return side
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		side.Error = err.Error()
+		return side
+	}
+	if hasNUL(b) || !utf8.Valid(b) {
+		side.Error = "binary files cannot be previewed in the app"
+		return side
+	}
+	side.Content = string(b)
+	return side
 }
 
 // SyncOptions is the frontend-facing subset of agent.Options.
@@ -1393,6 +1475,31 @@ func (a *App) SyncAndCommit(name, message string, opt SyncOptions) error {
 	}
 	return a.runTask("Sync & commit: "+name, func() error {
 		return agent.SyncAndCommit(root, cfg, name, message, agent.Options{
+			Repo:            opt.Repo,
+			DryRun:          opt.DryRun,
+			IncludeRisky:    opt.IncludeRisky,
+			AllowMaskedSync: opt.AllowMaskedSync,
+			Yes:             true,
+		})
+	})
+}
+
+// SyncCommitPush syncs reviewed agent changes back to the worktrees, commits
+// them (with a templated message when none is given), and pushes every branch —
+// in a single action. risky/masked files stay gated by opt, so with those
+// flags off the sync aborts before any commit or push. The diff is shown in the
+// UI beforehand, so the sync runs non-interactively.
+func (a *App) SyncCommitPush(name, message string, opt SyncOptions) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	return a.runTask("Sync + commit + push: "+name, func() error {
+		return agent.SyncCommitPush(root, cfg, name, message, agent.Options{
 			Repo:            opt.Repo,
 			DryRun:          opt.DryRun,
 			IncludeRisky:    opt.IncludeRisky,

@@ -78,6 +78,38 @@ export function TerminalPanel({
     let closedWritten = false;
     const pending: Array<{ data: string; seq?: number }> = [];
     let pendingClose: { error?: string } | null = null;
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown" || !event.ctrlKey || event.altKey || event.metaKey) {
+        return true;
+      }
+      const key = event.key.toLowerCase();
+      if (key === "c" && term.hasSelection()) {
+        event.preventDefault();
+        event.stopPropagation();
+        void navigator.clipboard?.writeText?.(term.getSelection());
+        return false;
+      }
+      if (key === "v") {
+        event.preventDefault();
+        event.stopPropagation();
+        const clipboard = navigator.clipboard;
+        if (!closedWritten && clipboard) {
+          void clipboard.readText().then((text) => {
+            if (text) void api.TerminalWrite(id, text);
+          });
+        }
+        return false;
+      }
+      return true;
+    });
+    const pasteHandler = (event: ClipboardEvent) => {
+      if (closedWritten) return;
+      const text = event.clipboardData?.getData("text/plain");
+      if (!text) return;
+      event.preventDefault();
+      void api.TerminalWrite(id, text);
+    };
+    container.addEventListener("paste", pasteHandler);
     const writeDisposable = term.onData((data) => {
       if (closedWritten) return;
       void api.TerminalWrite(id, data);
@@ -145,6 +177,7 @@ export function TerminalPanel({
       disposed = true;
       writeDisposable.dispose();
       resizeObserver.disconnect();
+      container.removeEventListener("paste", pasteHandler);
       offData?.();
       offClose?.();
       term.dispose();

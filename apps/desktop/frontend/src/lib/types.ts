@@ -304,6 +304,18 @@ export interface DiffResult {
   repositories: RepoDiff[] | null;
 }
 
+export interface FileViewSide {
+  path: string;
+  exists: boolean;
+  content?: string;
+  error?: string;
+}
+
+export interface ChangeFileView {
+  agent: FileViewSide;
+  worktree: FileViewSide;
+}
+
 export interface SyncOptions {
   repo: string;
   dryRun: boolean;
