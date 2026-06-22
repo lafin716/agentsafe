@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  Fragment,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   Archive,
   ChevronLeft,
@@ -64,6 +73,11 @@ type PaneLayout = {
   rows: string[][];
 };
 
+type SplitSizes = {
+  rowSizes: number[];
+  columnSizesByRow: Record<string, number[]>;
+};
+
 type DraggedTab = {
   tabId: string;
   paneId: string;
@@ -119,6 +133,23 @@ function loadSidebarMode(): SidebarMode {
       : "full";
   } catch {
     return "full";
+  }
+}
+
+function loadSplitSizes(): SplitSizes {
+  try {
+    const raw = localStorage.getItem("agentsafe.splitSizes");
+    if (!raw) return { rowSizes: [100], columnSizesByRow: {} };
+    const parsed = JSON.parse(raw) as SplitSizes;
+    return {
+      rowSizes: Array.isArray(parsed.rowSizes) ? parsed.rowSizes : [100],
+      columnSizesByRow:
+        parsed.columnSizesByRow && typeof parsed.columnSizesByRow === "object"
+          ? parsed.columnSizesByRow
+          : {},
+    };
+  } catch {
+    return { rowSizes: [100], columnSizesByRow: {} };
   }
 }
 
@@ -225,6 +256,28 @@ function computeDropEdge(e: DragEvent<HTMLElement>): DropEdge | null {
   return null;
 }
 
+function clampSplit(value: number): number {
+  return Math.min(80, Math.max(20, value));
+}
+
+function normalizePair(values?: number[]): number[] {
+  if (!values || values.length < 2) return [50, 50];
+  const first = clampSplit(values[0]);
+  return [first, 100 - first];
+}
+
+function normalizeSplitSizes(layout: PaneLayout, sizes: SplitSizes): SplitSizes {
+  const rowCount = layout.rows.length;
+  const rowSizes = rowCount <= 1 ? [100] : normalizePair(sizes.rowSizes);
+  const columnSizesByRow: Record<string, number[]> = {};
+  layout.rows.forEach((row, rowIndex) => {
+    const key = String(rowIndex);
+    columnSizesByRow[key] =
+      row.length <= 1 ? [100] : normalizePair(sizes.columnSizesByRow[key]);
+  });
+  return { rowSizes, columnSizesByRow };
+}
+
 export default function App() {
   const { notify } = useToast();
   const { t } = useI18n();
@@ -235,6 +288,9 @@ export default function App() {
     workspace: workspaceTab,
   });
   const [layout, setLayout] = useState<PaneLayout>(() => cloneLayout(initialLayout));
+  const [splitSizes, setSplitSizes] = useState<SplitSizes>(() =>
+    normalizeSplitSizes(initialLayout, loadSplitSizes())
+  );
   const [activePaneId, setActivePaneId] = useState("pane-1");
   const [draggedTab, setDraggedTab] = useState<DraggedTab | null>(null);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
@@ -288,6 +344,21 @@ export default function App() {
       /* localStorage unavailable */
     }
   }, [sidebarMode]);
+
+  useEffect(() => {
+    setSplitSizes((prev) => normalizeSplitSizes(layout, prev));
+  }, [layout]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "agentsafe.splitSizes",
+        JSON.stringify(normalizeSplitSizes(layout, splitSizes))
+      );
+    } catch {
+      /* localStorage unavailable */
+    }
+  }, [layout, splitSizes]);
 
   const nav: Array<{ view: View; label: string; icon: LucideIcon }> = [
     { view: { kind: "workspace" }, label: t("nav.workspace"), icon: FolderGit2 },
@@ -693,6 +764,50 @@ export default function App() {
     setDropHint(null);
   }
 
+  function startRowResize(e: ReactPointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const container = e.currentTarget.parentElement;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const onMove = (ev: PointerEvent) => {
+      const next = clampSplit(((ev.clientY - rect.top) / rect.height) * 100);
+      setSplitSizes((prev) => ({
+        ...prev,
+        rowSizes: [next, 100 - next],
+      }));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function startColumnResize(rowIndex: number, e: ReactPointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const row = e.currentTarget.parentElement;
+    if (!row) return;
+    const rect = row.getBoundingClientRect();
+    const key = String(rowIndex);
+    const onMove = (ev: PointerEvent) => {
+      const next = clampSplit(((ev.clientX - rect.left) / rect.width) * 100);
+      setSplitSizes((prev) => ({
+        ...prev,
+        columnSizesByRow: {
+          ...prev.columnSizesByRow,
+          [key]: [next, 100 - next],
+        },
+      }));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   function renderDropHint(paneId: string) {
     if (!dropHint || dropHint.paneId !== paneId) return null;
     return (
@@ -710,7 +825,7 @@ export default function App() {
     );
   }
 
-  function renderPane(pane: PaneModel) {
+  function renderPane(pane: PaneModel, style?: CSSProperties) {
     const paneActive = activePaneId === pane.id;
     const activeTabId = pane.tabIds.includes(pane.activeTabId) ? pane.activeTabId : pane.tabIds[0];
     const activeTab = activeTabId ? openTabs[activeTabId] : undefined;
@@ -718,8 +833,9 @@ export default function App() {
       <section
         key={pane.id}
         data-terminal-fullscreen-root
+        style={style}
         className={cn(
-          "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-md border bg-background",
+          "relative flex h-full min-h-0 min-w-0 shrink-0 grow-0 flex-col overflow-hidden rounded-md border bg-background",
           paneActive && "ring-1 ring-primary/50"
         )}
         onMouseDown={() => setActivePaneId(pane.id)}
@@ -812,6 +928,7 @@ export default function App() {
   const activePane = layout.panes[activePaneId] ?? layout.panes[firstPaneId(layout)];
   const activeTab = activePane?.activeTabId ? openTabs[activePane.activeTabId] : undefined;
   const ActiveIcon = activeTab ? iconForView(activeTab.view) : FolderOpen;
+  const effectiveSplitSizes = normalizeSplitSizes(layout, splitSizes);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -904,13 +1021,13 @@ export default function App() {
         )}
       </aside>
       {sidebarHidden && (
-        <div className="group fixed bottom-6 left-0 z-40 flex h-14 w-10 items-center">
+        <div className="group fixed bottom-6 left-0 z-[70] flex h-14 w-10 items-center">
           <button
             type="button"
             onClick={nextSidebarMode}
             title={sidebarToggleLabel}
             aria-label={sidebarToggleLabel}
-            className="flex h-10 w-12 -translate-x-8 items-center justify-center rounded-r-lg border bg-background text-muted-foreground shadow-md transition-transform duration-200 ease-out hover:bg-accent hover:text-accent-foreground group-hover:translate-x-0 focus:translate-x-0 focus:outline-none focus:ring-2 focus:ring-ring"
+            className="relative z-[70] flex h-10 w-12 -translate-x-8 items-center justify-center rounded-r-lg border bg-background text-muted-foreground shadow-md transition-transform duration-200 ease-out hover:bg-accent hover:text-accent-foreground group-hover:translate-x-0 focus:translate-x-0 focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <ChevronRight className="size-4" />
           </button>
@@ -943,15 +1060,54 @@ export default function App() {
           )}
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
-          {layout.rows.map((row, rowIndex) => (
-            <div key={row.join("-") || rowIndex} className="flex min-h-0 flex-1 gap-2">
-              {row.map((paneId) => {
-                const pane = layout.panes[paneId];
-                return pane ? renderPane(pane) : null;
-              })}
-            </div>
-          ))}
+        <div className="flex min-h-0 flex-1 flex-col p-2">
+          {layout.rows.map((row, rowIndex) => {
+            const rowSize = effectiveSplitSizes.rowSizes[rowIndex] ?? 100;
+            const columnSizes =
+              effectiveSplitSizes.columnSizesByRow[String(rowIndex)] ?? [100];
+            return (
+              <Fragment key={row.join("-") || rowIndex}>
+                <div
+                  className="flex min-h-0 shrink-0 grow-0"
+                  style={{ flexBasis: `${rowSize}%` }}
+                >
+                  {row.map((paneId, columnIndex) => {
+                    const pane = layout.panes[paneId];
+                    const columnSize = columnSizes[columnIndex] ?? 100;
+                    return (
+                      <Fragment key={paneId}>
+                        {pane
+                          ? renderPane(pane, { flexBasis: `${columnSize}%` })
+                          : null}
+                        {columnIndex < row.length - 1 && (
+                          <div
+                            role="separator"
+                            aria-orientation="vertical"
+                            className="group flex w-2 shrink-0 cursor-col-resize items-center justify-center"
+                            title={t("split.resizeColumn")}
+                            onPointerDown={(e) => startColumnResize(rowIndex, e)}
+                          >
+                            <div className="h-full w-0.5 rounded bg-border group-hover:bg-primary/60" />
+                          </div>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </div>
+                {rowIndex < layout.rows.length - 1 && (
+                  <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    className="group flex h-2 shrink-0 cursor-row-resize items-center justify-center"
+                    title={t("split.resizeRow")}
+                    onPointerDown={startRowResize}
+                  >
+                    <div className="h-0.5 w-full rounded bg-border group-hover:bg-primary/60" />
+                  </div>
+                )}
+              </Fragment>
+            );
+          })}
         </div>
       </main>
     </div>
