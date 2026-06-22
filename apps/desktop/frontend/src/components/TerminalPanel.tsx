@@ -1,8 +1,11 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { Maximize2, Minimize2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useI18n } from "@/i18n/I18nProvider";
+import { cn } from "@/lib/utils";
 
 export type WailsRuntime = {
   EventsOn: (event: string, cb: (...data: unknown[]) => void) => () => void;
@@ -26,8 +29,13 @@ export function TerminalPanel({
   path: string;
   className?: string;
 }) {
+  const { t } = useI18n();
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const slotRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerm | null>(null);
+  const fitRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -71,6 +79,7 @@ export function TerminalPanel({
         window.setTimeout(fit, 50);
       });
     };
+    fitRef.current = queueFit;
     const rt = runtime();
     let disposed = false;
     let snapshotLoaded = false;
@@ -182,15 +191,61 @@ export function TerminalPanel({
       offClose?.();
       term.dispose();
       termRef.current = null;
+      fitRef.current = null;
     };
   }, [id]);
 
+  useEffect(() => {
+    const slot = slotRef.current;
+    const panel = panelRef.current;
+    if (!slot || !panel) return;
+
+    if (isFullscreen) {
+      const fullscreenRoot =
+        slot.closest<HTMLElement>("[data-terminal-fullscreen-root]") ?? slot.parentElement;
+      fullscreenRoot?.appendChild(panel);
+    } else if (panel.parentElement !== slot) {
+      slot.appendChild(panel);
+    }
+
+    window.requestAnimationFrame(() => {
+      fitRef.current?.();
+      window.setTimeout(() => fitRef.current?.(), 80);
+    });
+
+    return () => {
+      if (panel.parentElement !== slot) {
+        slot.appendChild(panel);
+      }
+    };
+  }, [isFullscreen]);
+
+  const fullscreenLabel = isFullscreen ? t("terminal.restore") : t("terminal.fullscreen");
+  const FullscreenIcon = isFullscreen ? Minimize2 : Maximize2;
+
   return (
-    <div className={className ?? "flex h-[calc(100vh-12rem)] flex-col"}>
-      <div className="border-b px-3 py-2 font-mono text-xs text-muted-foreground">
-        {path}
+    <div ref={slotRef} className={className ?? "flex h-[calc(100vh-12rem)] flex-col"}>
+      <div
+        ref={panelRef}
+        className={cn(
+          "flex min-h-0 flex-col overflow-hidden bg-background",
+          isFullscreen ? "absolute inset-0 z-50 shadow-2xl" : "h-full"
+        )}
+      >
+        <div className="flex items-center gap-2 border-b px-3 py-2 font-mono text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">{path}</span>
+          <button
+            type="button"
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            onClick={() => setIsFullscreen((prev) => !prev)}
+            title={fullscreenLabel}
+            aria-label={fullscreenLabel}
+          >
+            <FullscreenIcon className="size-4" />
+          </button>
+        </div>
+        <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden bg-slate-950 p-2" />
       </div>
-      <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden bg-slate-950 p-2" />
     </div>
   );
 }

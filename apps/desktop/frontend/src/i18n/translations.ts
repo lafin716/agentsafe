@@ -44,6 +44,8 @@ const en: Dict = {
   "common.close": "Close",
   "common.save": "Save",
   "common.loading": "Loading",
+  "terminal.fullscreen": "Fullscreen",
+  "terminal.restore": "Restore",
 
   // workspace switcher
   "switcher.select": "Select workspace",
@@ -552,6 +554,8 @@ const ko: Dict = {
   "common.close": "닫기",
   "common.save": "저장",
   "common.loading": "불러오는 중",
+  "terminal.fullscreen": "전체보기",
+  "terminal.restore": "복원",
 
   // workspace switcher
   "switcher.select": "워크스페이스 선택",
