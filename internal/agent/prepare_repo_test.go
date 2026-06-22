@@ -134,3 +134,45 @@ func TestPrepareAppliesAgentTemplates(t *testing.T) {
 		t.Fatalf("unselected repo received template, err=%v", err)
 	}
 }
+
+func TestSecurityIgnoreIsRootRelativeAndExcludedFromDiff(t *testing.T) {
+	root := t.TempDir()
+	featureName := "demo"
+	repoName := "repo"
+	worktreeRel := filepath.ToSlash(filepath.Join("feature", featureName, repoName))
+	worktree := filepath.Join(root, filepath.FromSlash(worktreeRel))
+	writeIndexedFile(t, filepath.Join(worktree, "membership", "root.txt"), "root")
+	writeIndexedFile(t, filepath.Join(worktree, "test", "membership", "nested.txt"), "nested")
+	if err := os.WriteFile(filepath.Join(root, "agentsafe.yaml"), []byte("ignore:\n  - membership/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := feature.Save(root, feature.Metadata{
+		Name: featureName, Key: featureName,
+		Repositories: []feature.RepoMeta{{
+			Name: repoName, WorktreePath: worktreeRel,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default(root, "test")
+	cfg.Agent.DefaultExclude = nil
+
+	if _, err := PrepareRepository(root, cfg, featureName, repoName, PrepareOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	agentDir := config.AgentPath(root, featureName, repoName)
+	if _, err := os.Stat(filepath.Join(agentDir, "membership")); !os.IsNotExist(err) {
+		t.Fatalf("root membership should be ignored, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(agentDir, "test", "membership", "nested.txt")); err != nil {
+		t.Fatalf("nested membership should be copied: %v", err)
+	}
+
+	changes, err := Diff(root, cfg, featureName, repoName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := changes[repoName]; len(got) != 0 {
+		t.Fatalf("ignored root membership should not appear as deleted in diff, got %#v", got)
+	}
+}

@@ -70,6 +70,10 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 				continue
 			}
 			pats = append(pats, templatePats...)
+			secRoot := LoadSecurity(cfg, root)
+			secSource := LoadSecurity(cfg, filepath.Join(root, r.worktreePath))
+			pats = append(pats, secRoot.Ignore...)
+			pats = append(pats, secSource.Ignore...)
 			matcher := NewIgnoreMatcher(pats)
 			source := config.AgentPath(root, fm.FolderKey(), r.name)
 			target := filepath.Join(root, r.worktreePath)

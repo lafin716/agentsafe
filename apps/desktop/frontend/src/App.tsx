@@ -556,7 +556,7 @@ export default function App() {
     setDropHint(null);
   }, []);
 
-  function closeTab(tabId: string, paneId: string) {
+  function closeTab(tabId: string) {
     setOpenTabs((prev) => {
       const next = { ...prev };
       delete next[tabId];
@@ -567,7 +567,7 @@ export default function App() {
       for (const currentPaneId of Object.keys(next.panes)) {
         next.panes[currentPaneId] = removeTabFromPane(next.panes[currentPaneId], tabId);
       }
-      const normalized = cleanupLayout(next, paneId);
+      const normalized = cleanupLayout(next);
       const fallbackPaneId = normalized.panes[activePaneId] ? activePaneId : firstPaneId(normalized);
       setActivePaneId(fallbackPaneId);
       return normalized;
@@ -901,7 +901,7 @@ export default function App() {
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => {
                       e.stopPropagation();
-                      closeTab(tab.id, pane.id);
+                      closeTab(tab.id);
                     }}
                     title={t("common.close")}
                   >

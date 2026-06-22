@@ -220,7 +220,8 @@ func RemoveRepository(root string, cfg Config, name string) (Config, error) {
 // workspaces. It merges the former .agentignore patterns and mask.json rules
 // into a single agentsafe.yaml document.
 const SampleSecurityYAML = `# Agent security config (agentsafe.yaml)
-# ignore: files/folders excluded from the agent copy (gitignore-style, "#" comments allowed)
+# ignore: files/folders excluded from the agent copy ("#" comments allowed).
+# Patterns without "*" are repo-root relative; use globs such as "*/secret/" for nested matches.
 # mask:   content masking rules applied to copied text files (type: plain | regex | keypath)
 
 ignore:
