@@ -194,6 +194,13 @@ func prepareRepository(root string, cfg config.Config, folderKey string, r featu
 	pats = append(pats, cfg.Agent.DefaultExclude...)
 	pats = append(pats, secRoot.Ignore...)
 	pats = append(pats, secSource.Ignore...)
+	if cfg.Agent.GitignoreEnabled() {
+		gi, err := gitIgnoredPatterns(source, []string{source})
+		if err != nil {
+			return PrepareRepo{}, err
+		}
+		pats = append(pats, gi...)
+	}
 	matcher := NewIgnoreMatcher(pats)
 	mask := MaskFile{Rules: secSource.Mask}
 	if len(mask.Rules) == 0 {

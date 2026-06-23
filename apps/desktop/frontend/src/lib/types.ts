@@ -32,6 +32,9 @@ export interface AgentConfig {
   IgnoreFileName?: string;
   MaskFileName?: string;
   DefaultExclude: string[] | null;
+  // When true/unset, prepare/diff/sync also honor the feature worktree's
+  // .gitignore so agent build output is not synced back.
+  RespectGitignore?: boolean | null;
 }
 
 export interface GitLabConfig {

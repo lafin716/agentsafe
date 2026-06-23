@@ -31,6 +31,7 @@ import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/i18n/I18nProvider";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { LogConsoleButton } from "@/components/ui/log-console";
 import { WorkspacePage } from "@/pages/WorkspacePage";
 import { FeaturesPage } from "@/pages/FeaturesPage";
 import { FeatureDetailPage, type FeatureDetailTab } from "@/pages/FeatureDetailPage";
@@ -1271,6 +1272,7 @@ export default function App() {
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="flex items-center justify-end gap-2 border-b px-6 py-3">
+          <LogConsoleButton />
           <ThemeToggle />
         </header>
 

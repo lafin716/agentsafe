@@ -74,9 +74,29 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 			secSource := LoadSecurity(cfg, filepath.Join(root, r.worktreePath))
 			pats = append(pats, secRoot.Ignore...)
 			pats = append(pats, secSource.Ignore...)
-			matcher := NewIgnoreMatcher(pats)
 			source := config.AgentPath(root, fm.FolderKey(), r.name)
 			target := filepath.Join(root, r.worktreePath)
+			// Honor the feature worktree's own .gitignore so agent build output
+			// (e.g. a freshly built, possibly nested build/ dir) is not detected as
+			// an ADDED change and synced back. Scan both the agent copy (where new
+			// artifacts live) and the worktree (so an already-ignored worktree file
+			// is not misread as DELETED) against the worktree's ignore rules.
+			if cfg.Agent.GitignoreEnabled() {
+				gi, giErr := gitIgnoredPatterns(target, []string{source, target})
+				if giErr != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = giErr
+					}
+					mu.Unlock()
+					continue
+				}
+				pats = append(pats, gi...)
+				if len(gi) > 0 {
+					output.Printf("[%s] .gitignore excluded %d path(s) from sync\n", r.name, len(gi))
+				}
+			}
+			matcher := NewIgnoreMatcher(pats)
 			ch, compareErr := CompareIndexed(
 				r.name,
 				source,

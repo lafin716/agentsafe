@@ -24,6 +24,10 @@ agent:
     - target
     - .env
     - .env.*
+  # When true (default), prepare/diff/sync also exclude anything the feature
+  # worktree's Git would ignore (its .gitignore), so agent build output never
+  # syncs back. Set to false to opt out.
+  respectGitignore: true
 gitlab:
   baseUrl: https://gitlab.example.com
   tokenEnv: GITLAB_TOKEN

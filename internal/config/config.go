@@ -48,6 +48,19 @@ type AgentConfig struct {
 	IgnoreFileName string   `yaml:"ignoreFileName,omitempty"`
 	MaskFileName   string   `yaml:"maskFileName,omitempty"`
 	DefaultExclude []string `yaml:"defaultExclude"`
+	// RespectGitignore, when enabled, makes prepare/diff/sync also exclude any
+	// path the feature worktree's Git would ignore (its .gitignore rules), so an
+	// agent's build output never leaks back into the worktree. It is a pointer so
+	// an absent field in an existing config.yaml defaults to ON; use
+	// GitignoreEnabled to read it.
+	RespectGitignore *bool `yaml:"respectGitignore,omitempty"`
+}
+
+// GitignoreEnabled reports whether prepare/diff/sync should honor the feature
+// worktree's Git ignore rules. It defaults to true when the field is unset so
+// existing workspaces opt in automatically.
+func (a AgentConfig) GitignoreEnabled() bool {
+	return a.RespectGitignore == nil || *a.RespectGitignore
 }
 type GitLabConfig struct {
 	BaseURL      string `yaml:"baseUrl"`
@@ -71,6 +84,7 @@ func Default(root, name string) Config {
 		Agent: AgentConfig{
 			SecurityFileName: "agentsafe.yaml",
 			DefaultExclude:   []string{".git", "node_modules", "build", "dist", "target", ".gradle", ".idea", ".vscode", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.jks", "application-local.yml", "application-secret.yml", "application-dev.yml", "secrets.yml", "credentials.yml"},
+			RespectGitignore: boolPtr(true),
 		},
 		GitLab: GitLabConfig{BaseURL: "https://gitlab.example.com", TokenEnv: "GITLAB_TOKEN", TargetBranch: "develop"},
 		GitHub: GitHubConfig{TokenEnv: "GITHUB_TOKEN", TargetBranch: "main"},
@@ -94,6 +108,8 @@ func InitWorkspace(root, name string) (Config, error) {
 	writeIfMissing(filepath.Join(abs, "agentsafe.yaml"), SampleSecurityYAML)
 	return cfg, nil
 }
+
+func boolPtr(b bool) *bool { return &b }
 
 func writeIfMissing(path, data string) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {

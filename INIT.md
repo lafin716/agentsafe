@@ -267,6 +267,9 @@ agent:
     - .env.*
     - application-local.yml
     - application-secret.yml
+  # true(기본값)이면 prepare/diff/sync 시 피처 워크트리의 .gitignore도 함께
+  # 무시하여 에이전트 빌드 산출물이 역동기화되지 않는다. false로 끌 수 있다.
+  respectGitignore: true
 
 gitlab:
   baseUrl: https://gitlab.example.com
@@ -287,8 +290,14 @@ gitlab:
 1. 저장소별 `agentsafe.yaml`의 `ignore`
 2. 루트 `agentsafe.yaml`의 `ignore`
 3. config의 `agent.defaultExclude`
+4. 피처 워크트리의 `.gitignore` (`agent.respectGitignore`가 true일 때, 기본값)
 
 gitignore 스타일 패턴을 사용하며 `#`로 시작하는 항목은 주석으로 무시된다.
+
+`agent.respectGitignore`가 켜져 있으면 prepare/diff/sync가 피처 워크트리의 실제
+Git 무시 규칙(`git check-ignore`)을 함께 적용한다. 따라서 에이전트가 테스트용으로
+빌드한 산출물(예: 중첩된 `build/`)이 동기화 대상에 포함되지 않는다. 워크트리가 Git
+저장소가 아니면 이 단계는 자동으로 생략된다.
 
 ### 7.2 `mask` 섹션
 
