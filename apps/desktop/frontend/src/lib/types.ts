@@ -204,6 +204,40 @@ export interface MaskFile {
   rules: MaskRule[] | null;
 }
 
+export type PreviewStatus = "ignored" | "masked" | "copied";
+
+export interface MaskMatch {
+  name: string;
+  type: MaskRuleType;
+  pattern: string;
+  count: number;
+}
+
+export interface PreviewEntry {
+  path: string;
+  isDir: boolean;
+  status: PreviewStatus;
+  ignorePattern?: string;
+  maskMatches?: MaskMatch[] | null;
+  replacements?: number;
+  binary?: boolean;
+}
+
+export interface PreviewResult {
+  repo: string;
+  source: string;
+  ignored: number;
+  masked: number;
+  copied: number;
+  total: number;
+  entries: PreviewEntry[] | null;
+}
+
+export interface SecurityPreviewFile {
+  before: FileViewSide;
+  after: FileViewSide;
+}
+
 export interface SecurityTemplate {
   key: string;
   label: string;

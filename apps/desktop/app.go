@@ -1432,6 +1432,50 @@ func readFileViewSide(path string) FileViewSide {
 	return side
 }
 
+// SecurityPreviewFile is the before/after view of a single file under the
+// current saved mask policy, surfaced by the Agent security preview.
+type SecurityPreviewFile struct {
+	Before FileViewSide `json:"before"`
+	After  FileViewSide `json:"after"`
+}
+
+// ScanSecurityPreview scans a repository's main clone and predicts, per file,
+// whether the current saved ignore/mask policy would ignore, mask, or copy it.
+// It writes nothing.
+func (a *App) ScanSecurityPreview(repoName string) (agent.PreviewResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return agent.PreviewResult{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return agent.PreviewResult{}, err
+	}
+	return agent.ScanPreview(root, cfg, repoName)
+}
+
+// ScanSecurityPreviewFile returns the original and masked content of one file so
+// the preview can show how the saved mask policy would change it.
+func (a *App) ScanSecurityPreviewFile(repoName, path string) (SecurityPreviewFile, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return SecurityPreviewFile{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return SecurityPreviewFile{}, err
+	}
+	before, after, err := agent.PreviewFileDiff(root, cfg, repoName, path)
+	if err != nil {
+		return SecurityPreviewFile{}, err
+	}
+	rel := filepath.ToSlash(path)
+	return SecurityPreviewFile{
+		Before: FileViewSide{Path: rel, Exists: true, Content: before},
+		After:  FileViewSide{Path: rel, Exists: true, Content: after},
+	}, nil
+}
+
 // SyncOptions is the frontend-facing subset of agent.Options.
 type SyncOptions struct {
 	Repo            string `json:"repo"`

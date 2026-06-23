@@ -18,7 +18,6 @@ import {
   FolderOpen,
   History,
   LayoutGrid,
-  RefreshCw,
   Settings,
   ShieldCheck,
   X,
@@ -31,6 +30,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/i18n/I18nProvider";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { WorkspacePage } from "@/pages/WorkspacePage";
 import { FeaturesPage } from "@/pages/FeaturesPage";
 import { FeatureDetailPage, type FeatureDetailTab } from "@/pages/FeatureDetailPage";
@@ -88,6 +88,27 @@ type DropHint = {
   edge: DropEdge;
 };
 
+// Per-workspace window state. `Persisted` is JSON-serializable and saved to
+// localStorage keyed by workspace root; `Session` holds live terminal/agent
+// sessions and is kept in memory only (not serializable).
+type PersistedWindowState = {
+  openTabs: Record<string, AppTab>;
+  layout: PaneLayout;
+  splitSizes: SplitSizes;
+  activePaneId: string;
+};
+
+type SessionWindowState = {
+  featureTerminalTabs: Record<string, TerminalSession[]>;
+  featureAgentSessions: Record<string, TerminalSession | null>;
+  featureActiveTabs: Record<string, FeatureDetailTab>;
+  explorerTerminals: TerminalSession[];
+  explorerActiveTab: string;
+  featuresExpanded: Set<string>;
+  featuresActiveTerminal: Record<string, string>;
+  featuresTerminalHeights: Record<string, number>;
+};
+
 const workspaceTab: AppTab = {
   id: "workspace",
   view: { kind: "workspace" },
@@ -133,23 +154,6 @@ function loadSidebarMode(): SidebarMode {
       : "full";
   } catch {
     return "full";
-  }
-}
-
-function loadSplitSizes(): SplitSizes {
-  try {
-    const raw = localStorage.getItem("agentsafe.splitSizes");
-    if (!raw) return { rowSizes: [100], columnSizesByRow: {} };
-    const parsed = JSON.parse(raw) as SplitSizes;
-    return {
-      rowSizes: Array.isArray(parsed.rowSizes) ? parsed.rowSizes : [100],
-      columnSizesByRow:
-        parsed.columnSizesByRow && typeof parsed.columnSizesByRow === "object"
-          ? parsed.columnSizesByRow
-          : {},
-    };
-  } catch {
-    return { rowSizes: [100], columnSizesByRow: {} };
   }
 }
 
@@ -278,6 +282,102 @@ function normalizeSplitSizes(layout: PaneLayout, sizes: SplitSizes): SplitSizes 
   return { rowSizes, columnSizesByRow };
 }
 
+const WINDOWS_KEY = "agentsafe.workspaceWindows";
+
+function defaultSplitSizes(): SplitSizes {
+  return { rowSizes: [100], columnSizesByRow: {} };
+}
+
+function freshPersisted(): PersistedWindowState {
+  const layout = cloneLayout(initialLayout);
+  return {
+    openTabs: { workspace: workspaceTab },
+    layout,
+    splitSizes: normalizeSplitSizes(layout, defaultSplitSizes()),
+    activePaneId: "pane-1",
+  };
+}
+
+function freshSession(): SessionWindowState {
+  return {
+    featureTerminalTabs: {},
+    featureAgentSessions: {},
+    featureActiveTabs: {},
+    explorerTerminals: [],
+    explorerActiveTab: "main",
+    featuresExpanded: new Set(),
+    featuresActiveTerminal: {},
+    featuresTerminalHeights: {},
+  };
+}
+
+// Make a restored/persisted window state internally consistent: drop tab
+// references that no longer exist, normalize the pane layout, prune orphan
+// tabs, and fix the active pane / split sizes.
+function reconcileWindowState(state: Partial<PersistedWindowState>): PersistedWindowState {
+  const fallback = freshPersisted();
+  const openTabs =
+    state.openTabs && typeof state.openTabs === "object"
+      ? ({ ...state.openTabs } as Record<string, AppTab>)
+      : fallback.openTabs;
+  const rawLayout =
+    state.layout && state.layout.panes && Array.isArray(state.layout.rows)
+      ? state.layout
+      : fallback.layout;
+  const filtered: PaneLayout = {
+    panes: Object.fromEntries(
+      Object.entries(rawLayout.panes).map(([id, pane]) => {
+        const tabIds = (pane.tabIds ?? []).filter((tabId) => !!openTabs[tabId]);
+        return [
+          id,
+          {
+            ...pane,
+            tabIds,
+            activeTabId: tabIds.includes(pane.activeTabId) ? pane.activeTabId : tabIds[0] ?? "",
+          },
+        ];
+      })
+    ) as Record<string, PaneModel>,
+    rows: rawLayout.rows.map((row) => [...row]),
+  };
+  const layout = cleanupLayout(filtered);
+  const referenced = new Set(Object.values(layout.panes).flatMap((pane) => pane.tabIds));
+  const prunedTabs = Object.fromEntries(
+    Object.entries(openTabs).filter(([id]) => referenced.has(id))
+  ) as Record<string, AppTab>;
+  const activePaneId =
+    state.activePaneId && layout.panes[state.activePaneId]
+      ? state.activePaneId
+      : firstPaneId(layout);
+  const splitSizes = normalizeSplitSizes(layout, state.splitSizes ?? defaultSplitSizes());
+  return { openTabs: prunedTabs, layout, splitSizes, activePaneId };
+}
+
+function loadWorkspaceWindows(): Record<string, PersistedWindowState> {
+  try {
+    const raw = localStorage.getItem(WINDOWS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, Partial<PersistedWindowState>>;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, PersistedWindowState> = {};
+    for (const [root, state] of Object.entries(parsed)) {
+      if (!root) continue;
+      out[root] = reconcileWindowState(state ?? {});
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveWorkspaceWindows(map: Record<string, PersistedWindowState>) {
+  try {
+    localStorage.setItem(WINDOWS_KEY, JSON.stringify(map));
+  } catch {
+    /* localStorage unavailable */
+  }
+}
+
 export default function App() {
   const { notify } = useToast();
   const { t } = useI18n();
@@ -289,7 +389,7 @@ export default function App() {
   });
   const [layout, setLayout] = useState<PaneLayout>(() => cloneLayout(initialLayout));
   const [splitSizes, setSplitSizes] = useState<SplitSizes>(() =>
-    normalizeSplitSizes(initialLayout, loadSplitSizes())
+    normalizeSplitSizes(initialLayout, defaultSplitSizes())
   );
   const [activePaneId, setActivePaneId] = useState("pane-1");
   const [draggedTab, setDraggedTab] = useState<DraggedTab | null>(null);
@@ -314,6 +414,91 @@ export default function App() {
     Record<string, number>
   >({});
 
+  // Mirror of the live window state, refreshed every render, so callbacks can
+  // snapshot the current workspace's windows without going stale.
+  const live: PersistedWindowState & SessionWindowState = {
+    openTabs,
+    layout,
+    splitSizes,
+    activePaneId,
+    featureTerminalTabs,
+    featureAgentSessions,
+    featureActiveTabs,
+    explorerTerminals,
+    explorerActiveTab,
+    featuresExpanded,
+    featuresActiveTerminal,
+    featuresTerminalHeights,
+  };
+  const liveRef = useRef(live);
+  liveRef.current = live;
+
+  // Per-workspace window stores, keyed by workspace root. `persistedStore` is
+  // also mirrored to localStorage; `sessionStore` is in-memory only.
+  const persistedStoreRef = useRef<Record<string, PersistedWindowState>>(
+    loadWorkspaceWindows()
+  );
+  const sessionStoreRef = useRef<Record<string, SessionWindowState>>({});
+  const activeRootRef = useRef<string>("");
+
+  const applyPersisted = useCallback((state: PersistedWindowState) => {
+    setOpenTabs(state.openTabs);
+    setLayout(state.layout);
+    setSplitSizes(state.splitSizes);
+    setActivePaneId(state.activePaneId);
+  }, []);
+
+  const applySession = useCallback((state: SessionWindowState) => {
+    setFeatureTerminalTabs(state.featureTerminalTabs);
+    setFeatureAgentSessions(state.featureAgentSessions);
+    setFeatureActiveTabs(state.featureActiveTabs);
+    setExplorerTerminals(state.explorerTerminals);
+    setExplorerActiveTab(state.explorerActiveTab);
+    setFeaturesExpanded(state.featuresExpanded);
+    setFeaturesActiveTerminal(state.featuresActiveTerminal);
+    setFeaturesTerminalHeights(state.featuresTerminalHeights);
+  }, []);
+
+  // Snapshot the outgoing workspace's windows and restore the incoming one's.
+  // Returns true if a non-empty saved layout was restored.
+  const switchWorkspaceWindows = useCallback(
+    (newRoot: string): boolean => {
+      const prevRoot = activeRootRef.current;
+      if (prevRoot === newRoot) {
+        return Object.keys(liveRef.current.openTabs).length > 0;
+      }
+      if (prevRoot) {
+        const snap = liveRef.current;
+        persistedStoreRef.current[prevRoot] = reconcileWindowState({
+          openTabs: snap.openTabs,
+          layout: snap.layout,
+          splitSizes: snap.splitSizes,
+          activePaneId: snap.activePaneId,
+        });
+        sessionStoreRef.current[prevRoot] = {
+          featureTerminalTabs: snap.featureTerminalTabs,
+          featureAgentSessions: snap.featureAgentSessions,
+          featureActiveTabs: snap.featureActiveTabs,
+          explorerTerminals: snap.explorerTerminals,
+          explorerActiveTab: snap.explorerActiveTab,
+          featuresExpanded: snap.featuresExpanded,
+          featuresActiveTerminal: snap.featuresActiveTerminal,
+          featuresTerminalHeights: snap.featuresTerminalHeights,
+        };
+        saveWorkspaceWindows(persistedStoreRef.current);
+      }
+      const savedP = newRoot ? persistedStoreRef.current[newRoot] : undefined;
+      const savedS = newRoot ? sessionStoreRef.current[newRoot] : undefined;
+      applyPersisted(savedP ?? freshPersisted());
+      applySession(savedS ?? freshSession());
+      setDraggedTab(null);
+      setDropHint(null);
+      activeRootRef.current = newRoot;
+      return !!savedP && Object.keys(savedP.openTabs).length > 0;
+    },
+    [applyPersisted, applySession]
+  );
+
   const opened = !!config;
 
   const refreshConfig = useCallback(async () => {
@@ -321,10 +506,13 @@ export default function App() {
       const cfg = await api.GetConfig();
       setConfig(cfg);
       setRoot(cfg.Workspace.Root);
+      // Restore this workspace's windows on first load; a no-op when the same
+      // workspace is just re-read after a config change.
+      switchWorkspaceWindows(cfg.Workspace.Root);
     } catch {
       setConfig(null);
     }
-  }, []);
+  }, [switchWorkspaceWindows]);
 
   useEffect(() => {
     (async () => {
@@ -349,16 +537,26 @@ export default function App() {
     setSplitSizes((prev) => normalizeSplitSizes(layout, prev));
   }, [layout]);
 
+  // Persist the current workspace's windows (tabs/layout/splits) keyed by root.
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        "agentsafe.splitSizes",
-        JSON.stringify(normalizeSplitSizes(layout, splitSizes))
-      );
-    } catch {
-      /* localStorage unavailable */
-    }
-  }, [layout, splitSizes]);
+    const root = activeRootRef.current;
+    if (!root) return;
+    persistedStoreRef.current[root] = reconcileWindowState({
+      openTabs,
+      layout,
+      splitSizes,
+      activePaneId,
+    });
+    saveWorkspaceWindows(persistedStoreRef.current);
+  }, [openTabs, layout, splitSizes, activePaneId]);
+
+  // After a workspace is (re)loaded, prune restored tabs for features that no
+  // longer exist in this workspace.
+  useEffect(() => {
+    if (!root) return;
+    void pruneStaleTabs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root]);
 
   const nav: Array<{ view: View; label: string; icon: LucideIcon }> = [
     { view: { kind: "workspace" }, label: t("nav.workspace"), icon: FolderGit2 },
@@ -539,14 +737,25 @@ export default function App() {
 
   const onWorkspaceLoaded = useCallback(
     (cfg: Config) => {
+      const newRoot = cfg.Workspace.Root;
+      const restored = switchWorkspaceWindows(newRoot);
       setConfig(cfg);
-      setRoot(cfg.Workspace.Root);
-      openView({ kind: "features" }, { force: true });
+      setRoot(newRoot);
+      // Only force the features view for a brand-new workspace; otherwise keep
+      // the restored tabs/active tab as they were.
+      if (!restored) openView({ kind: "features" }, { force: true });
     },
-    [openView]
+    [openView, switchWorkspaceWindows]
   );
 
   const onRemovedActive = useCallback(() => {
+    const removed = activeRootRef.current;
+    if (removed) {
+      delete persistedStoreRef.current[removed];
+      delete sessionStoreRef.current[removed];
+      saveWorkspaceWindows(persistedStoreRef.current);
+    }
+    activeRootRef.current = "";
     setConfig(null);
     setRoot("");
     setOpenTabs({});
@@ -554,24 +763,51 @@ export default function App() {
     setActivePaneId("pane-1");
     setDraggedTab(null);
     setDropHint(null);
-  }, []);
+    applySession(freshSession());
+  }, [applySession]);
 
-  function closeTab(tabId: string) {
+  function closeTabs(tabIds: string[]) {
+    if (tabIds.length === 0) return;
     setOpenTabs((prev) => {
       const next = { ...prev };
-      delete next[tabId];
+      for (const tabId of tabIds) delete next[tabId];
       return next;
     });
     setLayout((prev) => {
       const next = cloneLayout(prev);
       for (const currentPaneId of Object.keys(next.panes)) {
-        next.panes[currentPaneId] = removeTabFromPane(next.panes[currentPaneId], tabId);
+        let pane = next.panes[currentPaneId];
+        for (const tabId of tabIds) pane = removeTabFromPane(pane, tabId);
+        next.panes[currentPaneId] = pane;
       }
       const normalized = cleanupLayout(next);
       const fallbackPaneId = normalized.panes[activePaneId] ? activePaneId : firstPaneId(normalized);
       setActivePaneId(fallbackPaneId);
       return normalized;
     });
+  }
+
+  function closeTab(tabId: string) {
+    closeTabs([tabId]);
+  }
+
+  // Drop restored feature/history tabs whose feature no longer exists.
+  async function pruneStaleTabs() {
+    try {
+      const res = await api.ListFeatures();
+      const names = new Set((res.features ?? []).map((f) => f.name));
+      const staleIds = Object.values(liveRef.current.openTabs)
+        .filter((tab) => {
+          if (tab.view.kind === "feature") return !names.has(tab.view.name);
+          if (tab.view.kind === "history")
+            return tab.view.feature ? !names.has(tab.view.feature) : false;
+          return false;
+        })
+        .map((tab) => tab.id);
+      closeTabs(staleIds);
+    } catch {
+      /* feature list unavailable; leave tabs as-is */
+    }
   }
 
   function nextSidebarMode() {
@@ -927,7 +1163,6 @@ export default function App() {
 
   const activePane = layout.panes[activePaneId] ?? layout.panes[firstPaneId(layout)];
   const activeTab = activePane?.activeTabId ? openTabs[activePane.activeTabId] : undefined;
-  const ActiveIcon = activeTab ? iconForView(activeTab.view) : FolderOpen;
   const effectiveSplitSizes = normalizeSplitSizes(layout, splitSizes);
 
   return (
@@ -1035,29 +1270,8 @@ export default function App() {
       )}
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex items-center justify-between border-b px-6 py-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <ActiveIcon className="size-5 shrink-0 text-muted-foreground" />
-            <h1 className="truncate text-lg font-semibold">
-              {activeTab ? titleForView(activeTab.view) : "열린 탭 없음"}
-            </h1>
-          </div>
-          {opened && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={async () => {
-                try {
-                  await refreshConfig();
-                  notify(t("toast.reloaded"), "success");
-                } catch (e) {
-                  notify(errMessage(e), "error");
-                }
-              }}
-            >
-              <RefreshCw className="size-4" /> {t("common.reload")}
-            </Button>
-          )}
+        <header className="flex items-center justify-end gap-2 border-b px-6 py-3">
+          <ThemeToggle />
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col p-2">

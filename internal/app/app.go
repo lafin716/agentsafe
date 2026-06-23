@@ -718,7 +718,43 @@ func agentCmd() *cobra.Command {
 	ship.Flags().BoolVar(&shipOpt.AllowMaskedSync, "allow-masked-sync", false, "allow masked files to sync")
 	ship.Flags().StringVarP(&shipMessage, "message", "m", "", "commit message (default: templated auto-sync message)")
 	ship.Flags().BoolVar(&shipNoPush, "no-push", false, "sync and commit only, skip push")
-	c.AddCommand(agentInit, del, diff, sync, open, ship, templateCmd())
+	preview := &cobra.Command{Use: "preview REPO", Short: "Preview how the saved ignore/mask policy would treat a repository's files", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, cfg, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		res, err := agent.ScanPreview(root, cfg, args[0])
+		if err != nil {
+			return err
+		}
+		if output.IsStructured() {
+			return output.Emit(res)
+		}
+		fmt.Printf("Repository: %s (%s)\n", res.Repo, res.Source)
+		fmt.Printf("ignored: %d  masked: %d  copied: %d  total: %d\n\n", res.Ignored, res.Masked, res.Copied, res.Total)
+		for _, e := range res.Entries {
+			detail := ""
+			switch e.Status {
+			case agent.PreviewIgnored:
+				if e.IgnorePattern != "" {
+					detail = "[" + e.IgnorePattern + "]"
+				}
+			case agent.PreviewMasked:
+				parts := make([]string, 0, len(e.MaskMatches))
+				for _, m := range e.MaskMatches {
+					parts = append(parts, fmt.Sprintf("%s x%d", m.Name, m.Count))
+				}
+				detail = "(" + strings.Join(parts, ", ") + ")"
+			default:
+				if e.Binary {
+					detail = "(binary)"
+				}
+			}
+			fmt.Printf("%-8s %s %s\n", strings.ToUpper(e.Status), e.Path, detail)
+		}
+		return nil
+	}}
+	c.AddCommand(agentInit, del, diff, sync, open, ship, preview, templateCmd())
 	return c
 }
 

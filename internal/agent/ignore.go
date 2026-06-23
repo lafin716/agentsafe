@@ -35,6 +35,15 @@ func LoadIgnoreFiles(paths ...string) []string {
 }
 
 func (m IgnoreMatcher) Match(rel string, isDir bool) bool {
+	_, ok := m.MatchWhich(rel, isDir)
+	return ok
+}
+
+// MatchWhich reports whether rel is ignored and, when it is, returns the
+// original pattern that matched. It is the source of truth for Match; callers
+// that need to surface the responsible rule (e.g. the policy preview) use it
+// directly.
+func (m IgnoreMatcher) MatchWhich(rel string, isDir bool) (string, bool) {
 	rel = filepath.ToSlash(rel)
 	base := path.Base(rel)
 	for _, pat := range m.patterns {
@@ -48,7 +57,7 @@ func (m IgnoreMatcher) Match(rel string, isDir bool) bool {
 		if dirOnly && !isDir {
 			if glob {
 				if globDirContains(p, rel) {
-					return true
+					return pat, true
 				}
 				continue
 			} else if !rootPathContains(p, rel) {
@@ -57,21 +66,21 @@ func (m IgnoreMatcher) Match(rel string, isDir bool) bool {
 		}
 		if !glob {
 			if rootPathContains(p, rel) {
-				return true
+				return pat, true
 			}
 			continue
 		}
 		if p == rel || strings.HasPrefix(rel, p+"/") {
-			return true
+			return pat, true
 		}
 		if ok, _ := path.Match(p, base); ok {
-			return true
+			return pat, true
 		}
 		if ok, _ := path.Match(p, rel); ok {
-			return true
+			return pat, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func rootPathContains(pattern, rel string) bool {

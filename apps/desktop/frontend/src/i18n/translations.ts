@@ -33,6 +33,8 @@ const en: Dict = {
   "sidebar.collapseToIcons": "Collapse to icons",
   "sidebar.hide": "Hide sidebar",
   "sidebar.expand": "Expand sidebar",
+  "theme.switchToDark": "Switch to dark mode",
+  "theme.switchToLight": "Switch to light mode",
 
   // common
   "common.reload": "Reload",
@@ -430,6 +432,39 @@ const en: Dict = {
   "agentsec.tplReplaceConfirm":
     "Replacing overwrites the current exclusion and masking settings with the selected templates. Continue?",
   "agentsec.tplApplied": "Templates applied",
+  // tabs + preview
+  "agentsec.tabTemplates": "Templates",
+  "agentsec.tabIgnore": "File exclusion",
+  "agentsec.tabMask": "Masking",
+  "agentsec.tabPreview": "Preview",
+  "agentsec.previewTitle": "Policy scan preview",
+  "agentsec.previewDesc":
+    "Scan a repository's main clone and see how the saved policy would treat each file before you prepare.",
+  "agentsec.previewSavedHint":
+    "Uses the saved agentsafe.yaml. Save edits in the File exclusion / Masking tabs first.",
+  "agentsec.previewRepo": "Repository",
+  "agentsec.previewSelectRepo": "Select a repository",
+  "agentsec.previewScan": "Scan",
+  "agentsec.previewNoRepos": "No repositories. Pull repositories first.",
+  "agentsec.previewEmpty": "Run a scan to preview the policy.",
+  "agentsec.previewNoMatch": "No files match this filter.",
+  "agentsec.statIgnored": "Ignored",
+  "agentsec.statMasked": "Masked",
+  "agentsec.statCopied": "Copied",
+  "agentsec.filterAll": "All",
+  "agentsec.colStatus": "Status",
+  "agentsec.colPath": "Path",
+  "agentsec.colDetail": "Detail",
+  "agentsec.statusIgnored": "IGNORED",
+  "agentsec.statusMasked": "MASKED",
+  "agentsec.statusCopied": "COPIED",
+  "agentsec.binary": "binary",
+  "agentsec.symlink": "symlink",
+  "agentsec.replacements": "{count} replacements",
+  "agentsec.viewDiff": "View",
+  "agentsec.diffTitle": "Mask preview · {path}",
+  "agentsec.diffBefore": "Before",
+  "agentsec.diffAfter": "After (masked)",
 
   // backups
   "backups.title": "Backups",
@@ -545,6 +580,8 @@ const ko: Dict = {
   "sidebar.collapseToIcons": "아이콘만 표시",
   "sidebar.hide": "사이드바 숨기기",
   "sidebar.expand": "사이드바 펼치기",
+  "theme.switchToDark": "다크 모드로 전환",
+  "theme.switchToLight": "라이트 모드로 전환",
 
   // common
   "common.reload": "새로고침",
@@ -938,6 +975,39 @@ const ko: Dict = {
   "agentsec.tplReplaceConfirm":
     "교체하면 현재 제외·마스킹 설정이 선택한 템플릿으로 덮어써집니다. 계속할까요?",
   "agentsec.tplApplied": "템플릿을 적용했습니다",
+  // tabs + preview
+  "agentsec.tabTemplates": "템플릿",
+  "agentsec.tabIgnore": "파일 제외",
+  "agentsec.tabMask": "마스킹",
+  "agentsec.tabPreview": "프리뷰",
+  "agentsec.previewTitle": "정책 스캔 프리뷰",
+  "agentsec.previewDesc":
+    "저장소의 메인 클론을 스캔해 prepare 전에 저장된 정책이 각 파일을 어떻게 처리할지 미리 확인합니다.",
+  "agentsec.previewSavedHint":
+    "저장된 agentsafe.yaml 기준입니다. 파일 제외 / 마스킹 탭에서 편집했다면 먼저 저장하세요.",
+  "agentsec.previewRepo": "저장소",
+  "agentsec.previewSelectRepo": "저장소 선택",
+  "agentsec.previewScan": "스캔",
+  "agentsec.previewNoRepos": "저장소가 없습니다. 먼저 저장소를 받아오세요.",
+  "agentsec.previewEmpty": "스캔을 실행해 정책을 미리 확인하세요.",
+  "agentsec.previewNoMatch": "이 필터에 해당하는 파일이 없습니다.",
+  "agentsec.statIgnored": "제외",
+  "agentsec.statMasked": "마스킹",
+  "agentsec.statCopied": "복사",
+  "agentsec.filterAll": "전체",
+  "agentsec.colStatus": "상태",
+  "agentsec.colPath": "경로",
+  "agentsec.colDetail": "상세",
+  "agentsec.statusIgnored": "제외",
+  "agentsec.statusMasked": "마스킹",
+  "agentsec.statusCopied": "복사",
+  "agentsec.binary": "바이너리",
+  "agentsec.symlink": "심볼릭링크",
+  "agentsec.replacements": "{count}회 치환",
+  "agentsec.viewDiff": "보기",
+  "agentsec.diffTitle": "마스킹 미리보기 · {path}",
+  "agentsec.diffBefore": "변경 전",
+  "agentsec.diffAfter": "변경 후 (마스킹)",
 
   // backups
   "backups.title": "백업 관리",

@@ -19,6 +19,8 @@ import type {
   GitLabConfig,
   MaskFile,
   PrepareMetadata,
+  PreviewResult,
+  SecurityPreviewFile,
   RebaseResult,
   Repository,
   RepoRuntimeState,
@@ -139,6 +141,11 @@ type AppBindings = {
   ApplySecurityTemplates(keys: string[], replace: boolean): Promise<void>;
   ExportAgentSecurity(): Promise<string>;
   ImportAgentSecurity(): Promise<string>;
+  ScanSecurityPreview(repoName: string): Promise<PreviewResult>;
+  ScanSecurityPreviewFile(
+    repoName: string,
+    path: string
+  ): Promise<SecurityPreviewFile>;
   ListBackups(): Promise<BackupEntry[]>;
   DeleteBackup(path: string): Promise<void>;
   DeleteAllBackups(): Promise<number>;
