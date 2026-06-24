@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, FolderOpen, Languages, Save, Stethoscope, Terminal, Upload } from "lucide-react";
+import { Bug, Download, FolderOpen, Languages, Save, Stethoscope, Terminal, Upload } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -34,6 +34,13 @@ export function SettingsPage({ config, onChanged }: Props) {
       return "powershell";
     }
   });
+  const [devMode, setDevMode] = useState(() => {
+    try {
+      return localStorage.getItem("agentsafe.devMode") === "true";
+    } catch {
+      return false;
+    }
+  });
 
   function choose(l: Locale) {
     if (l === locale) return;
@@ -47,6 +54,23 @@ export function SettingsPage({ config, onChanged }: Props) {
       localStorage.setItem("agentsafe.terminalProgram", v);
     } catch {
       /* ignore */
+    }
+    notify(t("settings.saved"), "success");
+  }
+
+  async function changeDevMode(on: boolean) {
+    setDevMode(on);
+    try {
+      localStorage.setItem("agentsafe.devMode", String(on));
+    } catch {
+      /* ignore */
+    }
+    try {
+      // Raise verbosity to debug while developer mode is on; baseline info otherwise.
+      await api.SetLogLevel(on ? "debug" : "info");
+    } catch (e) {
+      notify(errMessage(e), "error");
+      return;
     }
     notify(t("settings.saved"), "success");
   }
@@ -111,6 +135,26 @@ export function SettingsPage({ config, onChanged }: Props) {
               <option value="default">System default</option>
             </select>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bug className="size-5" /> {t("settings.devModeTitle")}
+          </CardTitle>
+          <CardDescription>{t("settings.devModeDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <label className="flex items-center gap-3 text-sm">
+            <input
+              type="checkbox"
+              checked={devMode}
+              onChange={(e) => changeDevMode(e.target.checked)}
+              className="size-4"
+            />
+            {t("settings.devModeLabel")}
+          </label>
         </CardContent>
       </Card>
 
