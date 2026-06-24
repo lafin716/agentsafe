@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentsafe/agentsafe/internal/applog"
 	"github.com/agentsafe/agentsafe/internal/config"
 	aggit "github.com/agentsafe/agentsafe/internal/git"
 	"github.com/agentsafe/agentsafe/internal/output"
@@ -845,10 +846,13 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 	for _, r := range prepared.Repositories {
 		preparedRepos[r.Name] = r.WorktreeRevision
 	}
+	statusStart := time.Now()
 	allReady := len(m.Repositories) > 0
 	for _, r := range m.Repositories {
 		p := filepath.Join(root, r.WorktreePath)
+		statusFilesStart := time.Now()
 		s, files, err := aggit.StatusFiles(p)
+		statusFilesMs := time.Since(statusFilesStart).Milliseconds()
 		repoStatus := RepoStatus{Name: r.Name, Status: s, Changes: []RepoFileStatus{}}
 		if st, statErr := os.Stat(config.AgentPath(root, m.FolderKey(), r.Name)); statErr == nil && st.IsDir() {
 			if revision, ok := preparedRepos[r.Name]; ok {
@@ -865,6 +869,7 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 		if repoStatus.AgentNeedsPrepare {
 			result.AgentNeedsPrepare = true
 		}
+		var unpushedMs int64
 		if err != nil {
 			repoStatus.Status = "ERROR: " + err.Error()
 			repoStatus.Error = err.Error()
@@ -876,11 +881,25 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 					Path: file.Path,
 				})
 			}
+			unpushedStart := time.Now()
 			repoStatus.Ahead = unpushedCount(p, r.Branch, r.BaseBranch)
+			unpushedMs = time.Since(unpushedStart).Milliseconds()
 		}
+		applog.Info("status repo timing",
+			"feature", name,
+			"repo", r.Name,
+			"statusFilesMs", statusFilesMs,
+			"unpushedMs", unpushedMs,
+			"changes", len(repoStatus.Changes),
+		)
 		result.Repositories = append(result.Repositories, repoStatus)
 	}
 	result.AgentReady = allReady
+	applog.Info("status completed",
+		"feature", name,
+		"repos", len(m.Repositories),
+		"ms", time.Since(statusStart).Milliseconds(),
+	)
 	return result, nil
 }
 

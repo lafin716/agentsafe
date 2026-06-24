@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agentsafe/agentsafe/internal/applog"
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/fsutil"
@@ -25,6 +26,7 @@ type Options struct {
 }
 
 func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[string][]Change, error) {
+	diffStart := time.Now()
 	fm, err := feature.Load(root, featureName)
 	if err != nil {
 		return nil, err
@@ -58,6 +60,9 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 			if failed {
 				continue
 			}
+			repoStart := time.Now()
+			var gitignoreMs int64
+			var gitignorePaths int
 			pats := []string{".git/"}
 			pats = append(pats, cfg.Agent.DefaultExclude...)
 			templatePats, templateErr := wttemplate.AgentIgnorePatterns(root, r.name)
@@ -82,7 +87,9 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 			// artifacts live) and the worktree (so an already-ignored worktree file
 			// is not misread as DELETED) against the worktree's ignore rules.
 			if cfg.Agent.GitignoreEnabled() {
+				giStart := time.Now()
 				gi, giErr := gitIgnoredPatterns(target, []string{source, target})
+				gitignoreMs = time.Since(giStart).Milliseconds()
 				if giErr != nil {
 					mu.Lock()
 					if firstErr == nil {
@@ -92,19 +99,23 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 					continue
 				}
 				pats = append(pats, gi...)
+				gitignorePaths = len(gi)
 				if len(gi) > 0 {
 					output.Printf("[%s] .gitignore excluded %d path(s) from sync\n", r.name, len(gi))
 				}
 			}
 			matcher := NewIgnoreMatcher(pats)
-			ch, compareErr := CompareIndexed(
+			index := preparedFileIndex(pm, r.name)
+			compareStart := time.Now()
+			ch, filesHashed, compareErr := CompareIndexed(
 				r.name,
 				source,
 				target,
 				matcher,
 				maskedMap(pm, r.name),
-				preparedFileIndex(pm, r.name),
+				index,
 			)
+			compareMs := time.Since(compareStart).Milliseconds()
 			if compareErr != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -126,6 +137,17 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 			mu.Lock()
 			result[r.name] = filtered
 			mu.Unlock()
+			applog.Info("diff repo timing",
+				"feature", featureName,
+				"repo", r.name,
+				"gitignoreMs", gitignoreMs,
+				"gitignorePaths", gitignorePaths,
+				"compareMs", compareMs,
+				"filesHashed", filesHashed,
+				"indexed", len(index) > 0,
+				"changes", len(filtered),
+				"totalMs", time.Since(repoStart).Milliseconds(),
+			)
 		}
 	}
 	for i := 0; i < workerCount; i++ {
@@ -143,6 +165,11 @@ func Diff(root string, cfg config.Config, featureName, repoFilter string) (map[s
 	if firstErr != nil {
 		return nil, firstErr
 	}
+	applog.Info("diff completed",
+		"feature", featureName,
+		"repos", len(result),
+		"ms", time.Since(diffStart).Milliseconds(),
+	)
 	return result, nil
 }
 

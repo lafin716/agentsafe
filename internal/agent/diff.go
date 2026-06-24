@@ -73,29 +73,43 @@ func scanFiles(root string, matcher IgnoreMatcher, withHashes bool, hashFile has
 	return out, err
 }
 
-func Compare(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool) ([]Change, error) {
+// Compare reports changes plus the number of content-hash operations it
+// performed (see compare).
+func Compare(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool) ([]Change, int, error) {
 	return compare(repoName, source, target, matcher, masked, nil, fsutil.SHA256File)
 }
 
 // CompareIndexed uses prepare-time stat metadata as a Git-like index. Files
 // whose size and modification time still match both snapshots need no content
-// reads; only possible changes are hashed for confirmation.
-func CompareIndexed(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool, index map[string]FileIndexEntry) ([]Change, error) {
+// reads; only possible changes are hashed for confirmation. It also returns the
+// number of content-hash operations performed, so callers can distinguish the
+// indexed fast path (near zero) from the whole-tree hashing fallback.
+func CompareIndexed(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool, index map[string]FileIndexEntry) ([]Change, int, error) {
 	if len(index) == 0 {
 		return Compare(repoName, source, target, matcher, masked)
 	}
 	return compare(repoName, source, target, matcher, masked, index, fsutil.SHA256File)
 }
 
-func compare(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool, index map[string]FileIndexEntry, hashFile hashFileFunc) ([]Change, error) {
-	withHashes := len(index) == 0
-	s, err := scanFiles(source, matcher, withHashes, hashFile)
-	if err != nil {
-		return nil, err
+// compare returns the detected changes and a count of content-hash operations.
+// The count tallies every hashFile call (each scanned file in the no-index
+// fallback, and the source/target reads for index candidates), so source and
+// target reads of the same file count as two — magnitude, not file identity, is
+// what diagnoses a slow compare.
+func compare(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool, index map[string]FileIndexEntry, hashFile hashFileFunc) ([]Change, int, error) {
+	hashed := 0
+	countHash := func(p string) (string, error) {
+		hashed++
+		return hashFile(p)
 	}
-	t, err := scanFiles(target, matcher, withHashes, hashFile)
+	withHashes := len(index) == 0
+	s, err := scanFiles(source, matcher, withHashes, countHash)
 	if err != nil {
-		return nil, err
+		return nil, hashed, err
+	}
+	t, err := scanFiles(target, matcher, withHashes, countHash)
+	if err != nil {
+		return nil, hashed, err
 	}
 	keys := map[string]bool{}
 	for k := range s {
@@ -141,13 +155,13 @@ func compare(repoName, source, target string, matcher IgnoreMatcher, masked map[
 				change = &c
 				break
 			}
-			sourceHash, err := hashFile(filepath.Join(source, filepath.FromSlash(k)))
+			sourceHash, err := countHash(filepath.Join(source, filepath.FromSlash(k)))
 			if err != nil {
-				return nil, err
+				return nil, hashed, err
 			}
-			targetHash, err := hashFile(filepath.Join(target, filepath.FromSlash(k)))
+			targetHash, err := countHash(filepath.Join(target, filepath.FromSlash(k)))
 			if err != nil {
-				return nil, err
+				return nil, hashed, err
 			}
 			si.hash, ti.hash = sourceHash, targetHash
 			if sourceHash != targetHash {
@@ -163,9 +177,9 @@ func compare(repoName, source, target string, matcher IgnoreMatcher, masked map[
 		if change.Masked && sok {
 			currentHash := si.hash
 			if currentHash == "" {
-				currentHash, err = hashFile(filepath.Join(source, filepath.FromSlash(k)))
+				currentHash, err = countHash(filepath.Join(source, filepath.FromSlash(k)))
 				if err != nil {
-					return nil, err
+					return nil, hashed, err
 				}
 			}
 			if baseline, ok := index[k]; ok && baseline.Agent.Hash == currentHash {
@@ -174,7 +188,7 @@ func compare(repoName, source, target string, matcher IgnoreMatcher, masked map[
 		}
 		changes = append(changes, *change)
 	}
-	return changes, nil
+	return changes, hashed, nil
 }
 
 func PrintChanges(feature string, byRepo map[string][]Change) {

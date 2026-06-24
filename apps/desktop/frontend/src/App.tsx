@@ -526,6 +526,17 @@ export default function App() {
     })();
   }, [refreshConfig]);
 
+  // Push the saved developer-mode preference to the backend log level on boot,
+  // so program logs start at debug detail when developer mode is enabled.
+  useEffect(() => {
+    try {
+      const on = localStorage.getItem("agentsafe.devMode") === "true";
+      void api.SetLogLevel(on ? "debug" : "info").catch(() => {});
+    } catch {
+      /* bindings or localStorage unavailable */
+    }
+  }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem("agentsafe.sidebarMode", sidebarMode);

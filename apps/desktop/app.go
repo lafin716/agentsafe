@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/agentsafe/agentsafe/internal/agent"
+	"github.com/agentsafe/agentsafe/internal/applog"
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/forge"
@@ -84,10 +85,12 @@ func (a *App) runTask(label string, fn func() error) error {
 	defer a.taskMu.Unlock()
 	a.taskSeq++
 	id := a.taskSeq
+	start := time.Now()
+	applog.Debug("task started", "task", label, "id", id)
 	runtime.EventsEmit(a.ctx, "task:start", map[string]any{
 		"id":        id,
 		"label":     label,
-		"startedAt": time.Now().UnixMilli(),
+		"startedAt": start.UnixMilli(),
 	})
 	output.SetSink(func(chunk string) {
 		runtime.EventsEmit(a.ctx, "task:log", map[string]any{"id": id, "chunk": chunk})
@@ -98,12 +101,25 @@ func (a *App) runTask(label string, fn func() error) error {
 	if err != nil {
 		status, msg = "error", err.Error()
 	}
+	ms := time.Since(start).Milliseconds()
+	if err != nil {
+		applog.Error("task failed", "task", label, "ms", ms, "err", err)
+	} else {
+		applog.Info("task completed", "task", label, "ms", ms)
+	}
 	runtime.EventsEmit(a.ctx, "task:end", map[string]any{"id": id, "status": status, "error": msg})
 	return err
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// Mirror program-log records to the frontend Log Console. File logging was
+	// already started in main(); the tap only attaches now that ctx exists, so
+	// records emitted before this point are in the file but not the live view.
+	applog.SetTap(func(e applog.Entry) {
+		runtime.EventsEmit(a.ctx, "log:entry", e)
+	})
+	applog.Info("desktop app started")
 	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
 		runtime.EventsEmit(ctx, "workspace:file-drop", map[string]any{
 			"x":     x,
@@ -115,7 +131,12 @@ func (a *App) startup(ctx context.Context) {
 	if r, err := registry.Load(); err == nil && r.Active != "" {
 		if root, _, err := config.LoadFrom(r.Active); err == nil {
 			a.root = root
+			applog.Info("restored active workspace", "root", root)
+		} else {
+			applog.Warn("active workspace failed to load", "path", r.Active, "err", err)
 		}
+	} else if err != nil {
+		applog.Warn("registry load failed", "err", err)
 	}
 }
 
@@ -125,6 +146,46 @@ func (a *App) requireRoot() (string, error) {
 		return "", fmt.Errorf("no workspace is open; open or initialize one first")
 	}
 	return a.root, nil
+}
+
+// ---- Program logging / developer mode ----
+
+// SetLogLevel switches the program log verbosity at runtime. The developer-mode
+// toggle calls this with "debug" or "info"; the change takes effect immediately
+// without a restart.
+func (a *App) SetLogLevel(level string) error {
+	if err := applog.SetLevel(level); err != nil {
+		return err
+	}
+	applog.Info("log level changed", "level", applog.Level())
+	return nil
+}
+
+// LogLevel reports the current program log level ("debug"/"info"/…).
+func (a *App) LogLevel() string { return applog.Level() }
+
+// LogFilePath returns the absolute path of the program log file.
+func (a *App) LogFilePath() (string, error) { return applog.LogFilePath() }
+
+// OpenLogFile opens the program log file in the OS default application.
+func (a *App) OpenLogFile() error {
+	path, err := applog.LogFilePath()
+	if err != nil {
+		return err
+	}
+	return openOSPath(path)
+}
+
+// OpenLogFolder reveals the program log directory in the OS file manager.
+func (a *App) OpenLogFolder() error {
+	dir, err := applog.LogDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return revealInFileManager(dir)
 }
 
 // ---- Workspace ----
@@ -154,10 +215,12 @@ func (a *App) SelectProgram() (string, error) {
 func (a *App) OpenWorkspace(path string) (config.Config, error) {
 	root, cfg, err := config.LoadFrom(path)
 	if err != nil {
+		applog.Warn("open workspace failed", "path", path, "err", err)
 		return config.Config{}, err
 	}
 	a.root = root
 	_ = registry.Add(cfg.Workspace.Name, root)
+	applog.Info("workspace opened", "name", cfg.Workspace.Name, "root", root)
 	return cfg, nil
 }
 
@@ -168,10 +231,12 @@ func (a *App) InitWorkspace(path, name string) (config.Config, error) {
 	}
 	cfg, err := config.InitWorkspace(path, name)
 	if err != nil {
+		applog.Warn("init workspace failed", "path", path, "err", err)
 		return config.Config{}, err
 	}
 	a.root = cfg.Workspace.Root
 	_ = registry.Add(cfg.Workspace.Name, cfg.Workspace.Root)
+	applog.Info("workspace initialized", "name", cfg.Workspace.Name, "root", cfg.Workspace.Root)
 	return cfg, nil
 }
 
@@ -694,6 +759,7 @@ func (a *App) TerminalWrite(id, data string) error {
 		// Some interactive Windows TUI programs can leave ConPTY writes blocked
 		// after Ctrl+C. Do not let a Wails binding goroutine freeze the UI.
 		a.markTerminalClosed(id, "terminal input timed out")
+		applog.Warn("terminal input timed out", "id", id)
 		runtime.EventsEmit(a.ctx, "terminal:close", map[string]any{
 			"id": id, "status": "error", "error": "terminal input timed out",
 		})
@@ -810,12 +876,18 @@ func (a *App) pipeTerminalOutput(id string, ptyProc ptySession, feature string) 
 		message = waitErr.Error()
 	}
 	a.markTerminalClosed(id, message)
+	if waitErr != nil {
+		applog.Warn("terminal closed with error", "id", id, "err", waitErr)
+	} else {
+		applog.Debug("terminal closed", "id", id)
+	}
 	runtime.EventsEmit(a.ctx, "terminal:close", map[string]any{
 		"id": id, "status": status, "error": message,
 	})
 	// Managed agent run finished — signal the feature so the UI can refresh the
 	// diff and prompt the user to sync.
 	if feature != "" {
+		applog.Info("agent run finished", "feature", feature, "status", status)
 		runtime.EventsEmit(a.ctx, "agent:exit", map[string]any{
 			"id": id, "feature": feature, "status": status, "error": message,
 		})

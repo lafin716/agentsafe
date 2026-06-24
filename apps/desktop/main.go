@@ -6,12 +6,20 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+
+	"github.com/agentsafe/agentsafe/internal/applog"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
 func main() {
+	// Start app-level file logging before anything else so even early startup
+	// failures are recorded. A failure here must not stop the app launching.
+	if err := applog.Init(""); err != nil {
+		println("applog init failed:", err.Error())
+	}
+
 	app := NewApp()
 
 	err := wails.Run(&options.App{
