@@ -47,7 +47,7 @@ func TestCompareIndexedSkipsHashesForUnchangedFiles(t *testing.T) {
 		},
 	}
 	hashCalls := 0
-	changes, err := compare("repo", agentDir, worktreeDir, NewIgnoreMatcher(nil), nil, index, func(path string) (string, error) {
+	changes, filesHashed, err := compare("repo", agentDir, worktreeDir, NewIgnoreMatcher(nil), nil, index, func(path string) (string, error) {
 		hashCalls++
 		return fsutil.SHA256File(path)
 	})
@@ -59,6 +59,9 @@ func TestCompareIndexedSkipsHashesForUnchangedFiles(t *testing.T) {
 	}
 	if hashCalls != 0 {
 		t.Fatalf("hashed %d unchanged files, want 0", hashCalls)
+	}
+	if filesHashed != hashCalls {
+		t.Fatalf("filesHashed = %d, want %d (hashCalls)", filesHashed, hashCalls)
 	}
 }
 
@@ -76,7 +79,7 @@ func TestCompareIndexedSkipsPreparedMaskedDifference(t *testing.T) {
 		},
 	}
 	hashCalls := 0
-	changes, err := compare(
+	changes, filesHashed, err := compare(
 		"repo",
 		agentDir,
 		worktreeDir,
@@ -96,6 +99,9 @@ func TestCompareIndexedSkipsPreparedMaskedDifference(t *testing.T) {
 	}
 	if hashCalls != 0 {
 		t.Fatalf("hashed prepared masked file %d time(s), want 0", hashCalls)
+	}
+	if filesHashed != hashCalls {
+		t.Fatalf("filesHashed = %d, want %d (hashCalls)", filesHashed, hashCalls)
 	}
 }
 
@@ -125,7 +131,7 @@ func TestCompareIndexedDetectsCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changes, err := CompareIndexed("repo", agentDir, worktreeDir, NewIgnoreMatcher(nil), nil, index)
+	changes, filesHashed, err := CompareIndexed("repo", agentDir, worktreeDir, NewIgnoreMatcher(nil), nil, index)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +152,12 @@ func TestCompareIndexedDetectsCandidates(t *testing.T) {
 		if got[path] != typ {
 			t.Errorf("%s = %s, want %s", path, got[path], typ)
 		}
+	}
+	// same-size.txt keeps its size but has a bumped modtime, so the indexed
+	// compare hashes its source and target copies (2 ops); the size-differ,
+	// added, and deleted files take no hash.
+	if filesHashed != 2 {
+		t.Fatalf("filesHashed = %d, want 2", filesHashed)
 	}
 }
 
@@ -228,12 +240,17 @@ func TestCompareIndexedFallsBackWithoutIndex(t *testing.T) {
 	writeIndexedFile(t, filepath.Join(agentDir, "file.txt"), "agent")
 	writeIndexedFile(t, filepath.Join(worktreeDir, "file.txt"), "tree")
 
-	changes, err := CompareIndexed("repo", agentDir, worktreeDir, NewIgnoreMatcher(nil), nil, nil)
+	changes, filesHashed, err := CompareIndexed("repo", agentDir, worktreeDir, NewIgnoreMatcher(nil), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(changes) != 1 || changes[0].Type != Modified {
 		t.Fatalf("changes = %#v, want one modified file", changes)
+	}
+	// No index: the fallback hashes every scanned file in both trees (file.txt
+	// in each), so two content-hash operations.
+	if filesHashed != 2 {
+		t.Fatalf("filesHashed = %d, want 2", filesHashed)
 	}
 }
 
