@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/agentsafe/agentsafe/internal/agent"
+	"github.com/agentsafe/agentsafe/internal/applog"
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
 	"github.com/agentsafe/agentsafe/internal/forge"
@@ -104,6 +105,13 @@ func (a *App) runTask(label string, fn func() error) error {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// Mirror program-log records to the frontend Log Console. File logging was
+	// already started in main(); the tap only attaches now that ctx exists, so
+	// records emitted before this point are in the file but not the live view.
+	applog.SetTap(func(e applog.Entry) {
+		runtime.EventsEmit(a.ctx, "log:entry", e)
+	})
+	applog.Info("desktop app started")
 	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
 		runtime.EventsEmit(ctx, "workspace:file-drop", map[string]any{
 			"x":     x,
@@ -125,6 +133,46 @@ func (a *App) requireRoot() (string, error) {
 		return "", fmt.Errorf("no workspace is open; open or initialize one first")
 	}
 	return a.root, nil
+}
+
+// ---- Program logging / developer mode ----
+
+// SetLogLevel switches the program log verbosity at runtime. The developer-mode
+// toggle calls this with "debug" or "info"; the change takes effect immediately
+// without a restart.
+func (a *App) SetLogLevel(level string) error {
+	if err := applog.SetLevel(level); err != nil {
+		return err
+	}
+	applog.Info("log level changed", "level", applog.Level())
+	return nil
+}
+
+// LogLevel reports the current program log level ("debug"/"info"/…).
+func (a *App) LogLevel() string { return applog.Level() }
+
+// LogFilePath returns the absolute path of the program log file.
+func (a *App) LogFilePath() (string, error) { return applog.LogFilePath() }
+
+// OpenLogFile opens the program log file in the OS default application.
+func (a *App) OpenLogFile() error {
+	path, err := applog.LogFilePath()
+	if err != nil {
+		return err
+	}
+	return openOSPath(path)
+}
+
+// OpenLogFolder reveals the program log directory in the OS file manager.
+func (a *App) OpenLogFolder() error {
+	dir, err := applog.LogDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return revealInFileManager(dir)
 }
 
 // ---- Workspace ----
