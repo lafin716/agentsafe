@@ -192,6 +192,11 @@ type AppBindings = {
   TerminalResize(id: string, cols: number, rows: number): Promise<void>;
   TerminalSnapshot(id: string): Promise<TerminalSnapshot>;
   TerminalClose(id: string): Promise<void>;
+  SetLogLevel(level: string): Promise<void>;
+  LogLevel(): Promise<string>;
+  LogFilePath(): Promise<string>;
+  OpenLogFile(): Promise<void>;
+  OpenLogFolder(): Promise<void>;
 };
 
 declare global {

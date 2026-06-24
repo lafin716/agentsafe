@@ -3,18 +3,23 @@ import {
   AlertCircle,
   CheckCircle2,
   Copy,
+  FileText,
+  FolderOpen,
   Loader2,
   ScrollText,
   Trash2,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
 import { useI18n } from "@/i18n/I18nProvider";
 
-// A persistent, app-wide console that records the full output of every task
-// (prepare / diff / sync / pull / …) streamed from the backend via the
-// task:start / task:log / task:end events. Unlike the transient TaskProgress
-// toast, it keeps history so the user can review verbose logs at any time.
+// A persistent, app-wide console. It records the full output of every task
+// (prepare / diff / sync / pull / …) streamed via task:start / task:log /
+// task:end, AND the app's own program log (startup, terminals, events, errors)
+// streamed via log:entry from the applog tap. Unlike the transient TaskProgress
+// toast, it keeps history so the user can review verbose logs at any time. The
+// full, persistent log file lives on disk; the header buttons open it.
 
 type TaskStatus = "running" | "done" | "error";
 
@@ -28,8 +33,17 @@ export type LogEntry = {
   endedAt: number | null;
 };
 
+// AppLogRecord mirrors internal/applog.Entry as emitted over the log:entry event.
+type AppLogRecord = {
+  time?: string;
+  level?: string;
+  msg?: string;
+  attrs?: Record<string, unknown>;
+};
+
 type LogConsoleContextValue = {
   entries: LogEntry[];
+  appLog: string;
   open: boolean;
   setOpen: (value: boolean) => void;
   toggle: () => void;
@@ -55,9 +69,22 @@ function runtime(): WailsRuntime | null {
 }
 
 const MAX_ENTRIES = 200;
+const MAX_APP_LINES = 1000;
+
+const APP_KEY = "app";
+
+function formatAppLine(e: AppLogRecord): string {
+  // RFC3339 "2006-01-02T15:04:05.000Z07:00" -> HH:MM:SS.mmm
+  const time = e.time ? e.time.slice(11, 23) : "";
+  const level = (e.level ?? "info").toUpperCase().padEnd(5);
+  const attrs =
+    e.attrs && Object.keys(e.attrs).length > 0 ? " " + JSON.stringify(e.attrs) : "";
+  return `${time} ${level} ${e.msg ?? ""}${attrs}`;
+}
 
 export function LogConsoleProvider({ children }: { children: React.ReactNode }) {
   const [entries, setEntries] = React.useState<LogEntry[]>([]);
+  const [appLogLines, setAppLogLines] = React.useState<string[]>([]);
   const [open, setOpen] = React.useState(false);
 
   React.useEffect(() => {
@@ -101,23 +128,36 @@ export function LogConsoleProvider({ children }: { children: React.ReactNode }) 
       );
     });
 
+    const offEntry = rt.EventsOn("log:entry", (...data: unknown[]) => {
+      const e = data[0] as AppLogRecord;
+      setAppLogLines((prev) => {
+        const next = [...prev, formatAppLine(e)];
+        return next.length > MAX_APP_LINES ? next.slice(next.length - MAX_APP_LINES) : next;
+      });
+    });
+
     return () => {
       offStart();
       offLog();
       offEnd();
+      offEntry();
     };
   }, []);
 
   const value = React.useMemo<LogConsoleContextValue>(
     () => ({
       entries,
+      appLog: appLogLines.join("\n"),
       open,
       setOpen,
       toggle: () => setOpen((v) => !v),
-      clear: () => setEntries([]),
+      clear: () => {
+        setEntries([]);
+        setAppLogLines([]);
+      },
       runningCount: entries.reduce((n, e) => (e.status === "running" ? n + 1 : n), 0),
     }),
-    [entries, open]
+    [entries, appLogLines, open]
   );
 
   return (
@@ -160,26 +200,36 @@ export function LogConsoleButton() {
 
 export function LogConsoleWindow() {
   const { t } = useI18n();
-  const { entries, open, setOpen, clear } = useLogConsole();
-  const [selectedId, setSelectedId] = React.useState<number | null>(null);
+  const { entries, appLog, open, setOpen, clear } = useLogConsole();
+  const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
   const logRef = React.useRef<HTMLPreElement | null>(null);
 
-  const selected = React.useMemo(() => {
-    if (entries.length === 0) return null;
-    const byId =
-      selectedId != null ? entries.find((e) => e.id === selectedId) : undefined;
-    return byId ?? entries[entries.length - 1];
-  }, [entries, selectedId]);
+  // Default selection: the most recent task, or the app log when no tasks ran.
+  const effectiveKey =
+    selectedKey ??
+    (entries.length > 0 ? `t-${entries[entries.length - 1].id}` : APP_KEY);
+  const isApp = effectiveKey === APP_KEY;
 
-  const detail = selected
-    ? [
-        selected.log.trimEnd(),
-        selected.error && !selected.log.includes(selected.error) ? selected.error : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-    : "";
+  const selectedTask = React.useMemo(() => {
+    if (isApp) return null;
+    const id = Number(effectiveKey.slice(2));
+    return entries.find((e) => e.id === id) ?? null;
+  }, [entries, effectiveKey, isApp]);
+
+  const title = isApp ? t("logs.appLog") : selectedTask?.label ?? "";
+  const detail = isApp
+    ? appLog
+    : selectedTask
+      ? [
+          selectedTask.log.trimEnd(),
+          selectedTask.error && !selectedTask.log.includes(selectedTask.error)
+            ? selectedTask.error
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : "";
 
   React.useEffect(() => {
     if (open && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -206,6 +256,13 @@ export function LogConsoleWindow() {
     }
   };
 
+  const openFile = () => {
+    void api.OpenLogFile().catch(() => {});
+  };
+  const openFolder = () => {
+    void api.OpenLogFolder().catch(() => {});
+  };
+
   return (
     <div
       className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-4"
@@ -220,8 +277,26 @@ export function LogConsoleWindow() {
           <h2 className="flex-1 text-sm font-semibold">{t("logs.title")}</h2>
           <button
             type="button"
+            onClick={openFile}
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            title={t("logs.openFile")}
+          >
+            <FileText className="size-3.5" />
+            {t("logs.openFile")}
+          </button>
+          <button
+            type="button"
+            onClick={openFolder}
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            title={t("logs.openFolder")}
+          >
+            <FolderOpen className="size-3.5" />
+            {t("logs.openFolder")}
+          </button>
+          <button
+            type="button"
             onClick={clear}
-            disabled={entries.length === 0}
+            disabled={entries.length === 0 && appLog === ""}
             className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
             title={t("logs.clear")}
           >
@@ -238,56 +313,63 @@ export function LogConsoleWindow() {
           </button>
         </div>
 
-        {entries.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-            {t("logs.empty")}
-          </div>
-        ) : (
-          <div className="flex min-h-0 flex-1">
-            <ul className="w-72 shrink-0 overflow-auto border-r">
-              {[...entries].reverse().map((entry) => (
-                <li key={entry.id}>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(entry.id)}
-                    className={cn(
-                      "flex w-full items-center gap-2 border-b px-3 py-2 text-left text-xs hover:bg-muted/60",
-                      selected?.id === entry.id && "bg-muted"
-                    )}
-                  >
-                    <StatusIcon status={entry.status} />
-                    <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-                    <span className="shrink-0 text-[10px] text-muted-foreground">
-                      {formatDuration(entry)}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <div className="flex items-center gap-2 border-b px-4 py-2">
-                <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                  {selected?.label}
+        <div className="flex min-h-0 flex-1">
+          <ul className="w-72 shrink-0 overflow-auto border-r">
+            <li>
+              <button
+                type="button"
+                onClick={() => setSelectedKey(APP_KEY)}
+                className={cn(
+                  "flex w-full items-center gap-2 border-b px-3 py-2 text-left text-xs hover:bg-muted/60",
+                  isApp && "bg-muted"
+                )}
+              >
+                <ScrollText className="size-3.5 shrink-0 text-primary" />
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {t("logs.appLog")}
                 </span>
+              </button>
+            </li>
+            {[...entries].reverse().map((entry) => (
+              <li key={entry.id}>
                 <button
                   type="button"
-                  onClick={copy}
-                  className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                  title={t("logs.copy")}
+                  onClick={() => setSelectedKey(`t-${entry.id}`)}
+                  className={cn(
+                    "flex w-full items-center gap-2 border-b px-3 py-2 text-left text-xs hover:bg-muted/60",
+                    !isApp && selectedTask?.id === entry.id && "bg-muted"
+                  )}
                 >
-                  <Copy className="size-3.5" />
-                  {copied ? t("logs.copied") : t("logs.copy")}
+                  <StatusIcon status={entry.status} />
+                  <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {formatDuration(entry)}
+                  </span>
                 </button>
-              </div>
-              <pre
-                ref={logRef}
-                className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/30 p-4 text-xs leading-relaxed"
+              </li>
+            ))}
+          </ul>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <div className="flex items-center gap-2 border-b px-4 py-2">
+              <span className="min-w-0 flex-1 truncate text-xs font-medium">{title}</span>
+              <button
+                type="button"
+                onClick={copy}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                title={t("logs.copy")}
               >
-                {detail || t("task.empty")}
-              </pre>
+                <Copy className="size-3.5" />
+                {copied ? t("logs.copied") : t("logs.copy")}
+              </button>
             </div>
+            <pre
+              ref={logRef}
+              className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/30 p-4 text-xs leading-relaxed"
+            >
+              {detail || t("logs.empty")}
+            </pre>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
