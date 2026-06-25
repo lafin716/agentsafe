@@ -189,7 +189,11 @@ export function WorktreeTemplatesPage({ config }: Props) {
       setRepos(configured ?? []);
       setExpandedTemplateNodes((prev) => {
         const next = new Set(prev);
-        for (const tree of trees ?? []) next.add(nodeKey(tree.template.id, ""));
+        for (const tree of trees ?? []) {
+          const effectiveRoot =
+            tree.root.children?.length === 1 ? tree.root.children[0] : tree.root;
+          next.add(nodeKey(tree.template.id, effectiveRoot.relPath));
+        }
         return next;
       });
     } catch (e) {
@@ -500,7 +504,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
     isRoot?: boolean;
   }) {
     const key = nodeKey(tree.template.id, node.relPath);
-    const open = expandedTemplateNodes.has(key) || isRoot;
+    const open = expandedTemplateNodes.has(key);
     const hasChildren = (node.children ?? []).length > 0;
     const displayName = isRoot ? tree.template.name : node.name;
     return (
