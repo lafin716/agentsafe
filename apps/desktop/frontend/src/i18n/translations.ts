@@ -390,6 +390,9 @@ const en: Dict = {
   "settings.diagTokenMissing": "not set",
   "settings.hintPrefixSlash": "Should end with '/'.",
   "settings.hintUrlScheme": "Should start with https://.",
+  "settings.defaultToolTitle": "Default tool",
+  "settings.defaultToolDesc": "Editor/program used by the \"Open with\" menu across the app.",
+  "settings.toolPick": "Pick a program…",
 
   // agent security
   "agentsec.noWorkspace": "Open a workspace to edit agent security settings.",
@@ -950,6 +953,9 @@ const ko: Dict = {
   "settings.diagTokenMissing": "없음",
   "settings.hintPrefixSlash": "'/'로 끝나야 합니다.",
   "settings.hintUrlScheme": "https://로 시작해야 합니다.",
+  "settings.defaultToolTitle": "기본 툴",
+  "settings.defaultToolDesc": "앱 전체의 '툴 열기' 메뉴에서 사용할 편집기/프로그램입니다.",
+  "settings.toolPick": "직접 선택…",
 
   // agent security
   "agentsec.noWorkspace": "Agent 보안 설정을 편집하려면 워크스페이스를 여세요.",

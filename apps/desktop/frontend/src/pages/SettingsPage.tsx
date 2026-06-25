@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bug, Download, FolderOpen, Languages, Save, Stethoscope, Terminal, Upload } from "lucide-react";
+import { Bug, Download, FolderOpen, Languages, Save, Stethoscope, Terminal, Upload, Wrench } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -18,6 +18,13 @@ import { LOCALES, type Locale } from "@/i18n/translations";
 import { api, errMessage } from "@/lib/api";
 import type { Config, GitDiag } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import {
+  TOOL_PRESETS,
+  TOOL_PRESET_VALUES,
+  getDefaultTool,
+  setDefaultTool,
+  toolLabel,
+} from "@/lib/tool";
 
 interface Props {
   config: Config | null;
@@ -41,6 +48,25 @@ export function SettingsPage({ config, onChanged }: Props) {
       return false;
     }
   });
+  const [tool, setTool] = useState(getDefaultTool);
+
+  async function changeTool(v: string) {
+    if (v === "__pick__") {
+      try {
+        const sel = await api.SelectProgram();
+        if (!sel) return;
+        setDefaultTool(sel);
+        setTool(sel);
+        notify(t("settings.saved"), "success");
+      } catch (e) {
+        notify(errMessage(e), "error");
+      }
+      return;
+    }
+    setDefaultTool(v);
+    setTool(v);
+    notify(t("settings.saved"), "success");
+  }
 
   function choose(l: Locale) {
     if (l === locale) return;
@@ -133,6 +159,36 @@ export function SettingsPage({ config, onChanged }: Props) {
               <option value="git-bash">Git Bash</option>
               <option value="wt">Windows Terminal</option>
               <option value="default">System default</option>
+            </select>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Wrench className="size-5" /> {t("settings.defaultToolTitle")}
+          </CardTitle>
+          <CardDescription>{t("settings.defaultToolDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-1.5">
+            <Label htmlFor="defaultTool">{t("settings.defaultToolTitle")}</Label>
+            <select
+              id="defaultTool"
+              value={TOOL_PRESET_VALUES.includes(tool) ? tool : "__custom__"}
+              onChange={(e) => changeTool(e.target.value)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              {TOOL_PRESETS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+              {!TOOL_PRESET_VALUES.includes(tool) && (
+                <option value="__custom__">{toolLabel(tool)}</option>
+              )}
+              <option value="__pick__">{t("settings.toolPick")}</option>
             </select>
           </div>
         </CardContent>
