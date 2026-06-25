@@ -50,6 +50,9 @@ const en: Dict = {
   "terminal.restore": "Restore",
   "split.resizeColumn": "Drag to resize columns",
   "split.resizeRow": "Drag to resize rows",
+  "toolOpen.title": "Open with",
+  "toolOpen.folder": "Folder",
+  "toolOpen.terminal": "Terminal",
 
   // workspace switcher
   "switcher.select": "Select workspace",
@@ -608,6 +611,9 @@ const ko: Dict = {
   "terminal.restore": "복원",
   "split.resizeColumn": "드래그하여 좌우 크기 조절",
   "split.resizeRow": "드래그하여 상하 크기 조절",
+  "toolOpen.title": "툴 열기",
+  "toolOpen.folder": "폴더",
+  "toolOpen.terminal": "터미널",
 
   // workspace switcher
   "switcher.select": "워크스페이스 선택",
