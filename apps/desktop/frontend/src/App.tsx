@@ -727,12 +727,31 @@ export default function App() {
     (view: View, options?: { force?: boolean }) => {
       if (!options?.force && isWorkspaceDependent(view) && !opened) return;
       const id = viewId(view);
-      setOpenTabs((prev) =>
-        ({
-          ...prev,
-          [id]: prev[id] ?? { id, view, closable: true },
-        })
-      );
+      // If the tab already exists, just activate it where it lives — do NOT
+      // move/reinsert it (that reorders tabs on every menu click).
+      const existingPaneId = paneContainingTab(layout, id);
+      if (existingPaneId && openTabs[id]) {
+        setActivePaneId(existingPaneId);
+        setLayout((prev) =>
+          prev.panes[existingPaneId]
+            ? {
+                ...prev,
+                panes: {
+                  ...prev.panes,
+                  [existingPaneId]: {
+                    ...prev.panes[existingPaneId],
+                    activeTabId: id,
+                  },
+                },
+              }
+            : prev
+        );
+        return;
+      }
+      setOpenTabs((prev) => ({
+        ...prev,
+        [id]: prev[id] ?? { id, view, closable: true },
+      }));
       setLayout((prev) => {
         const targetPaneId = prev.panes[activePaneId] ? activePaneId : firstPaneId(prev);
         const next = moveTabToPane(
@@ -744,7 +763,7 @@ export default function App() {
         return next;
       });
     },
-    [activePaneId, opened]
+    [activePaneId, opened, layout, openTabs]
   );
 
   const onWorkspaceLoaded = useCallback(
