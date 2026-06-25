@@ -18,6 +18,7 @@ import {
   PanelLeft,
   Settings,
   ShieldCheck,
+  Terminal,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -30,6 +31,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LogConsoleButton } from "@/components/ui/log-console";
+import { TerminalPanel } from "@/components/TerminalPanel";
 import { WorkspacePage } from "@/pages/WorkspacePage";
 import { FeaturesPage } from "@/pages/FeaturesPage";
 import { FeatureDetailPage, type FeatureDetailTab } from "@/pages/FeatureDetailPage";
@@ -50,7 +52,8 @@ type View =
   | { kind: "agentsec" }
   | { kind: "backups" }
   | { kind: "history"; feature?: string }
-  | { kind: "settings" };
+  | { kind: "settings" }
+  | { kind: "terminal"; id: string; path: string; title: string };
 
 type SidebarMode = "full" | "icons" | "hidden";
 type DropEdge = "left" | "right" | "top" | "bottom";
@@ -136,6 +139,8 @@ function viewId(view: View): string {
       return `feature:${view.name}`;
     case "history":
       return view.feature ? `history:${view.feature}` : "history";
+    case "terminal":
+      return `terminal:${view.id}`;
     default:
       return view.kind;
   }
@@ -607,6 +612,8 @@ export default function App() {
           : t("header.history");
       case "settings":
         return t("header.settings");
+      case "terminal":
+        return view.title;
     }
   }
 
@@ -629,6 +636,8 @@ export default function App() {
         return History;
       case "settings":
         return Settings;
+      case "terminal":
+        return Terminal;
     }
   }
 
@@ -764,6 +773,18 @@ export default function App() {
     [activePaneId, opened, layout, openTabs]
   );
 
+  const openTerminalTab = useCallback(
+    (session: TerminalSession) => {
+      openView({
+        kind: "terminal",
+        id: session.id,
+        path: session.path,
+        title: session.title || "Terminal",
+      });
+    },
+    [openView]
+  );
+
   const onWorkspaceLoaded = useCallback(
     (cfg: Config) => {
       const newRoot = cfg.Workspace.Root;
@@ -797,6 +818,10 @@ export default function App() {
 
   function closeTabs(tabIds: string[]) {
     if (tabIds.length === 0) return;
+    for (const tabId of tabIds) {
+      const view = openTabs[tabId]?.view;
+      if (view?.kind === "terminal") void api.TerminalClose(view.id);
+    }
     setOpenTabs((prev) => {
       const next = { ...prev };
       for (const tabId of tabIds) delete next[tabId];
@@ -902,6 +927,7 @@ export default function App() {
             root={root}
             onLoaded={onWorkspaceLoaded}
             onChanged={refreshConfig}
+            onOpenTerminal={openTerminalTab}
           />
         );
       case "features":
@@ -971,6 +997,8 @@ export default function App() {
         return <BackupsPage config={config} />;
       case "settings":
         return <SettingsPage config={config} onChanged={refreshConfig} />;
+      case "terminal":
+        return <TerminalPanel id={view.id} path={view.path} className="flex h-full flex-col" />;
     }
   }
 
