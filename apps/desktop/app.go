@@ -2773,6 +2773,28 @@ func (a *App) OpenInEditor(name, editor string) (string, error) {
 	return p, nil
 }
 
+// OpenPathInProgram opens an absolute (in-workspace) path in the given program
+// (e.g. "code" or "cursor"). When program is empty it returns the resolved path
+// only. GUI-only helper used by the tool-open menu for worktree/agent/workspace
+// paths; mirrors OpenInEditor but takes an explicit path instead of a feature.
+func (a *App) OpenPathInProgram(path, program string) (string, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return "", err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(program) == "" {
+		return target, nil
+	}
+	if err := launchProgram(target, program); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
 // OpenInTerminal opens the agent workspace for a feature in the system terminal.
 func (a *App) OpenInTerminal(name string) (string, error) {
 	root, err := a.requireRoot()

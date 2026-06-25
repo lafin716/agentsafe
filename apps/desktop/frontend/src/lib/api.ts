@@ -73,6 +73,7 @@ type AppBindings = {
   SaveWorkspaceFile(path: string, content: string): Promise<void>;
   OpenPath(path: string): Promise<string>;
   OpenPathVSCode(path: string): Promise<string>;
+  OpenPathInProgram(path: string, program: string): Promise<string>;
   DeleteWorkspacePath(path: string): Promise<void>;
   ListWorkspaces(): Promise<WorkspaceEntry[]>;
   RemoveWorkspace(path: string): Promise<void>;
