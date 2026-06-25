@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Code2,
   DownloadCloud,
   FolderOpen,
   Loader2,
   Plus,
   RefreshCw,
   Sparkles,
-  Terminal,
   Trash2,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
-import type { Config, RepoRuntimeState } from "@/lib/types";
+import type { Config, RepoRuntimeState, TerminalSession } from "@/lib/types";
+import { ToolOpenMenu } from "@/components/ToolOpenMenu";
+import { useDefaultTool } from "@/lib/tool";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -39,6 +39,7 @@ interface Props {
   root: string;
   onLoaded: (cfg: Config) => void;
   onChanged: () => void | Promise<void>;
+  onOpenTerminal: (session: TerminalSession) => void;
 }
 
 type AuthRequired = {
@@ -65,10 +66,11 @@ function authRequired(error: unknown): AuthRequired | null {
   }
 }
 
-export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
+export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTerminal }: Props) {
   const { notify } = useToast();
   const confirm = useConfirm();
   const { t } = useI18n();
+  const tool = useDefaultTool();
   const [busy, setBusy] = useState(false);
   const [actingRepo, setActingRepo] = useState<string | null>(null);
   const [repoLocalStates, setRepoLocalStates] = useState<Record<string, boolean>>({});
@@ -286,6 +288,22 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
     }
   }
 
+  async function openWorkspaceTerminalTab() {
+    try {
+      setBusy(true);
+      const s = await api.TerminalOpen(root);
+      if (s.external) {
+        notify(t("toast.openedWorkspaceTerminal", { path: s.path }), "success");
+        return;
+      }
+      onOpenTerminal(s);
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function checkoutRepo(name: string) {
     const branch = selectedRemoteBranches[name];
     if (!branch) return;
@@ -351,49 +369,23 @@ export function WorkspacePage({ config, root, onLoaded, onChanged }: Props) {
             <CardTitle>{config.Workspace.Name}</CardTitle>
             <CardDescription className="break-all">{root}</CardDescription>
           </div>
-          <div className="flex shrink-0 flex-wrap justify-end gap-2">
-            <Button
-              variant="outline"
-              size="sm"
+          <div className="flex shrink-0 justify-end">
+            <ToolOpenMenu
               disabled={busy}
-              onClick={() =>
+              onFolder={() =>
                 openWorkspace(
                   () => api.OpenWorkspaceFolder(),
                   "toast.openedWorkspaceFolder"
                 )
               }
-            >
-              <FolderOpen className="size-4" />
-              {t("workspace.openFolder")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
+              onTerminal={openWorkspaceTerminalTab}
+              onTool={() =>
                 openWorkspace(
-                  () => api.OpenWorkspaceTerminal(),
-                  "toast.openedWorkspaceTerminal"
+                  () => api.OpenPathInProgram("", tool.value),
+                  "toast.openedPath"
                 )
               }
-            >
-              <Terminal className="size-4" />
-              {t("workspace.openTerminal")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={() =>
-                openWorkspace(
-                  () => api.OpenWorkspaceVSCode(),
-                  "toast.openedWorkspaceVSCode"
-                )
-              }
-            >
-              <Code2 className="size-4" />
-              {t("workspace.openVSCode")}
-            </Button>
+            />
           </div>
         </CardHeader>
       </Card>

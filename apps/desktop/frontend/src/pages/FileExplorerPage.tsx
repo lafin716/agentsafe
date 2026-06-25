@@ -9,7 +9,6 @@
 import {
   ChevronDown,
   ChevronRight,
-  Code2,
   Copy,
   File,
   Folder,
@@ -36,6 +35,8 @@ import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 import { TerminalPanel } from "@/components/TerminalPanel";
+import { ToolOpenMenu } from "@/components/ToolOpenMenu";
+import { useDefaultTool } from "@/lib/tool";
 
 interface Props {
   config: Config | null;
@@ -104,6 +105,7 @@ export function FileExplorerPage({
   const { t } = useI18n();
   const { notify } = useToast();
   const confirm = useConfirm();
+  const tool = useDefaultTool();
   const [root, setRoot] = useState<WorkspaceTreeNode | null>(null);
   const [selected, setSelected] = useState<WorkspaceTreeNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -180,11 +182,11 @@ export function FileExplorerPage({
     }
   }
 
-  async function openVSCode() {
+  async function openTool() {
     if (!selected) return;
     try {
-      const path = await api.OpenPathVSCode(selected.path);
-      notify(t("toast.openedPath", { path }), "success");
+      const p = await api.OpenPathInProgram(selected.path, tool.value);
+      notify(t("toast.openedPath", { path: p }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
     }
@@ -380,7 +382,7 @@ export function FileExplorerPage({
   }
 
   return (
-    <div className="grid h-[calc(100vh-9rem)] grid-cols-[minmax(260px,360px)_1fr] gap-4">
+    <div className="grid h-full min-h-0 grid-cols-[minmax(260px,360px)_1fr] gap-4">
       <Card className="overflow-hidden">
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div>
@@ -396,8 +398,8 @@ export function FileExplorerPage({
         </CardContent>
       </Card>
 
-      <Card className="min-w-0 overflow-hidden">
-        <div className="flex items-center gap-1 overflow-x-auto border-b bg-muted/30 px-3 pt-2">
+      <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b bg-muted/30 px-3 pt-2">
           <button
             type="button"
             className={cn(
@@ -471,7 +473,7 @@ export function FileExplorerPage({
           ))}
         </div>
         {activeTab === "main" ? (
-          <>
+          <div className="min-h-0 flex-1 overflow-auto">
             <CardHeader>
               <CardTitle>{selected?.name ?? t("explorer.noneSelected")}</CardTitle>
               <CardDescription className="break-all font-mono">
@@ -496,20 +498,18 @@ export function FileExplorerPage({
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={openSelected} disabled={busy}>
-                      <FolderOpen className="size-4" /> {t("explorer.open")}
-                    </Button>
-                    <Button variant="outline" onClick={openVSCode} disabled={busy}>
-                      <Code2 className="size-4" /> {t("explorer.openVSCode")}
-                    </Button>
+                    <ToolOpenMenu
+                      align="start"
+                      disabled={busy || !selected}
+                      onFolder={openSelected}
+                      onTerminal={openEmbeddedTerminal}
+                      onTool={openTool}
+                    />
                     {!selected.isDir && (
                       <Button variant="outline" onClick={() => openEditor(selected)} disabled={busy}>
                         <File className="size-4" /> {t("explorer.openEditor")}
                       </Button>
                     )}
-                    <Button variant="outline" onClick={openEmbeddedTerminal} disabled={busy}>
-                      <TerminalIcon className="size-4" /> {t("explorer.openTerminal")}
-                    </Button>
                     <Button variant="outline" onClick={copyPath} disabled={busy}>
                       <Copy className="size-4" /> {t("feature.copyPath")}
                     </Button>
@@ -520,9 +520,9 @@ export function FileExplorerPage({
                 </>
               )}
             </CardContent>
-          </>
+          </div>
         ) : activeEditor ? (
-          <div className="flex h-[calc(100vh-12rem)] flex-col">
+          <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{activeEditor.title}</div>
@@ -547,7 +547,9 @@ export function FileExplorerPage({
             />
           </div>
         ) : activeTerminal ? (
-          <TerminalPanel id={activeTerminal.id} path={activeTerminal.path} />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <TerminalPanel id={activeTerminal.id} path={activeTerminal.path} />
+          </div>
         ) : null}
       </Card>
     </div>

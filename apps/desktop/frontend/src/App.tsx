@@ -10,16 +10,15 @@ import {
 } from "react";
 import {
   Archive,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
   FileText,
   FolderGit2,
   FolderOpen,
   History,
   LayoutGrid,
+  PanelLeft,
   Settings,
   ShieldCheck,
+  Terminal,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -32,6 +31,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { WorkspaceSwitcher } from "@/components/WorkspaceSwitcher";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LogConsoleButton } from "@/components/ui/log-console";
+import { TerminalPanel } from "@/components/TerminalPanel";
 import { WorkspacePage } from "@/pages/WorkspacePage";
 import { FeaturesPage } from "@/pages/FeaturesPage";
 import { FeatureDetailPage, type FeatureDetailTab } from "@/pages/FeatureDetailPage";
@@ -52,7 +52,8 @@ type View =
   | { kind: "agentsec" }
   | { kind: "backups" }
   | { kind: "history"; feature?: string }
-  | { kind: "settings" };
+  | { kind: "settings" }
+  | { kind: "terminal"; id: string; path: string; title: string };
 
 type SidebarMode = "full" | "icons" | "hidden";
 type DropEdge = "left" | "right" | "top" | "bottom";
@@ -138,6 +139,8 @@ function viewId(view: View): string {
       return `feature:${view.name}`;
     case "history":
       return view.feature ? `history:${view.feature}` : "history";
+    case "terminal":
+      return `terminal:${view.id}`;
     default:
       return view.kind;
   }
@@ -609,6 +612,8 @@ export default function App() {
           : t("header.history");
       case "settings":
         return t("header.settings");
+      case "terminal":
+        return view.title;
     }
   }
 
@@ -631,6 +636,8 @@ export default function App() {
         return History;
       case "settings":
         return Settings;
+      case "terminal":
+        return Terminal;
     }
   }
 
@@ -727,12 +734,31 @@ export default function App() {
     (view: View, options?: { force?: boolean }) => {
       if (!options?.force && isWorkspaceDependent(view) && !opened) return;
       const id = viewId(view);
-      setOpenTabs((prev) =>
-        ({
-          ...prev,
-          [id]: prev[id] ?? { id, view, closable: true },
-        })
-      );
+      // If the tab already exists, just activate it where it lives — do NOT
+      // move/reinsert it (that reorders tabs on every menu click).
+      const existingPaneId = paneContainingTab(layout, id);
+      if (existingPaneId && openTabs[id]) {
+        setActivePaneId(existingPaneId);
+        setLayout((prev) =>
+          prev.panes[existingPaneId]
+            ? {
+                ...prev,
+                panes: {
+                  ...prev.panes,
+                  [existingPaneId]: {
+                    ...prev.panes[existingPaneId],
+                    activeTabId: id,
+                  },
+                },
+              }
+            : prev
+        );
+        return;
+      }
+      setOpenTabs((prev) => ({
+        ...prev,
+        [id]: prev[id] ?? { id, view, closable: true },
+      }));
       setLayout((prev) => {
         const targetPaneId = prev.panes[activePaneId] ? activePaneId : firstPaneId(prev);
         const next = moveTabToPane(
@@ -744,7 +770,19 @@ export default function App() {
         return next;
       });
     },
-    [activePaneId, opened]
+    [activePaneId, opened, layout, openTabs]
+  );
+
+  const openTerminalTab = useCallback(
+    (session: TerminalSession) => {
+      openView({
+        kind: "terminal",
+        id: session.id,
+        path: session.path,
+        title: session.title || "Terminal",
+      });
+    },
+    [openView]
   );
 
   const onWorkspaceLoaded = useCallback(
@@ -780,6 +818,10 @@ export default function App() {
 
   function closeTabs(tabIds: string[]) {
     if (tabIds.length === 0) return;
+    for (const tabId of tabIds) {
+      const view = openTabs[tabId]?.view;
+      if (view?.kind === "terminal") void api.TerminalClose(view.id);
+    }
     setOpenTabs((prev) => {
       const next = { ...prev };
       for (const tabId of tabIds) delete next[tabId];
@@ -885,6 +927,7 @@ export default function App() {
             root={root}
             onLoaded={onWorkspaceLoaded}
             onChanged={refreshConfig}
+            onOpenTerminal={openTerminalTab}
           />
         );
       case "features":
@@ -954,6 +997,8 @@ export default function App() {
         return <BackupsPage config={config} />;
       case "settings":
         return <SettingsPage config={config} onChanged={refreshConfig} />;
+      case "terminal":
+        return <TerminalPanel id={view.id} path={view.path} className="flex h-full flex-col" />;
     }
   }
 
@@ -1245,46 +1290,23 @@ export default function App() {
             </nav>
           </div>
         )}
-        {!sidebarHidden && (
-          <button
-            type="button"
-            onClick={nextSidebarMode}
-            title={sidebarToggleLabel}
-            aria-label={sidebarToggleLabel}
-            className={cn(
-              "absolute bottom-4 z-20 flex h-10 items-center justify-center rounded-lg border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground",
-              sidebarFull ? "left-4 right-4 gap-2 px-3" : "left-3 size-10"
-            )}
-          >
-            {sidebarFull ? (
-              <>
-                <ChevronLeft className="size-4" />
-                <span className="text-xs font-medium">{t("sidebar.collapse")}</span>
-              </>
-            ) : (
-              <ChevronsLeft className="size-4" />
-            )}
-          </button>
-        )}
       </aside>
-      {sidebarHidden && (
-        <div className="group fixed bottom-6 left-0 z-[70] flex h-14 w-10 items-center">
-          <button
-            type="button"
-            onClick={nextSidebarMode}
-            title={sidebarToggleLabel}
-            aria-label={sidebarToggleLabel}
-            className="relative z-[70] flex h-10 w-12 -translate-x-8 items-center justify-center rounded-r-lg border bg-background text-muted-foreground shadow-md transition-transform duration-200 ease-out hover:bg-accent hover:text-accent-foreground group-hover:translate-x-0 focus:translate-x-0 focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <ChevronRight className="size-4" />
-          </button>
-        </div>
-      )}
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex items-center justify-end gap-2 border-b px-6 py-3">
-          <LogConsoleButton />
-          <ThemeToggle />
+        <header className="flex items-center justify-between gap-2 border-b px-6 py-3">
+          <button
+            type="button"
+            onClick={nextSidebarMode}
+            title={sidebarToggleLabel}
+            aria-label={sidebarToggleLabel}
+            className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+          >
+            <PanelLeft className="size-5" />
+          </button>
+          <div className="flex items-center gap-2">
+            <LogConsoleButton />
+            <ThemeToggle />
+          </div>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col p-2">

@@ -48,6 +48,7 @@ import type {
   TerminalSession,
 } from "@/lib/types";
 import { TerminalPanel, runtime } from "@/components/TerminalPanel";
+import { ToolOpenMenu } from "@/components/ToolOpenMenu";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -62,6 +63,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
+import { useDefaultTool } from "@/lib/tool";
 
 interface Props {
   name: string;
@@ -92,6 +94,7 @@ export function FeatureDetailPage({
   const { notify } = useToast();
   const { t } = useI18n();
   const confirm = useConfirm();
+  const tool = useDefaultTool();
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -153,9 +156,6 @@ export function FeatureDetailPage({
       return "powershell";
     }
   });
-  const [agentOpenTarget, setAgentOpenTarget] = useState<"terminal" | "program">(
-    "terminal"
-  );
   // Whether re-preparing backs up the existing agent workspace (default true).
   const [backupOnPrepare, setBackupOnPrepare] = useState(() => {
     try {
@@ -537,20 +537,6 @@ export function FeatureDetailPage({
       notify(t("toast.agentStarted"), "success");
     });
 
-  const openProgram = () =>
-    run(async () => {
-      const p = await api.OpenInEditor(name, program.trim());
-      notify(t("toast.openedPath", { path: p }), "success");
-    });
-
-  const openAgentTarget = () => {
-    if (agentOpenTarget === "program") {
-      openProgram();
-    } else {
-      openTerminal();
-    }
-  };
-
   // runAgent launches the configured agent command in an embedded terminal; its
   // exit is detected via the "agent:exit" event subscribed above.
   const runAgent = () =>
@@ -600,6 +586,42 @@ export function FeatureDetailPage({
   const openFeatureFolder = () =>
     run(async () => {
       const p = await api.OpenFeatureFolder(name);
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  const openWorktreeTerminal = () =>
+    run(async () => {
+      if (!featurePaths?.worktreePath) return;
+      const s = await api.TerminalOpenWithProgram(
+        featurePaths.worktreePath,
+        terminalProgram.trim()
+      );
+      if (s.external) {
+        notify(t("toast.openedPath", { path: s.path }), "success");
+        return;
+      }
+      addTerminalTab(s, `Terminal · ${name}`);
+      notify(t("toast.openedEmbeddedTerminal", { path: s.path }), "success");
+    });
+
+  const openWorktreeTool = () =>
+    run(async () => {
+      if (!featurePaths?.worktreePath) return;
+      const p = await api.OpenPathInProgram(featurePaths.worktreePath, tool.value);
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  const openAgentFolder = () =>
+    run(async () => {
+      if (!featurePaths?.agentPath) return;
+      const p = await api.OpenPath(featurePaths.agentPath);
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  const openAgentTool = () =>
+    run(async () => {
+      if (!featurePaths?.agentPath) return;
+      const p = await api.OpenPathInProgram(featurePaths.agentPath, tool.value);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -807,8 +829,10 @@ export function FeatureDetailPage({
     0
   );
 
+  const isTerminalTab = tab.startsWith("terminal:");
+
   return (
-    <div className="space-y-5">
+    <div className="flex h-full min-h-0 flex-col gap-5">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft className="size-4" /> {t("common.back")}
@@ -863,16 +887,20 @@ export function FeatureDetailPage({
         </div>
       </div>
 
-      {tab.startsWith("terminal:") && (() => {
-        const id = tab.slice("terminal:".length);
-        const active = terminalTabs.find((terminal) => terminal.id === id);
-        return active ? (
-          <Card className="overflow-hidden">
-            <TerminalPanel id={active.id} path={active.path} />
-          </Card>
-        ) : null;
-      })()}
-
+      {isTerminalTab ? (
+        (() => {
+          const id = tab.slice("terminal:".length);
+          const active = terminalTabs.find((terminal) => terminal.id === id);
+          return active ? (
+            <div className="min-h-0 flex-1">
+              <Card className="flex h-full flex-col overflow-hidden">
+                <TerminalPanel id={active.id} path={active.path} className="flex h-full flex-col" />
+              </Card>
+            </div>
+          ) : null;
+        })()
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto pr-1">
       {tab === "work" && (
         <div className="space-y-5">
           <Card>
@@ -1135,25 +1163,47 @@ export function FeatureDetailPage({
             <CardHeader className="space-y-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <CardTitle>워크트리</CardTitle>
-                  <CardDescription className="space-y-1">
-                    <div>{t("feature.branchLabel", { branch: status?.branch ?? "-" })}</div>
-                    {featurePaths?.worktreePath && (
-                      <div className="max-w-xl truncate font-mono text-xs" title={featurePaths.worktreePath}>
-                        {t("feature.worktreePath")}: {featurePaths.worktreePath}
-                      </div>
-                    )}
-                  </CardDescription>
+                  <div className="flex items-center gap-2">
+                    <CardTitle>워크트리</CardTitle>
+                    <Badge variant="secondary" className="font-mono">
+                      {status?.branch ?? "-"}
+                    </Badge>
+                  </div>
+                  <CardDescription>{t("feature.worktreeCardDesc")}</CardDescription>
                 </div>
                 <Badge variant="outline">{status?.feature ?? name}</Badge>
               </div>
+              {featurePaths?.worktreePath && (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/30 p-2">
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-xs"
+                    title={featurePaths.worktreePath}
+                  >
+                    {featurePaths.worktreePath}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    title={t("feature.copyPath")}
+                    disabled={busy}
+                    onClick={() => copyPath(featurePaths?.worktreePath)}
+                  >
+                    <Copy className="size-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    title={t("feature.openWorktreeFolder")}
+                    disabled={busy || !featurePaths?.worktreePath}
+                    onClick={openFeatureFolder}
+                  >
+                    <FolderOpen className="size-4" />
+                  </Button>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" size="sm" onClick={openFeatureFolder} disabled={busy || !featurePaths?.worktreePath}>
-                  <FolderOpen className="size-4" /> {t("feature.openWorktreeFolder")}
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => copyPath(featurePaths?.worktreePath)} disabled={busy || !featurePaths?.worktreePath}>
-                  <Copy className="size-4" /> {t("feature.copyPath")}
-                </Button>
                 <Button variant="outline" size="sm" onClick={rebase} disabled={busy || statusLoading}>
                   <GitMerge className="size-4" /> {t("feature.rebase")}
                 </Button>
@@ -1161,6 +1211,12 @@ export function FeatureDetailPage({
                   {statusLoading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                   {statusLoading ? t("common.loading") : t("common.refresh")}
                 </Button>
+                <ToolOpenMenu
+                  disabled={busy || !featurePaths?.worktreePath}
+                  onFolder={openFeatureFolder}
+                  onTerminal={openWorktreeTerminal}
+                  onTool={openWorktreeTool}
+                />
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1237,36 +1293,65 @@ export function FeatureDetailPage({
                 <CardTitle>에이전트</CardTitle>
                 <CardDescription>에이전트 폴더 생성 상태와 저장소별 준비 상태입니다.</CardDescription>
               </div>
+              {featurePaths?.agentPath && (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/30 p-2">
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-xs"
+                    title={featurePaths.agentPath}
+                  >
+                    {featurePaths.agentPath}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    title={t("feature.copyPath")}
+                    disabled={busy}
+                    onClick={() => copyPath(featurePaths?.agentPath)}
+                  >
+                    <Copy className="size-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    title={t("feature.openFolder")}
+                    disabled={busy || !featurePaths?.agentPath}
+                    onClick={openAgentFolder}
+                  >
+                    <FolderOpen className="size-4" />
+                  </Button>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={prepare} disabled={busy || diffLoading || agentStatusLoading} variant={agentReady ? "outline" : "default"}>
+                <Button
+                  size="sm"
+                  onClick={prepare}
+                  disabled={busy || diffLoading || agentStatusLoading}
+                  variant={agentReady ? "outline" : "default"}
+                >
                   {agentStatusLoading ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
-                  {agentStatusLoading ? t("common.loading") : agentReady ? "Regenerate" : "Create"}
+                  {agentStatusLoading
+                    ? t("common.loading")
+                    : agentReady
+                      ? t("feature.regenerate")
+                      : t("feature.create")}
                 </Button>
                 {agentReady && (
                   <>
                     <Button variant="outline" size="sm" onClick={() => loadDiff(true)} disabled={busy || diffLoading}>
                       {diffLoading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                      변경 새로고침
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={applyAgentTemplates} disabled={busy || diffLoading}>
-                      <Wand2 className="size-4" /> 에이전트 템플릿 적용
+                      {t("common.refresh")}
                     </Button>
                     <Button variant="destructive" size="sm" onClick={del} disabled={busy}>
-                      <Trash2 className="size-4" /> 삭제
+                      <Trash2 className="size-4" /> {t("common.delete")}
                     </Button>
-                    <div className="flex items-center gap-1 rounded-md border bg-background p-1">
-                      <select
-                        value={agentOpenTarget}
-                        onChange={(e) => setAgentOpenTarget(e.target.value as "terminal" | "program")}
-                        className="h-8 rounded-md bg-background px-2 text-sm"
-                      >
-                        <option value="terminal">Terminal</option>
-                        <option value="program">{programLabel(program)}</option>
-                      </select>
-                      <Button variant="secondary" size="sm" onClick={openAgentTarget} disabled={busy} title={program}>
-                        <ExternalLink className="size-4" /> 열기
-                      </Button>
-                    </div>
+                    <ToolOpenMenu
+                      disabled={busy || !featurePaths?.agentPath}
+                      onFolder={openAgentFolder}
+                      onTerminal={openTerminal}
+                      onTool={openAgentTool}
+                    />
                   </>
                 )}
               </div>
@@ -1425,6 +1510,8 @@ export function FeatureDetailPage({
               </CardContent>
             )}
           </Card>
+        </div>
+      )}
         </div>
       )}
       {fileView && (

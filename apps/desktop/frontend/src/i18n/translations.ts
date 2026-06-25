@@ -50,6 +50,9 @@ const en: Dict = {
   "terminal.restore": "Restore",
   "split.resizeColumn": "Drag to resize columns",
   "split.resizeRow": "Drag to resize rows",
+  "toolOpen.title": "Open with",
+  "toolOpen.folder": "Folder",
+  "toolOpen.terminal": "Terminal",
 
   // workspace switcher
   "switcher.select": "Select workspace",
@@ -198,7 +201,9 @@ const en: Dict = {
   "feature.agentTitle": "Sanitized agent workspace",
   "feature.agentDesc": "Prepare a masked copy for the agent, review the diff, then sync approved changes back to the worktrees.",
   "feature.prepare": "Prepare",
+  "feature.create": "Create",
   "feature.regenerate": "Regenerate",
+  "feature.worktreeCardDesc": "Feature worktree branch and path.",
   "feature.viewHistory": "Sync history",
   "feature.syncHistoryBadge": "{count} synced",
   "feature.backupOnPrepare": "Back up existing on re-prepare",
@@ -387,6 +392,9 @@ const en: Dict = {
   "settings.diagTokenMissing": "not set",
   "settings.hintPrefixSlash": "Should end with '/'.",
   "settings.hintUrlScheme": "Should start with https://.",
+  "settings.defaultToolTitle": "Default tool",
+  "settings.defaultToolDesc": "Editor/program used by the \"Open with\" menu across the app.",
+  "settings.toolPick": "Pick a program…",
 
   // agent security
   "agentsec.noWorkspace": "Open a workspace to edit agent security settings.",
@@ -608,6 +616,9 @@ const ko: Dict = {
   "terminal.restore": "복원",
   "split.resizeColumn": "드래그하여 좌우 크기 조절",
   "split.resizeRow": "드래그하여 상하 크기 조절",
+  "toolOpen.title": "툴 열기",
+  "toolOpen.folder": "폴더",
+  "toolOpen.terminal": "터미널",
 
   // workspace switcher
   "switcher.select": "워크스페이스 선택",
@@ -755,7 +766,9 @@ const ko: Dict = {
   "feature.agentTitle": "정제된 에이전트 워크스페이스",
   "feature.agentDesc": "에이전트용 마스킹된 사본을 준비하고, 변경 내역을 검토한 뒤 승인된 변경을 worktree로 동기화합니다.",
   "feature.prepare": "준비",
+  "feature.create": "생성",
   "feature.regenerate": "재생성",
+  "feature.worktreeCardDesc": "기능 워크트리의 브랜치와 경로입니다.",
   "feature.viewHistory": "동기화 이력",
   "feature.syncHistoryBadge": "동기화 {count}",
   "feature.backupOnPrepare": "재준비 시 기존본 백업",
@@ -944,6 +957,9 @@ const ko: Dict = {
   "settings.diagTokenMissing": "없음",
   "settings.hintPrefixSlash": "'/'로 끝나야 합니다.",
   "settings.hintUrlScheme": "https://로 시작해야 합니다.",
+  "settings.defaultToolTitle": "기본 툴",
+  "settings.defaultToolDesc": "앱 전체의 '툴 열기' 메뉴에서 사용할 편집기/프로그램입니다.",
+  "settings.toolPick": "직접 선택…",
 
   // agent security
   "agentsec.noWorkspace": "Agent 보안 설정을 편집하려면 워크스페이스를 여세요.",

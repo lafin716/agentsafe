@@ -224,7 +224,7 @@ export function TerminalPanel({
   const FullscreenIcon = isFullscreen ? Minimize2 : Maximize2;
 
   return (
-    <div ref={slotRef} className={className ?? "flex h-[calc(100vh-12rem)] flex-col"}>
+    <div ref={slotRef} className={className ?? "flex h-full flex-col"}>
       <div
         ref={panelRef}
         className={cn(

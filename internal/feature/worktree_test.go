@@ -441,3 +441,46 @@ func setTestGitTimeout(t *testing.T) {
 		t.Setenv("AGENTSAFE_GIT_TIMEOUT_SECONDS", "10")
 	}
 }
+
+// TestStatusDataPreservesRepoOrder exercises the parallel StatusData worker pool
+// with multiple repos and asserts the output stays in m.Repositories order. It
+// uses bare `git init` worktrees (no remote/push) so it runs without the
+// push-to-remote setup the other worktree tests need.
+func TestStatusDataPreservesRepoOrder(t *testing.T) {
+	setTestGitTimeout(t)
+	root := t.TempDir()
+	names := []string{"a1", "a2", "a3"}
+	var repos []RepoMeta
+	for _, n := range names {
+		wtRel := filepath.ToSlash(filepath.Join("feature", "demo", n))
+		testGit(t, "", "init", "-b", "feature/demo", filepath.Join(root, filepath.FromSlash(wtRel)))
+		repos = append(repos, RepoMeta{
+			Name: n, WorktreePath: wtRel, Branch: "feature/demo", BaseBranch: "main",
+		})
+	}
+	if err := Save(root, Metadata{
+		Name: "demo", Key: "demo", Branch: "feature/demo", Repositories: repos,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := StatusData(root, "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Repositories) != len(names) {
+		t.Fatalf("repos = %d, want %d", len(res.Repositories), len(names))
+	}
+	for i, n := range names {
+		got := res.Repositories[i]
+		if got.Name != n {
+			t.Fatalf("repo[%d] = %q, want %q (parallel status must preserve order)", i, got.Name, n)
+		}
+		if got.Error != "" {
+			t.Errorf("repo %q unexpected status error: %s", n, got.Error)
+		}
+		if got.Ahead != 0 {
+			t.Errorf("repo %q ahead = %d, want 0 (no remote)", n, got.Ahead)
+		}
+	}
+}

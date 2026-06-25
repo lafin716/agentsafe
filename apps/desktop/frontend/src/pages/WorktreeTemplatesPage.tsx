@@ -174,6 +174,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
   const dropRef = useRef<HTMLDivElement | null>(null);
+  const pageRef = useRef<HTMLDivElement | null>(null);
 
   const templates = useMemo(() => templateTrees.map((tree) => tree.template), [templateTrees]);
 
@@ -188,7 +189,11 @@ export function WorktreeTemplatesPage({ config }: Props) {
       setRepos(configured ?? []);
       setExpandedTemplateNodes((prev) => {
         const next = new Set(prev);
-        for (const tree of trees ?? []) next.add(nodeKey(tree.template.id, ""));
+        for (const tree of trees ?? []) {
+          const effectiveRoot =
+            tree.root.children?.length === 1 ? tree.root.children[0] : tree.root;
+          next.add(nodeKey(tree.template.id, effectiveRoot.relPath));
+        }
         return next;
       });
     } catch (e) {
@@ -334,7 +339,10 @@ export function WorktreeTemplatesPage({ config }: Props) {
         typeof payload.x === "number" && typeof payload.y === "number"
           ? document.elementFromPoint(payload.x, payload.y)
           : null;
-      if (target && !dropRef.current?.contains(target)) return;
+      // Accept a drop anywhere on this page (so users can drop onto the whole
+      // panel, not just the dashed zone). The coordinate check still scopes the
+      // drop to this page's pane when multiple pages are open side by side.
+      if (target && pageRef.current && !pageRef.current.contains(target)) return;
       void importPaths(payload.paths);
     });
   }, [selectedFolder.id, isRootSelected]);
@@ -496,7 +504,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
     isRoot?: boolean;
   }) {
     const key = nodeKey(tree.template.id, node.relPath);
-    const open = expandedTemplateNodes.has(key) || isRoot;
+    const open = expandedTemplateNodes.has(key);
     const hasChildren = (node.children ?? []).length > 0;
     const displayName = isRoot ? tree.template.name : node.name;
     return (
@@ -569,7 +577,10 @@ export function WorktreeTemplatesPage({ config }: Props) {
   }
 
   return (
-    <div className="grid h-[calc(100vh-9rem)] grid-cols-[minmax(260px,360px)_1fr] gap-4">
+    <div
+      ref={pageRef}
+      className="grid h-[calc(100vh-9rem)] grid-cols-[minmax(260px,360px)_1fr] gap-4"
+    >
       <Card className="overflow-hidden">
         <CardHeader>
           <CardTitle>{t("templates.logicalTree")}</CardTitle>
@@ -642,13 +653,7 @@ export function WorktreeTemplatesPage({ config }: Props) {
                 style={{ "--wails-drop-target": "drop" } as CSSProperties}
                 className="flex min-h-36 flex-col items-center justify-center gap-3 rounded-lg border border-dashed bg-muted/30 p-6 text-center"
                 onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const paths = Array.from(e.dataTransfer.files)
-                    .map((file) => (file as File & { path?: string }).path ?? "")
-                    .filter(Boolean);
-                  void importPaths(paths);
-                }}
+                onDrop={(e) => e.preventDefault()}
               >
                 <Upload className="size-8 text-muted-foreground" />
                 <div>

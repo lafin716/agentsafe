@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentsafe/agentsafe/internal/applog"
@@ -759,19 +760,23 @@ func unpushedCount(path, branch, base string) int {
 	if branch == "" {
 		return 0
 	}
-	if aggit.RemoteBranchExists(path, branch) {
-		n, _ := aggit.RevListCount(path, "origin/"+branch+"..HEAD")
+	// Try candidate ranges in the original priority order (origin/<branch>, then
+	// origin/<base>, then the local base) and use the first ref that resolves.
+	// Letting rev-list's own error report a missing ref drops the separate
+	// RemoteBranchExists guard spawns — each git subprocess is ~2s on Windows
+	// with AV scanning, and status is on the worktree-detail hot path.
+	if n, err := aggit.RevListCount(path, "origin/"+branch+"..HEAD"); err == nil {
 		return n
 	}
-	baseRef := base
-	if base != "" && aggit.RemoteBranchExists(path, base) {
-		baseRef = "origin/" + base
+	if base != "" {
+		if n, err := aggit.RevListCount(path, "origin/"+base+"..HEAD"); err == nil {
+			return n
+		}
+		if n, err := aggit.RevListCount(path, base+"..HEAD"); err == nil {
+			return n
+		}
 	}
-	if baseRef == "" {
-		return 0
-	}
-	n, _ := aggit.RevListCount(path, baseRef+"..HEAD")
-	return n
+	return 0
 }
 
 type RepoFileStatus struct {
@@ -847,52 +852,45 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 		preparedRepos[r.Name] = r.WorktreeRevision
 	}
 	statusStart := time.Now()
+	// Each repo's status runs several git subprocesses; on Windows each spawn is
+	// comparatively expensive, so repos are scanned in parallel (bounded) and the
+	// per-repo working-tree status and unpushed-count run concurrently. Results
+	// are written by index to preserve m.Repositories order; readiness is reduced
+	// after the pool joins so there is no shared mutable aggregation in flight.
+	results := make([]RepoStatus, len(m.Repositories))
+	folderKey := m.FolderKey()
+	workerCount := len(m.Repositories)
+	if workerCount > 4 {
+		workerCount = 4
+	}
+	if workerCount > 0 {
+		jobs := make(chan int)
+		var wg sync.WaitGroup
+		for w := 0; w < workerCount; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range jobs {
+					results[i] = repoStatusFor(root, name, folderKey, preparedRepos, m.Repositories[i])
+				}
+			}()
+		}
+		for i := range m.Repositories {
+			jobs <- i
+		}
+		close(jobs)
+		wg.Wait()
+	}
+
 	allReady := len(m.Repositories) > 0
-	for _, r := range m.Repositories {
-		p := filepath.Join(root, r.WorktreePath)
-		statusFilesStart := time.Now()
-		s, files, err := aggit.StatusFiles(p)
-		statusFilesMs := time.Since(statusFilesStart).Milliseconds()
-		repoStatus := RepoStatus{Name: r.Name, Status: s, Changes: []RepoFileStatus{}}
-		if st, statErr := os.Stat(config.AgentPath(root, m.FolderKey(), r.Name)); statErr == nil && st.IsDir() {
-			if revision, ok := preparedRepos[r.Name]; ok {
-				repoStatus.AgentReady = true
-				// Legacy metadata has revision 0; it remains valid until this
-				// repository's worktree receives its first revision.
-				repoStatus.AgentNeedsPrepare = r.Revision > 0 && revision != r.Revision
-			}
-		}
-		if !repoStatus.AgentReady {
+	for _, rs := range results {
+		result.Repositories = append(result.Repositories, rs)
+		if !rs.AgentReady {
 			allReady = false
-			repoStatus.AgentNeedsPrepare = true
 		}
-		if repoStatus.AgentNeedsPrepare {
+		if rs.AgentNeedsPrepare {
 			result.AgentNeedsPrepare = true
 		}
-		var unpushedMs int64
-		if err != nil {
-			repoStatus.Status = "ERROR: " + err.Error()
-			repoStatus.Error = err.Error()
-		} else {
-			for _, file := range files {
-				repoStatus.Changes = append(repoStatus.Changes, RepoFileStatus{
-					Code: file.Code,
-					Type: file.Type,
-					Path: file.Path,
-				})
-			}
-			unpushedStart := time.Now()
-			repoStatus.Ahead = unpushedCount(p, r.Branch, r.BaseBranch)
-			unpushedMs = time.Since(unpushedStart).Milliseconds()
-		}
-		applog.Info("status repo timing",
-			"feature", name,
-			"repo", r.Name,
-			"statusFilesMs", statusFilesMs,
-			"unpushedMs", unpushedMs,
-			"changes", len(repoStatus.Changes),
-		)
-		result.Repositories = append(result.Repositories, repoStatus)
 	}
 	result.AgentReady = allReady
 	applog.Info("status completed",
@@ -901,6 +899,74 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 		"ms", time.Since(statusStart).Milliseconds(),
 	)
 	return result, nil
+}
+
+// repoStatusFor computes one repository's status. The working-tree status and
+// the unpushed-count are independent git invocations, so they run concurrently
+// and the per-repo wall time is the slower of the two rather than their sum.
+func repoStatusFor(root, name, folderKey string, preparedRepos map[string]int, r RepoMeta) RepoStatus {
+	p := filepath.Join(root, r.WorktreePath)
+	repoStatus := RepoStatus{Name: r.Name, Changes: []RepoFileStatus{}}
+
+	var (
+		s             string
+		files         []aggit.FileStatus
+		statusErr     error
+		statusFilesMs int64
+		unpushedMs    int64
+		ahead         int
+		wg            sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		t := time.Now()
+		s, files, statusErr = aggit.StatusFiles(p)
+		statusFilesMs = time.Since(t).Milliseconds()
+	}()
+	go func() {
+		defer wg.Done()
+		t := time.Now()
+		ahead = unpushedCount(p, r.Branch, r.BaseBranch)
+		unpushedMs = time.Since(t).Milliseconds()
+	}()
+	wg.Wait()
+
+	repoStatus.Status = s
+	if st, statErr := os.Stat(config.AgentPath(root, folderKey, r.Name)); statErr == nil && st.IsDir() {
+		if revision, ok := preparedRepos[r.Name]; ok {
+			repoStatus.AgentReady = true
+			// Legacy metadata has revision 0; it remains valid until this
+			// repository's worktree receives its first revision.
+			repoStatus.AgentNeedsPrepare = r.Revision > 0 && revision != r.Revision
+		}
+	}
+	if !repoStatus.AgentReady {
+		repoStatus.AgentNeedsPrepare = true
+	}
+
+	if statusErr != nil {
+		repoStatus.Status = "ERROR: " + statusErr.Error()
+		repoStatus.Error = statusErr.Error()
+	} else {
+		for _, file := range files {
+			repoStatus.Changes = append(repoStatus.Changes, RepoFileStatus{
+				Code: file.Code,
+				Type: file.Type,
+				Path: file.Path,
+			})
+		}
+		repoStatus.Ahead = ahead
+	}
+
+	applog.Info("status repo timing",
+		"feature", name,
+		"repo", r.Name,
+		"statusFilesMs", statusFilesMs,
+		"unpushedMs", unpushedMs,
+		"changes", len(repoStatus.Changes),
+	)
+	return repoStatus
 }
 
 func Status(root, name string) error {
