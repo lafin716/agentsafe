@@ -10,14 +10,12 @@ import {
 } from "react";
 import {
   Archive,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
   FileText,
   FolderGit2,
   FolderOpen,
   History,
   LayoutGrid,
+  PanelLeft,
   Settings,
   ShieldCheck,
   X,
@@ -1264,46 +1262,23 @@ export default function App() {
             </nav>
           </div>
         )}
-        {!sidebarHidden && (
-          <button
-            type="button"
-            onClick={nextSidebarMode}
-            title={sidebarToggleLabel}
-            aria-label={sidebarToggleLabel}
-            className={cn(
-              "absolute bottom-4 z-20 flex h-10 items-center justify-center rounded-lg border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground",
-              sidebarFull ? "left-4 right-4 gap-2 px-3" : "left-3 size-10"
-            )}
-          >
-            {sidebarFull ? (
-              <>
-                <ChevronLeft className="size-4" />
-                <span className="text-xs font-medium">{t("sidebar.collapse")}</span>
-              </>
-            ) : (
-              <ChevronsLeft className="size-4" />
-            )}
-          </button>
-        )}
       </aside>
-      {sidebarHidden && (
-        <div className="group fixed bottom-6 left-0 z-[70] flex h-14 w-10 items-center">
-          <button
-            type="button"
-            onClick={nextSidebarMode}
-            title={sidebarToggleLabel}
-            aria-label={sidebarToggleLabel}
-            className="relative z-[70] flex h-10 w-12 -translate-x-8 items-center justify-center rounded-r-lg border bg-background text-muted-foreground shadow-md transition-transform duration-200 ease-out hover:bg-accent hover:text-accent-foreground group-hover:translate-x-0 focus:translate-x-0 focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <ChevronRight className="size-4" />
-          </button>
-        </div>
-      )}
 
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex items-center justify-end gap-2 border-b px-6 py-3">
-          <LogConsoleButton />
-          <ThemeToggle />
+        <header className="flex items-center justify-between gap-2 border-b px-6 py-3">
+          <button
+            type="button"
+            onClick={nextSidebarMode}
+            title={sidebarToggleLabel}
+            aria-label={sidebarToggleLabel}
+            className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+          >
+            <PanelLeft className="size-5" />
+          </button>
+          <div className="flex items-center gap-2">
+            <LogConsoleButton />
+            <ThemeToggle />
+          </div>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col p-2">
