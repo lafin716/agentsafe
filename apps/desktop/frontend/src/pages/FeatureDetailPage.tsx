@@ -807,8 +807,10 @@ export function FeatureDetailPage({
     0
   );
 
+  const isTerminalTab = tab.startsWith("terminal:");
+
   return (
-    <div className="space-y-5">
+    <div className="flex h-full min-h-0 flex-col gap-5">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft className="size-4" /> {t("common.back")}
@@ -863,16 +865,20 @@ export function FeatureDetailPage({
         </div>
       </div>
 
-      {tab.startsWith("terminal:") && (() => {
-        const id = tab.slice("terminal:".length);
-        const active = terminalTabs.find((terminal) => terminal.id === id);
-        return active ? (
-          <Card className="overflow-hidden">
-            <TerminalPanel id={active.id} path={active.path} />
-          </Card>
-        ) : null;
-      })()}
-
+      {isTerminalTab ? (
+        (() => {
+          const id = tab.slice("terminal:".length);
+          const active = terminalTabs.find((terminal) => terminal.id === id);
+          return active ? (
+            <div className="min-h-0 flex-1">
+              <Card className="flex h-full flex-col overflow-hidden">
+                <TerminalPanel id={active.id} path={active.path} className="flex h-full flex-col" />
+              </Card>
+            </div>
+          ) : null;
+        })()
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto pr-1">
       {tab === "work" && (
         <div className="space-y-5">
           <Card>
@@ -1425,6 +1431,8 @@ export function FeatureDetailPage({
               </CardContent>
             )}
           </Card>
+        </div>
+      )}
         </div>
       )}
       {fileView && (

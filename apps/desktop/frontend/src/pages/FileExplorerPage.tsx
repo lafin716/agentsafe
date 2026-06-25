@@ -380,7 +380,7 @@ export function FileExplorerPage({
   }
 
   return (
-    <div className="grid h-[calc(100vh-9rem)] grid-cols-[minmax(260px,360px)_1fr] gap-4">
+    <div className="grid h-full min-h-0 grid-cols-[minmax(260px,360px)_1fr] gap-4">
       <Card className="overflow-hidden">
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div>
@@ -396,8 +396,8 @@ export function FileExplorerPage({
         </CardContent>
       </Card>
 
-      <Card className="min-w-0 overflow-hidden">
-        <div className="flex items-center gap-1 overflow-x-auto border-b bg-muted/30 px-3 pt-2">
+      <Card className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b bg-muted/30 px-3 pt-2">
           <button
             type="button"
             className={cn(
@@ -471,7 +471,7 @@ export function FileExplorerPage({
           ))}
         </div>
         {activeTab === "main" ? (
-          <>
+          <div className="min-h-0 flex-1 overflow-auto">
             <CardHeader>
               <CardTitle>{selected?.name ?? t("explorer.noneSelected")}</CardTitle>
               <CardDescription className="break-all font-mono">
@@ -520,9 +520,9 @@ export function FileExplorerPage({
                 </>
               )}
             </CardContent>
-          </>
+          </div>
         ) : activeEditor ? (
-          <div className="flex h-[calc(100vh-12rem)] flex-col">
+          <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{activeEditor.title}</div>
@@ -547,7 +547,9 @@ export function FileExplorerPage({
             />
           </div>
         ) : activeTerminal ? (
-          <TerminalPanel id={activeTerminal.id} path={activeTerminal.path} />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <TerminalPanel id={activeTerminal.id} path={activeTerminal.path} />
+          </div>
         ) : null}
       </Card>
     </div>
