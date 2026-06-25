@@ -9,7 +9,6 @@
 import {
   ChevronDown,
   ChevronRight,
-  Code2,
   Copy,
   File,
   Folder,
@@ -36,6 +35,8 @@ import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 import { TerminalPanel } from "@/components/TerminalPanel";
+import { ToolOpenMenu } from "@/components/ToolOpenMenu";
+import { useDefaultTool } from "@/lib/tool";
 
 interface Props {
   config: Config | null;
@@ -104,6 +105,7 @@ export function FileExplorerPage({
   const { t } = useI18n();
   const { notify } = useToast();
   const confirm = useConfirm();
+  const tool = useDefaultTool();
   const [root, setRoot] = useState<WorkspaceTreeNode | null>(null);
   const [selected, setSelected] = useState<WorkspaceTreeNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -180,11 +182,11 @@ export function FileExplorerPage({
     }
   }
 
-  async function openVSCode() {
+  async function openTool() {
     if (!selected) return;
     try {
-      const path = await api.OpenPathVSCode(selected.path);
-      notify(t("toast.openedPath", { path }), "success");
+      const p = await api.OpenPathInProgram(selected.path, tool.value);
+      notify(t("toast.openedPath", { path: p }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
     }
@@ -496,20 +498,18 @@ export function FileExplorerPage({
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={openSelected} disabled={busy}>
-                      <FolderOpen className="size-4" /> {t("explorer.open")}
-                    </Button>
-                    <Button variant="outline" onClick={openVSCode} disabled={busy}>
-                      <Code2 className="size-4" /> {t("explorer.openVSCode")}
-                    </Button>
+                    <ToolOpenMenu
+                      align="start"
+                      disabled={busy || !selected}
+                      onFolder={openSelected}
+                      onTerminal={openEmbeddedTerminal}
+                      onTool={openTool}
+                    />
                     {!selected.isDir && (
                       <Button variant="outline" onClick={() => openEditor(selected)} disabled={busy}>
                         <File className="size-4" /> {t("explorer.openEditor")}
                       </Button>
                     )}
-                    <Button variant="outline" onClick={openEmbeddedTerminal} disabled={busy}>
-                      <TerminalIcon className="size-4" /> {t("explorer.openTerminal")}
-                    </Button>
                     <Button variant="outline" onClick={copyPath} disabled={busy}>
                       <Copy className="size-4" /> {t("feature.copyPath")}
                     </Button>
