@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -48,6 +50,20 @@ type App struct {
 	terminalMu   sync.Mutex
 	terminalSeq  int
 	terminals    map[string]*terminalProcess
+
+	// assets is the embedded frontend/dist filesystem, injected by main so the
+	// popout bridge can serve the SPA. bridge is the loopback server that backs
+	// detached popout windows (nil until startup succeeds).
+	assets fs.FS
+	bridge *bridgeServer
+}
+
+// emit forwards a Wails event to the main window and mirrors it to any detached
+// popout windows over the bridge. Every runtime.EventsEmit in this file goes
+// through here so popouts receive the same task/log/terminal/agent events.
+func (a *App) emit(name string, data any) {
+	runtime.EventsEmit(a.ctx, name, data)
+	a.bridge.broadcast(name, data)
 }
 
 type gitCredential struct {
@@ -87,13 +103,13 @@ func (a *App) runTask(label string, fn func() error) error {
 	id := a.taskSeq
 	start := time.Now()
 	applog.Debug("task started", "task", label, "id", id)
-	runtime.EventsEmit(a.ctx, "task:start", map[string]any{
+	a.emit("task:start", map[string]any{
 		"id":        id,
 		"label":     label,
 		"startedAt": start.UnixMilli(),
 	})
 	output.SetSink(func(chunk string) {
-		runtime.EventsEmit(a.ctx, "task:log", map[string]any{"id": id, "chunk": chunk})
+		a.emit("task:log", map[string]any{"id": id, "chunk": chunk})
 	})
 	err := fn()
 	output.SetSink(nil)
@@ -107,7 +123,7 @@ func (a *App) runTask(label string, fn func() error) error {
 	} else {
 		applog.Info("task completed", "task", label, "ms", ms)
 	}
-	runtime.EventsEmit(a.ctx, "task:end", map[string]any{"id": id, "status": status, "error": msg})
+	a.emit("task:end", map[string]any{"id": id, "status": status, "error": msg})
 	return err
 }
 
@@ -117,11 +133,20 @@ func (a *App) startup(ctx context.Context) {
 	// already started in main(); the tap only attaches now that ctx exists, so
 	// records emitted before this point are in the file but not the live view.
 	applog.SetTap(func(e applog.Entry) {
-		runtime.EventsEmit(a.ctx, "log:entry", e)
+		a.emit("log:entry", e)
 	})
 	applog.Info("desktop app started")
+	// Start the loopback bridge that backs detached popout windows. A failure
+	// here must not stop the app launching; popout is simply unavailable.
+	if a.assets != nil {
+		if b, err := newBridge(a, a.assets); err != nil {
+			applog.Warn("popout bridge failed to start", "err", err)
+		} else {
+			a.bridge = b
+		}
+	}
 	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
-		runtime.EventsEmit(ctx, "workspace:file-drop", map[string]any{
+		a.emit("workspace:file-drop", map[string]any{
 			"x":     x,
 			"y":     y,
 			"paths": paths,
@@ -527,7 +552,13 @@ type WorkspaceTreeNode struct {
 	ModTime     string              `json:"modTime"`
 	FeatureName string              `json:"featureName,omitempty"`
 	Branch      string              `json:"branch,omitempty"`
-	Children    []WorkspaceTreeNode `json:"children"`
+	// Set when this node originated from a worktree template. TemplateRelPath is
+	// the path within the template source; TemplateModified is true when a
+	// template file's current content differs from the stored template.
+	TemplateID       string              `json:"templateId,omitempty"`
+	TemplateRelPath  string              `json:"templateRelPath,omitempty"`
+	TemplateModified bool                `json:"templateModified,omitempty"`
+	Children         []WorkspaceTreeNode `json:"children"`
 }
 
 func (a *App) WorkspaceTree(path string) (WorkspaceTreeNode, error) {
@@ -539,7 +570,7 @@ func (a *App) WorkspaceTree(path string) (WorkspaceTreeNode, error) {
 	if err != nil {
 		return WorkspaceTreeNode{}, err
 	}
-	return treeNode(root, target, workspaceTreeLabels(root))
+	return treeNode(root, target, workspaceTreeLabels(root), a.workspaceTemplateMarks(root))
 }
 
 func (a *App) OpenPath(path string) (string, error) {
@@ -760,7 +791,7 @@ func (a *App) TerminalWrite(id, data string) error {
 		// after Ctrl+C. Do not let a Wails binding goroutine freeze the UI.
 		a.markTerminalClosed(id, "terminal input timed out")
 		applog.Warn("terminal input timed out", "id", id)
-		runtime.EventsEmit(a.ctx, "terminal:close", map[string]any{
+		a.emit("terminal:close", map[string]any{
 			"id": id, "status": "error", "error": "terminal input timed out",
 		})
 		go func() { _ = tp.pty.Close() }()
@@ -858,7 +889,7 @@ func (a *App) pipeTerminalOutput(id string, ptyProc ptySession, feature string) 
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
 			seq := a.appendTerminalOutput(id, chunk)
-			runtime.EventsEmit(a.ctx, "terminal:data", map[string]any{
+			a.emit("terminal:data", map[string]any{
 				"id":   id,
 				"data": string(chunk),
 				"seq":  seq,
@@ -881,14 +912,14 @@ func (a *App) pipeTerminalOutput(id string, ptyProc ptySession, feature string) 
 	} else {
 		applog.Debug("terminal closed", "id", id)
 	}
-	runtime.EventsEmit(a.ctx, "terminal:close", map[string]any{
+	a.emit("terminal:close", map[string]any{
 		"id": id, "status": status, "error": message,
 	})
 	// Managed agent run finished — signal the feature so the UI can refresh the
 	// diff and prompt the user to sync.
 	if feature != "" {
 		applog.Info("agent run finished", "feature", feature, "status", status)
-		runtime.EventsEmit(a.ctx, "agent:exit", map[string]any{
+		a.emit("agent:exit", map[string]any{
 			"id": id, "feature": feature, "status": status, "error": message,
 		})
 	}
@@ -2240,6 +2271,22 @@ func (a *App) OpenURL(url string) error {
 	return nil
 }
 
+// OpenPopoutWindow detaches a tab into a separate OS window. Wails v2 cannot
+// create native secondary windows, so the view is opened in the system browser
+// pointed at the loopback bridge; the popout reaches this same backend over the
+// bridge (RPC + SSE), keeping terminals/diffs/file IO fully functional.
+// viewJSON is the JSON of the frontend View object for the detached tab.
+func (a *App) OpenPopoutWindow(viewJSON string) error {
+	if a.bridge == nil {
+		return fmt.Errorf("popout bridge is not running")
+	}
+	if strings.TrimSpace(viewJSON) == "" {
+		return fmt.Errorf("empty view")
+	}
+	runtime.BrowserOpenURL(a.ctx, a.bridge.popoutURL(viewJSON))
+	return nil
+}
+
 // CopyText copies arbitrary text to the system clipboard.
 func (a *App) CopyText(text string) error {
 	return runtime.ClipboardSetText(a.ctx, text)
@@ -2531,7 +2578,40 @@ func applyWorkspaceTreeLabel(node *WorkspaceTreeNode, labels map[string]workspac
 	}
 }
 
-func treeNode(root, target string, labels map[string]workspaceTreeLabel) (WorkspaceTreeNode, error) {
+type templateMark struct {
+	ID      string
+	RelPath string
+	IsDir   bool
+}
+
+// applyWorkspaceTemplateMark tags a node that originated from a worktree
+// template. For files it compares the current content with the stored template
+// to flag divergence (TemplateModified); large/binary files skip the compare.
+func applyWorkspaceTemplateMark(node *WorkspaceTreeNode, root string, marks map[string]templateMark) {
+	mark, ok := marks[node.Path]
+	if !ok {
+		return
+	}
+	node.TemplateID = mark.ID
+	node.TemplateRelPath = mark.RelPath
+	if node.IsDir {
+		return
+	}
+	if node.Size > maxEditableWorkspaceFileSize {
+		return
+	}
+	current, err := os.ReadFile(node.Path)
+	if err != nil || hasNUL(current) {
+		return
+	}
+	original, err := wttemplate.ReadTemplateTreeFile(root, mark.ID, mark.RelPath)
+	if err != nil {
+		return
+	}
+	node.TemplateModified = !bytes.Equal(current, []byte(original))
+}
+
+func treeNode(root, target string, labels map[string]workspaceTreeLabel, marks map[string]templateMark) (WorkspaceTreeNode, error) {
 	info, err := os.Stat(target)
 	if err != nil {
 		return WorkspaceTreeNode{}, err
@@ -2549,6 +2629,7 @@ func treeNode(root, target string, labels map[string]workspaceTreeLabel) (Worksp
 		ModTime: info.ModTime().Format(time.RFC3339),
 	}
 	applyWorkspaceTreeLabel(&node, labels)
+	applyWorkspaceTemplateMark(&node, root, marks)
 	if !info.IsDir() {
 		return node, nil
 	}
@@ -2579,9 +2660,95 @@ func treeNode(root, target string, labels map[string]workspaceTreeLabel) (Worksp
 			ModTime: childInfo.ModTime().Format(time.RFC3339),
 		}
 		applyWorkspaceTreeLabel(&child, labels)
+		applyWorkspaceTemplateMark(&child, root, marks)
 		node.Children = append(node.Children, child)
 	}
 	return node, nil
+}
+
+// workspaceTemplateMarks maps absolute workspace paths to the worktree template
+// they were applied from, so the file tree can tag template files/folders. It
+// mirrors the apply destinations: workspace root, each feature's worktree/agent
+// roots, and each repo's worktree/agent dirs.
+func (a *App) workspaceTemplateMarks(root string) map[string]templateMark {
+	marks := map[string]templateMark{}
+	templates, err := wttemplate.List(root)
+	if err != nil || len(templates) == 0 {
+		return marks
+	}
+
+	type feat struct {
+		key           string
+		worktreeRepos []wttemplate.Repo
+		agentRepos    []wttemplate.Repo
+	}
+	var feats []feat
+	if list, err := feature.ListData(root); err == nil {
+		for _, item := range list.Features {
+			fm, err := feature.Load(root, item.Name)
+			if err != nil {
+				continue
+			}
+			feats = append(feats, feat{
+				key:           fm.FolderKey(),
+				worktreeRepos: desktopWorktreeTemplateRepos(root, fm.Repositories),
+				agentRepos:    desktopAgentTemplateRepos(root, fm.FolderKey(), fm.Repositories),
+			})
+		}
+	}
+
+	for _, t := range templates {
+		entries, err := wttemplate.SourceEntries(root, t.ID)
+		if err != nil || len(entries) == 0 {
+			continue
+		}
+		var dests []string
+		switch {
+		case t.TargetMode == wttemplate.TargetWorkspaceRoot:
+			dests = []string{root}
+		case wttemplate.IsAgentTarget(t.TargetMode):
+			for _, f := range feats {
+				dests = append(dests, wttemplate.Destinations(root, f.key, f.agentRepos, t)...)
+			}
+		default:
+			for _, f := range feats {
+				dests = append(dests, wttemplate.Destinations(root, f.key, f.worktreeRepos, t)...)
+			}
+		}
+		for _, dst := range dests {
+			for _, e := range entries {
+				abs := filepath.Join(dst, filepath.FromSlash(e.RelPath))
+				marks[abs] = templateMark{ID: t.ID, RelPath: e.RelPath, IsDir: e.IsDir}
+			}
+		}
+	}
+	return marks
+}
+
+// OverwriteTemplateFromFile writes a modified workspace file back over its
+// originating worktree-template source, so edits made in place can update the
+// template. The path must be a file the tree tagged as a template.
+func (a *App) OverwriteTemplateFromFile(path string) error {
+	root, err := a.requireRoot()
+	if err != nil {
+		return err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return err
+	}
+	mark, ok := a.workspaceTemplateMarks(root)[target]
+	if !ok || mark.IsDir {
+		return fmt.Errorf("file is not a worktree template file")
+	}
+	content, err := os.ReadFile(target)
+	if err != nil {
+		return err
+	}
+	if hasNUL(content) || !utf8.Valid(content) {
+		return fmt.Errorf("binary files cannot be saved as templates")
+	}
+	return wttemplate.WriteTemplateTreeFile(root, mark.ID, mark.RelPath, string(content))
 }
 
 func ensureExplorerDeleteAllowed(root, target string) error {

@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Copy,
   File,
+  FileUp,
   Folder,
   FolderOpen,
   RefreshCw,
@@ -204,6 +205,30 @@ export function FileExplorerPage({
     }
   }
 
+  async function overwriteTemplate() {
+    if (!selected || !selected.templateId || selected.isDir) return;
+    if (
+      !(await confirm({
+        message: t("explorer.overwriteTemplateConfirm", { name: selected.name }),
+      }))
+    )
+      return;
+    try {
+      setBusy(true);
+      await api.OverwriteTemplateFromFile(selected.path);
+      notify(t("toast.templateOverwritten"), "success");
+      // Re-fetch just this node so its template/modified state refreshes in both
+      // the detail panel and the tree without collapsing the explorer.
+      const refreshed = await api.WorkspaceTree(selected.path);
+      setSelected(refreshed);
+      setRoot((prev) => (prev ? replaceNode(prev, selected.path, refreshed) : prev));
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function copyPath() {
     if (!selected) return;
     try {
@@ -373,9 +398,25 @@ export function FileExplorerPage({
             <File className="size-4 text-muted-foreground" />
           )}
           <span className="truncate">{node.name}</span>
+          {node.templateId && (
+            <span
+              className={cn(
+                "ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px]",
+                node.templateModified
+                  ? "bg-amber-500/20 text-amber-700 dark:text-amber-400"
+                  : "bg-secondary text-secondary-foreground"
+              )}
+              title={node.templateModified ? t("explorer.templateModified") : t("explorer.templateTag")}
+            >
+              {node.templateModified ? t("explorer.templateModified") : t("explorer.templateTag")}
+            </span>
+          )}
           {node.branch && (
             <span
-              className="ml-auto max-w-32 truncate rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground"
+              className={cn(
+                "max-w-32 truncate rounded bg-secondary px-1.5 py-0.5 text-[10px] text-secondary-foreground",
+                node.templateId ? "ml-1" : "ml-auto"
+              )}
               title={node.featureName ? `${node.featureName}: ${node.branch}` : node.branch}
             >
               {node.branch}
@@ -521,6 +562,11 @@ export function FileExplorerPage({
                     {!selected.isDir && (
                       <Button variant="outline" size="sm" onClick={() => openEditor(selected)} disabled={busy}>
                         <File className="size-4" /> {t("explorer.openEditor")}
+                      </Button>
+                    )}
+                    {!selected.isDir && selected.templateId && selected.templateModified && (
+                      <Button variant="outline" size="sm" onClick={overwriteTemplate} disabled={busy}>
+                        <FileUp className="size-4" /> {t("explorer.overwriteTemplate")}
                       </Button>
                     )}
                     <Button variant="outline" size="sm" onClick={copyPath} disabled={busy}>

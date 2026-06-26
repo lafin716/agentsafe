@@ -412,6 +412,56 @@ func repoDestinations(repos []Repo, t Template, allMode string) []string {
 	return out
 }
 
+// SourceEntry is one file or directory within a template's stored source tree,
+// with its path relative to the template root (slash-separated).
+type SourceEntry struct {
+	RelPath string
+	IsDir   bool
+}
+
+// SourceEntries lists every file and directory under a template's source tree
+// (FilesDir/<id>), each as a path relative to that root. Used to map applied
+// template files in a workspace back to their template origin.
+func SourceEntries(root, id string) ([]SourceEntry, error) {
+	base := filepath.Join(FilesDir(root), id)
+	out := []SourceEntry{}
+	err := filepath.WalkDir(base, func(p string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, relErr := filepath.Rel(base, p)
+		if relErr != nil || rel == "." {
+			return relErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		out = append(out, SourceEntry{RelPath: filepath.ToSlash(rel), IsDir: entry.IsDir()})
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []SourceEntry{}, nil
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// Destinations returns the directories a template is applied into for the given
+// feature. Exported wrapper around the internal destination logic; repos must
+// carry worktree paths for worktree-target modes and agent paths for
+// agent-target modes (see the desktop repo builders).
+func Destinations(root, featureKey string, repos []Repo, t Template) []string {
+	return destinations(root, featureKey, repos, t)
+}
+
+// IsAgentTarget reports whether a template target mode applies to agent areas
+// (agent root / agent repos) rather than worktree areas.
+func IsAgentTarget(mode string) bool {
+	return isAgentTarget(mode)
+}
+
 func defaultTemplate(src string) Template {
 	base := filepath.Base(src)
 	return Template{

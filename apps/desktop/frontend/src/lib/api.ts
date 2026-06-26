@@ -71,6 +71,8 @@ type AppBindings = {
   WorkspaceTree(path: string): Promise<WorkspaceTreeNode>;
   ReadWorkspaceFile(path: string): Promise<string>;
   SaveWorkspaceFile(path: string, content: string): Promise<void>;
+  // Writes a modified workspace file back over its worktree-template source.
+  OverwriteTemplateFromFile(path: string): Promise<void>;
   OpenPath(path: string): Promise<string>;
   OpenPathVSCode(path: string): Promise<string>;
   OpenPathInProgram(path: string, program: string): Promise<string>;
@@ -155,6 +157,8 @@ type AppBindings = {
   Push(name: string, repoFilter: string): Promise<void>;
   CreateMergeRequests(name: string, title: string): Promise<RequestResults>;
   OpenURL(url: string): Promise<void>;
+  // Detaches a tab into a separate OS window. viewJSON is JSON.stringify(view).
+  OpenPopoutWindow(viewJSON: string): Promise<void>;
   SaveGitSettings(
     git: GitConfig,
     gitlab: GitLabConfig,

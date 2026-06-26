@@ -64,6 +64,8 @@ import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
 import { useDefaultTool } from "@/lib/tool";
+import { cn } from "@/lib/utils";
+import { diffRows } from "@/lib/linediff";
 
 interface Props {
   name: string;
@@ -1639,10 +1641,25 @@ export function FeatureDetailPage({
                   {fileView.error}
                 </div>
               ) : fileView.data ? (
-                <div className="grid gap-4 lg:grid-cols-2">
-                  <FileViewSidePanel title={t("feature.fileViewAgent")} side={fileView.data.agent} />
-                  <FileViewSidePanel title={t("feature.fileViewWorktree")} side={fileView.data.worktree} />
-                </div>
+                (() => {
+                  const wt = fileView.data.worktree;
+                  const ag = fileView.data.agent;
+                  const canDiff = !wt.error && !ag.error && (wt.exists || ag.exists);
+                  if (!canDiff) {
+                    return (
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <FileViewSidePanel title={t("feature.fileViewWorktree")} side={wt} />
+                        <FileViewSidePanel title={t("feature.fileViewAgent")} side={ag} />
+                      </div>
+                    );
+                  }
+                  return (
+                    <DiffView
+                      left={{ title: t("feature.fileViewWorktree"), ...wt }}
+                      right={{ title: t("feature.fileViewAgent"), ...ag }}
+                    />
+                  );
+                })()
               ) : null}
             </div>
           </div>
@@ -1732,6 +1749,68 @@ function FileViewSidePanel({
           {side.content ?? ""}
         </pre>
       )}
+    </div>
+  );
+}
+
+// DiffView renders a git-style side-by-side line diff (left = worktree/base,
+// right = agent/new) inside a single scroll container so both columns scroll
+// together vertically and horizontally. Changed/removed lines are tinted red on
+// the left, added/changed lines tinted green on the right.
+function DiffView({
+  left,
+  right,
+}: {
+  left: { title: string; path: string; exists: boolean; content?: string };
+  right: { title: string; path: string; exists: boolean; content?: string };
+}) {
+  const { t } = useI18n();
+  const rows = diffRows(
+    left.exists ? left.content ?? "" : "",
+    right.exists ? right.content ?? "" : ""
+  );
+  return (
+    <div className="overflow-hidden rounded-md border">
+      <div className="grid grid-cols-2 border-b bg-muted/40 text-xs">
+        <div className="min-w-0 border-r px-3 py-2">
+          <div className="font-medium">{left.title}</div>
+          <div className="truncate font-mono text-muted-foreground" title={left.path}>
+            {left.path}
+            {!left.exists && ` · ${t("feature.fileMissing")}`}
+          </div>
+        </div>
+        <div className="min-w-0 px-3 py-2">
+          <div className="font-medium">{right.title}</div>
+          <div className="truncate font-mono text-muted-foreground" title={right.path}>
+            {right.path}
+            {!right.exists && ` · ${t("feature.fileMissing")}`}
+          </div>
+        </div>
+      </div>
+      <div className="max-h-[68vh] overflow-auto bg-slate-950 font-mono text-xs leading-5 text-slate-100">
+        <table className="border-collapse">
+          <tbody>
+            {rows.map((row, i) => {
+              const leftBg =
+                row.type === "removed" || row.type === "changed" ? "bg-red-950/60" : "";
+              const rightBg =
+                row.type === "added" || row.type === "changed" ? "bg-emerald-950/60" : "";
+              return (
+                <tr key={i} className="align-top">
+                  <td className="select-none whitespace-nowrap px-2 text-right text-slate-600">
+                    {row.left?.n ?? ""}
+                  </td>
+                  <td className={cn("whitespace-pre px-2", leftBg)}>{row.left?.text ?? ""}</td>
+                  <td className="select-none whitespace-nowrap border-l border-slate-800 px-2 text-right text-slate-600">
+                    {row.right?.n ?? ""}
+                  </td>
+                  <td className={cn("whitespace-pre px-2", rightBg)}>{row.right?.text ?? ""}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

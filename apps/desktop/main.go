@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"io/fs"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -21,6 +22,13 @@ func main() {
 	}
 
 	app := NewApp()
+	// Inject the SPA assets so the popout bridge can serve the frontend to
+	// detached windows. A failure here only disables popout, not the app.
+	if dist, err := fs.Sub(assets, "frontend/dist"); err != nil {
+		applog.Warn("popout assets unavailable", "err", err)
+	} else {
+		app.assets = dist
+	}
 
 	err := wails.Run(&options.App{
 		Title:     "agentsafe",

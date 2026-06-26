@@ -102,6 +102,11 @@ export interface WorkspaceTreeNode {
   modTime: string;
   featureName?: string;
   branch?: string;
+  // Set when this node came from a worktree template; templateModified is true
+  // when a template file's current content differs from the stored template.
+  templateId?: string;
+  templateRelPath?: string;
+  templateModified?: boolean;
   children: WorkspaceTreeNode[] | null;
 }
 
