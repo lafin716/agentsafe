@@ -16,6 +16,17 @@ export const TOOL_PRESETS: { value: string; label: string }[] = [
 
 export const TOOL_PRESET_VALUES = TOOL_PRESETS.map((p) => p.value);
 
+// Terminal programs offered by the tool-open menu and the settings selects.
+// Values match what the Go backend's TerminalOpenWithProgram understands.
+export const TERMINAL_PRESETS: { value: string; label: string }[] = [
+  { value: "powershell", label: "PowerShell" },
+  { value: "pwsh", label: "PowerShell 7" },
+  { value: "cmd", label: "Command Prompt" },
+  { value: "git-bash", label: "Git Bash" },
+  { value: "wt", label: "Windows Terminal" },
+  { value: "default", label: "System default" },
+];
+
 export function getDefaultTool(): string {
   try {
     return localStorage.getItem(TOOL_KEY) || "code";

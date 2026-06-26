@@ -112,6 +112,8 @@ export function FeatureDetailPage({
   const [status, setStatus] = useState<FeatureStatusResult | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
   const [openDiffRepos, setOpenDiffRepos] = useState<Set<string>>(new Set());
+  // Per-repo expand/collapse for the worktree status changed-file lists.
+  const [openStatusRepos, setOpenStatusRepos] = useState<Set<string>>(new Set());
   const [fileView, setFileView] = useState<{
     repo: string;
     change: Change;
@@ -269,6 +271,7 @@ export function FeatureDetailPage({
     setFeaturePaths(null);
     setAgentFinished(false);
     setOpenDiffRepos(new Set());
+    setOpenStatusRepos(new Set());
   }, [name]);
 
   useEffect(() => {
@@ -506,12 +509,12 @@ export function FeatureDetailPage({
     setTab(terminalTabId(next.id));
   }
 
-  const openTerminal = () =>
+  const openTerminal = (prog?: string) =>
     run(async () => {
       if (!featurePaths?.agentPath) return;
       const session = await api.TerminalOpenWithProgram(
         featurePaths.agentPath,
-        terminalProgram.trim()
+        (prog ?? terminalProgram).trim()
       );
       if (session.external) {
         notify(t("toast.openedPath", { path: session.path }), "success");
@@ -589,12 +592,12 @@ export function FeatureDetailPage({
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
-  const openWorktreeTerminal = () =>
+  const openWorktreeTerminal = (prog?: string) =>
     run(async () => {
       if (!featurePaths?.worktreePath) return;
       const s = await api.TerminalOpenWithProgram(
         featurePaths.worktreePath,
-        terminalProgram.trim()
+        (prog ?? terminalProgram).trim()
       );
       if (s.external) {
         notify(t("toast.openedPath", { path: s.path }), "success");
@@ -604,10 +607,20 @@ export function FeatureDetailPage({
       notify(t("toast.openedEmbeddedTerminal", { path: s.path }), "success");
     });
 
-  const openWorktreeTool = () =>
+  const openWorktreeTool = (prog?: string) =>
     run(async () => {
       if (!featurePaths?.worktreePath) return;
-      const p = await api.OpenPathInProgram(featurePaths.worktreePath, tool.value);
+      const p = await api.OpenPathInProgram(featurePaths.worktreePath, prog ?? tool.value);
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  // Pick an arbitrary executable, then open the given path with it.
+  const browseAndOpen = (path?: string) =>
+    run(async () => {
+      if (!path) return;
+      const sel = await api.SelectProgram();
+      if (!sel) return;
+      const p = await api.OpenPathInProgram(path, sel);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -618,10 +631,53 @@ export function FeatureDetailPage({
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
-  const openAgentTool = () =>
+  const openAgentTool = (prog?: string) =>
     run(async () => {
       if (!featurePaths?.agentPath) return;
-      const p = await api.OpenPathInProgram(featurePaths.agentPath, tool.value);
+      const p = await api.OpenPathInProgram(featurePaths.agentPath, prog ?? tool.value);
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  // Per-repo open helpers for the status-tab repo rows.
+  const openRepoWorktreeTerminal = (repoName: string, prog?: string) =>
+    run(async () => {
+      const path = repoPathsByName.get(repoName)?.worktreePath;
+      if (!path) return;
+      const s = await api.TerminalOpenWithProgram(path, (prog ?? terminalProgram).trim());
+      if (s.external) {
+        notify(t("toast.openedPath", { path: s.path }), "success");
+        return;
+      }
+      addTerminalTab(s, `Terminal · ${repoName}`);
+      notify(t("toast.openedEmbeddedTerminal", { path: s.path }), "success");
+    });
+
+  const openRepoAgentFolder = (repoName: string) =>
+    run(async () => {
+      const path = repoPathsByName.get(repoName)?.agentPath;
+      if (!path) return;
+      const p = await api.OpenPath(path);
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  const openRepoAgentTerminal = (repoName: string, prog?: string) =>
+    run(async () => {
+      const path = repoPathsByName.get(repoName)?.agentPath;
+      if (!path) return;
+      const s = await api.TerminalOpenWithProgram(path, (prog ?? terminalProgram).trim());
+      if (s.external) {
+        notify(t("toast.openedPath", { path: s.path }), "success");
+        return;
+      }
+      addTerminalTab(s, `Terminal · ${repoName}`);
+      notify(t("toast.openedEmbeddedTerminal", { path: s.path }), "success");
+    });
+
+  const openRepoAgentTool = (repoName: string, prog?: string) =>
+    run(async () => {
+      const path = repoPathsByName.get(repoName)?.agentPath;
+      if (!path) return;
+      const p = await api.OpenPathInProgram(path, prog ?? tool.value);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -646,9 +702,18 @@ export function FeatureDetailPage({
       await loadDiff(true);
     });
 
-  const openRepoProgram = (repo: string) =>
+  const openRepoProgram = (repo: string, prog?: string) =>
     run(async () => {
-      const p = await api.OpenRepoInProgram(name, repo, program.trim());
+      const p = await api.OpenRepoInProgram(name, repo, (prog ?? program).trim());
+      notify(t("toast.openedPath", { path: p }), "success");
+    });
+
+  // Pick an arbitrary executable, then open the given repo's worktree with it.
+  const browseAndOpenRepo = (repo: string) =>
+    run(async () => {
+      const sel = await api.SelectProgram();
+      if (!sel) return;
+      const p = await api.OpenRepoInProgram(name, repo, sel);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -1216,6 +1281,7 @@ export function FeatureDetailPage({
                   onFolder={openFeatureFolder}
                   onTerminal={openWorktreeTerminal}
                   onTool={openWorktreeTool}
+                  onToolBrowse={() => browseAndOpen(featurePaths?.worktreePath)}
                 />
               </div>
             </CardHeader>
@@ -1230,13 +1296,36 @@ export function FeatureDetailPage({
                     const r = statusReposByName.get(repoName);
                     const configured = configuredRepoByName.get(repoName);
                     const included = (featureMeta?.repositories ?? []).some((item) => item.name === repoName);
+                    const changes = r?.changes ?? [];
+                    const hasChanges = changes.length > 0;
+                    const open = openStatusRepos.has(repoName);
                     return (
                       <div key={repoName} className="space-y-3 p-3">
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
                             <div className="flex min-w-0 items-center gap-2">
-                              <Boxes className="size-4 shrink-0 text-muted-foreground" />
+                              {hasChanges ? (
+                                <button
+                                  type="button"
+                                  className="flex size-4 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+                                  onClick={() =>
+                                    setOpenStatusRepos((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(repoName)) next.delete(repoName);
+                                      else next.add(repoName);
+                                      return next;
+                                    })
+                                  }
+                                  aria-expanded={open}
+                                  title={open ? t("feature.collapse") : t("feature.expand")}
+                                >
+                                  {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+                                </button>
+                              ) : (
+                                <Boxes className="size-4 shrink-0 text-muted-foreground" />
+                              )}
                               <span className="truncate font-medium">{repoName}</span>
+                              {hasChanges && <Badge variant="warning">{t("feature.repoChanges", { count: changes.length })}</Badge>}
                               {!included && <Badge variant="outline">미추가</Badge>}
                               {included && r?.status.trim() === "" && <Badge variant="outline">{t("feature.clean")}</Badge>}
                               {(histCounts[repoName] ?? 0) > 0 && (
@@ -1255,26 +1344,21 @@ export function FeatureDetailPage({
                                 <Plus className="size-4" /> {t("feature.repoAdd")}
                               </Button>
                             )}
-                            <Button variant="ghost" size="sm" className="w-8 px-0" title={t("feature.openFolder")} disabled={busy || !included} onClick={() => openRepoFolder(repoName)}>
-                              <FolderOpen className="size-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="w-8 px-0"
-                              title={t("feature.openProgram") + " (" + programLabel(program) + ")"}
+                            <ToolOpenMenu
+                              iconOnly
                               disabled={busy || !included}
-                              onClick={() => openRepoProgram(repoName)}
-                            >
-                              <ExternalLink className="size-4" />
-                            </Button>
+                              onFolder={() => openRepoFolder(repoName)}
+                              onTerminal={(prog) => openRepoWorktreeTerminal(repoName, prog)}
+                              onTool={(prog) => openRepoProgram(repoName, prog)}
+                              onToolBrowse={() => browseAndOpenRepo(repoName)}
+                            />
                           </div>
                         </div>
                         {r?.error ? (
                           <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">{r.error}</div>
-                        ) : (r?.changes ?? []).length > 0 ? (
+                        ) : hasChanges && open ? (
                           <ul className="divide-y rounded-md border">
-                            {(r?.changes ?? []).map((change, i) => (
+                            {changes.map((change, i) => (
                               <RepoStatusRow key={change.code + "-" + change.path + "-" + i} change={change} />
                             ))}
                           </ul>
@@ -1351,6 +1435,7 @@ export function FeatureDetailPage({
                       onFolder={openAgentFolder}
                       onTerminal={openTerminal}
                       onTool={openAgentTool}
+                      onToolBrowse={() => browseAndOpen(featurePaths?.agentPath)}
                     />
                   </>
                 )}
@@ -1397,6 +1482,14 @@ export function FeatureDetailPage({
                             {preparingRepo === repo.name ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
                             {repo.agentReady ? t("feature.agentRepoRegenerate") : t("feature.agentRepoPrepare")}
                           </Button>
+                          <ToolOpenMenu
+                            iconOnly
+                            disabled={busy || !repo.agentReady || !paths?.agentPath}
+                            onFolder={() => openRepoAgentFolder(repo.name)}
+                            onTerminal={(prog) => openRepoAgentTerminal(repo.name, prog)}
+                            onTool={(prog) => openRepoAgentTool(repo.name, prog)}
+                            onToolBrowse={() => browseAndOpen(paths?.agentPath)}
+                          />
                         </div>
                       </div>
                     );

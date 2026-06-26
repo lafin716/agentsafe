@@ -53,6 +53,9 @@ const en: Dict = {
   "toolOpen.title": "Open with",
   "toolOpen.folder": "Folder",
   "toolOpen.terminal": "Terminal",
+  "toolOpen.otherTerminals": "Other terminals",
+  "toolOpen.otherPrograms": "Other programs",
+  "toolOpen.browse": "Choose program…",
 
   // workspace switcher
   "switcher.select": "Select workspace",
@@ -171,6 +174,8 @@ const en: Dict = {
   "feature.tabWork": "Work",
   "feature.branchLabel": "Branch: {branch}",
   "feature.clean": "clean",
+  "feature.expand": "Expand",
+  "feature.collapse": "Collapse",
   "feature.status.added": "New",
   "feature.status.modified": "Modified",
   "feature.status.deleted": "Deleted",
@@ -619,6 +624,9 @@ const ko: Dict = {
   "toolOpen.title": "툴 열기",
   "toolOpen.folder": "폴더",
   "toolOpen.terminal": "터미널",
+  "toolOpen.otherTerminals": "다른 터미널",
+  "toolOpen.otherPrograms": "다른 프로그램",
+  "toolOpen.browse": "직접 선택…",
 
   // workspace switcher
   "switcher.select": "워크스페이스 선택",
@@ -736,6 +744,8 @@ const ko: Dict = {
   "feature.tabWork": "작업",
   "feature.branchLabel": "브랜치: {branch}",
   "feature.clean": "변경 없음",
+  "feature.expand": "펼치기",
+  "feature.collapse": "접기",
   "feature.status.added": "신규",
   "feature.status.modified": "수정",
   "feature.status.deleted": "삭제",

@@ -182,10 +182,22 @@ export function FileExplorerPage({
     }
   }
 
-  async function openTool() {
+  async function openTool(program?: string) {
     if (!selected) return;
     try {
-      const p = await api.OpenPathInProgram(selected.path, tool.value);
+      const p = await api.OpenPathInProgram(selected.path, program ?? tool.value);
+      notify(t("toast.openedPath", { path: p }), "success");
+    } catch (e) {
+      notify(errMessage(e), "error");
+    }
+  }
+
+  async function browseAndOpenTool() {
+    if (!selected) return;
+    try {
+      const sel = await api.SelectProgram();
+      if (!sel) return;
+      const p = await api.OpenPathInProgram(selected.path, sel);
       notify(t("toast.openedPath", { path: p }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
@@ -279,13 +291,13 @@ export function FileExplorerPage({
     setActiveTab((prev) => (prev === tab.id ? "main" : prev));
   }
 
-  async function openEmbeddedTerminal() {
+  async function openEmbeddedTerminal(program?: string) {
     if (!selected) return;
     try {
       setBusy(true);
       const session = await api.TerminalOpenWithProgram(
         selected.path,
-        defaultTerminalProgram()
+        program ?? defaultTerminalProgram()
       );
       if (session.external) {
         notify(t("toast.openedPath", { path: session.path }), "success");
@@ -497,23 +509,24 @@ export function FileExplorerPage({
                       {formatDate(selected.modTime)}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <ToolOpenMenu
                       align="start"
                       disabled={busy || !selected}
                       onFolder={openSelected}
-                      onTerminal={openEmbeddedTerminal}
-                      onTool={openTool}
+                      onTerminal={(prog) => void openEmbeddedTerminal(prog)}
+                      onTool={(prog) => void openTool(prog)}
+                      onToolBrowse={() => void browseAndOpenTool()}
                     />
                     {!selected.isDir && (
-                      <Button variant="outline" onClick={() => openEditor(selected)} disabled={busy}>
+                      <Button variant="outline" size="sm" onClick={() => openEditor(selected)} disabled={busy}>
                         <File className="size-4" /> {t("explorer.openEditor")}
                       </Button>
                     )}
-                    <Button variant="outline" onClick={copyPath} disabled={busy}>
+                    <Button variant="outline" size="sm" onClick={copyPath} disabled={busy}>
                       <Copy className="size-4" /> {t("feature.copyPath")}
                     </Button>
-                    <Button variant="destructive" onClick={removeSelected} disabled={busy}>
+                    <Button variant="destructive" size="sm" onClick={removeSelected} disabled={busy}>
                       <Trash2 className="size-4" /> {t("common.delete")}
                     </Button>
                   </div>

@@ -90,6 +90,13 @@ type DropHint = {
   edge: DropEdge;
 };
 
+// Where a dragged tab would land within a tab bar. `beforeTabId === null` means
+// append at the end. Drives the in-tab-bar reorder insertion line.
+type TabDropHint = {
+  paneId: string;
+  beforeTabId: string | null;
+};
+
 // Per-workspace window state. `Persisted` is JSON-serializable and saved to
 // localStorage keyed by workspace root; `Session` holds live terminal/agent
 // sessions and is kept in memory only (not serializable).
@@ -251,6 +258,21 @@ function insertTab(tabIds: string[], tabId: string, beforeTabId?: string): strin
   return [...without.slice(0, targetIndex), tabId, ...without.slice(targetIndex)];
 }
 
+// Resolve the `beforeTabId` a dragged tab would land before when hovering a tab.
+// Computed against the list with the dragged tab removed (mirroring `insertTab`)
+// so the reorder preview and the actual drop always agree. `null` => append.
+function tabInsertBeforeId(
+  tabIds: string[],
+  draggedId: string,
+  hoverId: string,
+  onRightHalf: boolean
+): string | null {
+  const without = tabIds.filter((id) => id !== draggedId);
+  const idx = without.indexOf(hoverId);
+  if (idx < 0) return null;
+  return without[onRightHalf ? idx + 1 : idx] ?? null;
+}
+
 function computeDropEdge(e: DragEvent<HTMLElement>): DropEdge | null {
   const rect = e.currentTarget.getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -398,6 +420,7 @@ export default function App() {
   const [activePaneId, setActivePaneId] = useState("pane-1");
   const [draggedTab, setDraggedTab] = useState<DraggedTab | null>(null);
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
+  const [tabDropHint, setTabDropHint] = useState<TabDropHint | null>(null);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(loadSidebarMode);
   const [featureTerminalTabs, setFeatureTerminalTabs] = useState<
     Record<string, TerminalSession[]>
@@ -497,6 +520,7 @@ export default function App() {
       applySession(savedS ?? freshSession());
       setDraggedTab(null);
       setDropHint(null);
+      setTabDropHint(null);
       activeRootRef.current = newRoot;
       return !!savedP && Object.keys(savedP.openTabs).length > 0;
     },
@@ -813,6 +837,7 @@ export default function App() {
     setActivePaneId("pane-1");
     setDraggedTab(null);
     setDropHint(null);
+    setTabDropHint(null);
     applySession(freshSession());
   }, [applySession]);
 
@@ -1008,10 +1033,14 @@ export default function App() {
     setDraggedTab({ tabId, paneId });
   }
 
-  function dropTabOnTab(e: DragEvent<HTMLElement>, paneId: string, beforeTabId: string) {
+  // Drop within a tab bar (on a tab or its empty area). Uses the current
+  // reorder hint so the drop lands exactly where the insertion line was shown.
+  function dropInTabBar(e: DragEvent<HTMLElement>, paneId: string) {
     e.preventDefault();
     e.stopPropagation();
     if (!draggedTab) return;
+    const beforeTabId =
+      tabDropHint?.paneId === paneId ? tabDropHint.beforeTabId ?? undefined : undefined;
     setLayout((prev) => {
       const next = moveTabToPane(prev, draggedTab, paneId, beforeTabId);
       setActivePaneId(paneId);
@@ -1019,24 +1048,37 @@ export default function App() {
     });
     setDraggedTab(null);
     setDropHint(null);
+    setTabDropHint(null);
   }
 
-  function dropTabOnTabBar(e: DragEvent<HTMLElement>, paneId: string) {
+  function dragOverTab(e: DragEvent<HTMLElement>, pane: PaneModel, hoverTabId: string) {
+    if (!draggedTab) return;
+    e.preventDefault();
+    // Stop the event reaching the pane's onDragOver, which would otherwise show
+    // the split preview while we are just reordering within the tab bar.
+    e.stopPropagation();
+    setDropHint(null);
+    if (hoverTabId === draggedTab.tabId) return; // over the drag ghost; keep last hint
+    const rect = e.currentTarget.getBoundingClientRect();
+    const onRightHalf = e.clientX - rect.left > rect.width / 2;
+    setTabDropHint({
+      paneId: pane.id,
+      beforeTabId: tabInsertBeforeId(pane.tabIds, draggedTab.tabId, hoverTabId, onRightHalf),
+    });
+  }
+
+  function dragOverTabBar(e: DragEvent<HTMLElement>, paneId: string) {
+    if (!draggedTab) return;
     e.preventDefault();
     e.stopPropagation();
-    if (!draggedTab) return;
-    setLayout((prev) => {
-      const next = moveTabToPane(prev, draggedTab, paneId);
-      setActivePaneId(paneId);
-      return next;
-    });
-    setDraggedTab(null);
     setDropHint(null);
+    setTabDropHint({ paneId, beforeTabId: null });
   }
 
   function dragOverPane(e: DragEvent<HTMLElement>, paneId: string) {
     if (!draggedTab) return;
     e.preventDefault();
+    setTabDropHint(null);
     const edge = computeDropEdge(e);
     setDropHint(edge ? { paneId, edge } : null);
   }
@@ -1055,6 +1097,7 @@ export default function App() {
     });
     setDraggedTab(null);
     setDropHint(null);
+    setTabDropHint(null);
   }
 
   function startRowResize(e: ReactPointerEvent<HTMLDivElement>) {
@@ -1108,10 +1151,10 @@ export default function App() {
         <div
           className={cn(
             "absolute rounded-md border-2 border-primary bg-primary/15",
-            dropHint.edge === "left" && "inset-y-2 left-2 w-1/4",
-            dropHint.edge === "right" && "inset-y-2 right-2 w-1/4",
-            dropHint.edge === "top" && "inset-x-2 top-2 h-1/4",
-            dropHint.edge === "bottom" && "inset-x-2 bottom-2 h-1/4"
+            dropHint.edge === "left" && "inset-y-2 left-2 w-1/2",
+            dropHint.edge === "right" && "inset-y-2 right-2 w-1/2",
+            dropHint.edge === "top" && "inset-x-2 top-2 h-1/2",
+            dropHint.edge === "bottom" && "inset-x-2 bottom-2 h-1/2"
           )}
         />
       </div>
@@ -1141,29 +1184,31 @@ export default function App() {
         {renderDropHint(pane.id)}
         <div
           className="flex shrink-0 items-end gap-1 overflow-x-auto border-b bg-card px-3 pt-2"
-          onDragOver={(e) => {
-            if (draggedTab) e.preventDefault();
-          }}
-          onDrop={(e) => dropTabOnTabBar(e, pane.id)}
+          onDragOver={(e) => dragOverTabBar(e, pane.id)}
+          onDrop={(e) => dropInTabBar(e, pane.id)}
         >
           {pane.tabIds.map((tabId) => {
             const tab = openTabs[tabId];
             if (!tab) return null;
             const Icon = iconForView(tab.view);
             const active = activeTabId === tab.id;
+            const showLineBefore =
+              tabDropHint?.paneId === pane.id && tabDropHint.beforeTabId === tab.id;
             return (
+              <Fragment key={tab.id}>
+                {showLineBefore && (
+                  <div className="pointer-events-none w-0.5 self-stretch rounded bg-primary" />
+                )}
               <div
-                key={tab.id}
                 draggable
                 onDragStart={(e) => beginTabDrag(e, tab.id, pane.id)}
                 onDragEnd={() => {
                   setDraggedTab(null);
                   setDropHint(null);
+                  setTabDropHint(null);
                 }}
-                onDragOver={(e) => {
-                  if (draggedTab) e.preventDefault();
-                }}
-                onDrop={(e) => dropTabOnTab(e, pane.id, tab.id)}
+                onDragOver={(e) => dragOverTab(e, pane, tab.id)}
+                onDrop={(e) => dropInTabBar(e, pane.id)}
                 className={cn(
                   "group flex max-w-64 cursor-grab items-center gap-1 rounded-t-md border border-b-0 px-2 py-1.5 text-sm active:cursor-grabbing",
                   active ? "bg-background font-medium" : "bg-muted/30 text-muted-foreground"
@@ -1202,8 +1247,12 @@ export default function App() {
                   </button>
                 )}
               </div>
+              </Fragment>
             );
           })}
+          {tabDropHint?.paneId === pane.id && tabDropHint.beforeTabId === null && (
+            <div className="pointer-events-none w-0.5 self-stretch rounded bg-primary" />
+          )}
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-6">
           {activeTab ? (
