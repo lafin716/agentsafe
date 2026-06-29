@@ -367,3 +367,22 @@ func RestoreFromWorktree(root string, cfg config.Config, featureName, repoName, 
 	}
 	return fsutil.CopyFile(worktreePath, agentPath, info.Mode().Perm())
 }
+
+// RestoreRepoFromWorktree overwrites every changed file in one repository's
+// prepared agent workspace with its current worktree version, returning the
+// number of files restored. It reuses Diff (scoped to the repo) for the change
+// list and the per-file RestoreFromWorktree for each file.
+func RestoreRepoFromWorktree(root string, cfg config.Config, featureName, repoName string) (int, error) {
+	changes, err := Diff(root, cfg, featureName, repoName)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, c := range changes[repoName] {
+		if err := RestoreFromWorktree(root, cfg, featureName, repoName, c.Path); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}

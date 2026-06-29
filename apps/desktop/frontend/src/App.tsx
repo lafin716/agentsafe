@@ -422,8 +422,7 @@ export default function App() {
   const [dropHint, setDropHint] = useState<DropHint | null>(null);
   const [tabDropHint, setTabDropHint] = useState<TabDropHint | null>(null);
   // True when the in-flight tab drag was dropped on a pane/tab-bar inside the
-  // window. When a drag ends without an internal drop (dropped outside the app),
-  // onTabDragEnd detaches the tab into a separate OS window.
+  // window. A drag that ends without an internal drop just leaves the tab in place.
   const droppedInternallyRef = useRef(false);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(loadSidebarMode);
   const [featureTerminalTabs, setFeatureTerminalTabs] = useState<
@@ -874,28 +873,6 @@ export default function App() {
     closeTabs([tabId]);
   }
 
-  // Remove a tab from this window's layout/openTabs WITHOUT closing its backing
-  // session. Used when detaching a tab into a popout window, where the terminal
-  // PTY must stay alive so the popout can reconnect to it (unlike closeTabs,
-  // which kills terminal sessions).
-  function detachTabFromWindow(tabId: string) {
-    setOpenTabs((prev) => {
-      const next = { ...prev };
-      delete next[tabId];
-      return next;
-    });
-    setLayout((prev) => {
-      const next = cloneLayout(prev);
-      for (const currentPaneId of Object.keys(next.panes)) {
-        next.panes[currentPaneId] = removeTabFromPane(next.panes[currentPaneId], tabId);
-      }
-      const normalized = cleanupLayout(next);
-      const fallbackPaneId = normalized.panes[activePaneId] ? activePaneId : firstPaneId(normalized);
-      setActivePaneId(fallbackPaneId);
-      return normalized;
-    });
-  }
-
   // Drop restored feature/history tabs whose feature no longer exists.
   async function pruneStaleTabs() {
     try {
@@ -1060,22 +1037,13 @@ export default function App() {
     setDraggedTab({ tabId, paneId });
   }
 
-  // When a tab drag ends without landing on a pane/tab-bar (dropped outside the
-  // app window), detach it into a separate OS window via the popout bridge and
-  // remove it from this window's layout. The backend (terminals/etc.) stays
-  // alive, so the popout reconnects to the same session.
-  function onTabDragEnd(e: DragEvent<HTMLElement>, tab: AppTab) {
-    const droppedInternally = droppedInternallyRef.current;
+  // Reset the in-flight drag state when a tab drag ends. A tab dropped outside
+  // any pane/tab-bar simply stays where it was (there are no detached windows).
+  function onTabDragEnd() {
     droppedInternallyRef.current = false;
     setDraggedTab(null);
     setDropHint(null);
     setTabDropHint(null);
-    if (droppedInternally) return;
-    if (e.dataTransfer.dropEffect !== "none") return;
-    void api
-      .OpenPopoutWindow(JSON.stringify(tab.view))
-      .then(() => detachTabFromWindow(tab.id))
-      .catch((err) => notify(errMessage(err), "error"));
   }
 
   // Drop within a tab bar (on a tab or its empty area). Uses the current
@@ -1249,7 +1217,7 @@ export default function App() {
               <div
                 draggable
                 onDragStart={(e) => beginTabDrag(e, tab.id, pane.id)}
-                onDragEnd={(e) => onTabDragEnd(e, tab)}
+                onDragEnd={onTabDragEnd}
                 onDragOver={(e) => dragOverTab(e, pane, tab.id)}
                 onDrop={(e) => dropInTabBar(e, pane.id)}
                 className={cn(

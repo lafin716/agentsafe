@@ -1,8 +1,10 @@
 import {
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -13,6 +15,7 @@ import {
   Boxes,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Copy,
   ExternalLink,
   Eye,
@@ -21,6 +24,8 @@ import {
   GitMerge,
   History,
   Loader2,
+  Maximize2,
+  Minimize2,
   Play,
   Plus,
   RefreshCw,
@@ -65,7 +70,14 @@ import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
 import { useDefaultTool } from "@/lib/tool";
 import { cn } from "@/lib/utils";
-import { diffRows } from "@/lib/linediff";
+import { diffRows, wordDiff, type DiffRow } from "@/lib/linediff";
+import {
+  composeLine,
+  highlightLines,
+  languageForPath,
+  type Piece,
+  type Token,
+} from "@/lib/highlight";
 
 interface Props {
   name: string;
@@ -116,13 +128,13 @@ export function FeatureDetailPage({
   const [openDiffRepos, setOpenDiffRepos] = useState<Set<string>>(new Set());
   // Per-repo expand/collapse for the worktree status changed-file lists.
   const [openStatusRepos, setOpenStatusRepos] = useState<Set<string>>(new Set());
-  const [fileView, setFileView] = useState<{
-    repo: string;
-    change: Change;
-    loading: boolean;
-    data?: ChangeFileView;
-    error?: string;
-  } | null>(null);
+  // The per-file diff modal. The file content is fetched by <ChangeFileDiff>
+  // itself, so this only needs to identify which change is being viewed.
+  const [fileView, setFileView] = useState<{ repo: string; change: Change } | null>(
+    null
+  );
+  // Whether the in-app diff modal is expanded to fill the window.
+  const [fileFullscreen, setFileFullscreen] = useState(false);
   // Sync-history stack depth per repository, for the count badges.
   const [histCounts, setHistCounts] = useState<Record<string, number>>({});
   // Local override of prepared state. null = no user action yet (fall back to
@@ -438,14 +450,22 @@ export function FeatureDetailPage({
       await loadDiff();
     });
 
+  const restoreRepoFromWorktree = (repo: string, fileCount: number) =>
+    run(async () => {
+      if (
+        !(await confirm({
+          message: t("feature.restoreRepoConfirm", { repo, count: fileCount }),
+          danger: true,
+        }))
+      )
+        return;
+      const n = await api.AgentRestoreRepoFromWorktree(name, repo);
+      notify(t("toast.agentRepoRestoredFromWorktree", { repo, count: n }), "success");
+      await loadDiff();
+    });
+
   const openChangeFileView = (repo: string, change: Change) => {
-    setFileView({ repo, change, loading: true });
-    api
-      .AgentChangeFileView(name, repo, change.path)
-      .then((data) => setFileView({ repo, change, loading: false, data }))
-      .catch((e) =>
-        setFileView({ repo, change, loading: false, error: errMessage(e) })
-      );
+    setFileView({ repo, change });
   };
 
   const del = () =>
@@ -1058,20 +1078,20 @@ export function FeatureDetailPage({
                     const open = openDiffRepos.has(r.name);
                     return (
                       <div key={r.name} className="rounded-md border">
-                        <button
-                          type="button"
-                          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-accent/50"
-                          onClick={() =>
-                            setOpenDiffRepos((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(r.name)) next.delete(r.name);
-                              else next.add(r.name);
-                              return next;
-                            })
-                          }
-                          aria-expanded={open}
-                        >
-                          <div className="flex min-w-0 items-center gap-2">
+                        <div className="flex w-full items-center gap-2 px-3 py-2">
+                          <button
+                            type="button"
+                            className="flex min-w-0 flex-1 items-center gap-2 rounded text-left hover:bg-accent/50"
+                            onClick={() =>
+                              setOpenDiffRepos((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(r.name)) next.delete(r.name);
+                                else next.add(r.name);
+                                return next;
+                              })
+                            }
+                            aria-expanded={open}
+                          >
                             {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                             <span className="truncate font-medium">{r.name}</span>
                             <Badge variant={changes.length > 0 ? "secondary" : "outline"}>
@@ -1082,8 +1102,20 @@ export function FeatureDetailPage({
                                 {t("feature.syncHistoryBadge", { count: histCounts[r.name] })}
                               </Badge>
                             )}
-                          </div>
-                        </button>
+                          </button>
+                          {changes.length > 0 && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 shrink-0"
+                              disabled={busy || diffLoading}
+                              onClick={() => restoreRepoFromWorktree(r.name, changes.length)}
+                              title={t("feature.restoreRepoFromWorktree")}
+                            >
+                              <RotateCcw className="size-3.5" /> {t("feature.restoreRepoFromWorktreeShort")}
+                            </Button>
+                          )}
+                        </div>
                         {open && (
                           changes.length === 0 ? (
                             <p className="border-t p-3 text-sm text-muted-foreground">{t("feature.noChanges")}</p>
@@ -1611,57 +1643,52 @@ export function FeatureDetailPage({
       )}
       {fileView && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className={cn(
+            "fixed inset-0 z-50 flex items-center justify-center bg-black/50",
+            !fileFullscreen && "p-4"
+          )}
           onClick={() => setFileView(null)}
         >
           <div
-            className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border bg-card shadow-xl"
+            className={cn(
+              "flex flex-col overflow-hidden bg-card shadow-xl",
+              fileFullscreen
+                ? "h-full w-full"
+                : "max-h-[90vh] w-full max-w-6xl rounded-lg border"
+            )}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-4 border-b p-4">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="truncate text-lg font-semibold">{fileView.change.path}</h2>
-                  {fileView.change.risky && <Badge variant="warning">{t("feature.risky")}</Badge>}
-                  {fileView.change.masked && <Badge variant="destructive">{t("feature.masked")}</Badge>}
-                </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {t("feature.fileViewDesc", { repo: fileView.repo })}
-                </p>
-              </div>
-              <Button variant="ghost" size="icon" onClick={() => setFileView(null)} title={t("common.close")}>
-                <X className="size-4" />
-              </Button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto p-4">
-              {fileView.loading ? (
-                <LoadingState label={t("common.loading")} />
-              ) : fileView.error ? (
-                <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-                  {fileView.error}
-                </div>
-              ) : fileView.data ? (
-                (() => {
-                  const wt = fileView.data.worktree;
-                  const ag = fileView.data.agent;
-                  const canDiff = !wt.error && !ag.error && (wt.exists || ag.exists);
-                  if (!canDiff) {
-                    return (
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <FileViewSidePanel title={t("feature.fileViewWorktree")} side={wt} />
-                        <FileViewSidePanel title={t("feature.fileViewAgent")} side={ag} />
-                      </div>
-                    );
-                  }
-                  return (
-                    <DiffView
-                      left={{ title: t("feature.fileViewWorktree"), ...wt }}
-                      right={{ title: t("feature.fileViewAgent"), ...ag }}
-                    />
-                  );
-                })()
-              ) : null}
-            </div>
+            <ChangeFileDiff
+              feature={name}
+              repo={fileView.repo}
+              change={fileView.change}
+              fill={fileFullscreen}
+              className="min-h-0 flex-1"
+              headerActions={
+                <>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setFileFullscreen((v) => !v)}
+                    title={fileFullscreen ? t("common.exitFullscreen") : t("common.fullscreen")}
+                  >
+                    {fileFullscreen ? (
+                      <Minimize2 className="size-4" />
+                    ) : (
+                      <Maximize2 className="size-4" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setFileView(null)}
+                    title={t("common.close")}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </>
+              }
+            />
           </div>
         </div>
       )}
@@ -1724,6 +1751,105 @@ function ChangeRow({
   );
 }
 
+// ChangeFileDiff fetches and renders a single changed file's worktree-vs-agent
+// view (side-by-side diff, or side panels when one side can't be diffed). It is
+// self-contained and rendered inside the in-app file-diff modal. `headerActions`
+// lets the host inject its own buttons (fullscreen / close) into the header.
+export function ChangeFileDiff({
+  feature,
+  repo,
+  change,
+  headerActions,
+  className,
+  fill,
+}: {
+  feature: string;
+  repo: string;
+  change: Change;
+  headerActions?: ReactNode;
+  className?: string;
+  // When true, the diff grows to fill available height (used in fullscreen).
+  fill?: boolean;
+}) {
+  const { t } = useI18n();
+  const [state, setState] = useState<{
+    loading: boolean;
+    data?: ChangeFileView;
+    error?: string;
+  }>({ loading: true });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true });
+    api
+      .AgentChangeFileView(feature, repo, change.path)
+      .then((data) => {
+        if (!cancelled) setState({ loading: false, data });
+      })
+      .catch((e) => {
+        if (!cancelled) setState({ loading: false, error: errMessage(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [feature, repo, change.path]);
+
+  return (
+    <div className={cn("flex flex-col overflow-hidden bg-card", className)}>
+      <div className="flex items-start justify-between gap-4 border-b p-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="truncate text-lg font-semibold">{change.path}</h2>
+            {change.risky && <Badge variant="warning">{t("feature.risky")}</Badge>}
+            {change.masked && <Badge variant="destructive">{t("feature.masked")}</Badge>}
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t("feature.fileViewDesc", { repo })}
+          </p>
+        </div>
+        {headerActions && (
+          <div className="flex shrink-0 items-center gap-1">{headerActions}</div>
+        )}
+      </div>
+      <div
+        className={cn(
+          "min-h-0 flex-1 p-4",
+          fill ? "flex flex-col overflow-hidden" : "overflow-auto"
+        )}
+      >
+        {state.loading ? (
+          <LoadingState label={t("common.loading")} />
+        ) : state.error ? (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            {state.error}
+          </div>
+        ) : state.data ? (
+          (() => {
+            const wt = state.data.worktree;
+            const ag = state.data.agent;
+            const canDiff = !wt.error && !ag.error && (wt.exists || ag.exists);
+            if (!canDiff) {
+              return (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <FileViewSidePanel title={t("feature.fileViewWorktree")} side={wt} />
+                  <FileViewSidePanel title={t("feature.fileViewAgent")} side={ag} />
+                </div>
+              );
+            }
+            return (
+              <DiffView
+                left={{ title: t("feature.fileViewWorktree"), ...wt }}
+                right={{ title: t("feature.fileViewAgent"), ...ag }}
+                fill={fill}
+              />
+            );
+          })()
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function FileViewSidePanel({
   title,
   side,
@@ -1745,7 +1871,7 @@ function FileViewSidePanel({
       ) : side.error ? (
         <div className="p-4 text-sm text-destructive">{side.error}</div>
       ) : (
-        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words bg-slate-950 p-3 font-mono text-xs text-slate-100">
+        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words bg-muted/30 p-3 font-mono text-xs text-foreground">
           {side.content ?? ""}
         </pre>
       )}
@@ -1754,23 +1880,126 @@ function FileViewSidePanel({
 }
 
 // DiffView renders a git-style side-by-side line diff (left = worktree/base,
-// right = agent/new) inside a single scroll container so both columns scroll
-// together vertically and horizontally. Changed/removed lines are tinted red on
-// the left, added/changed lines tinted green on the right.
+// right = agent/new). Each side is its own scroll container and the two are kept
+// in sync on both axes, so scrolling either pane (horizontally or vertically)
+// moves both and keeps rows row-for-row aligned. Lines are syntax-highlighted
+// (highlight.js) and added/removed/changed rows are tinted in theme-aware colors,
+// with the specific changed words emphasized.
 function DiffView({
   left,
   right,
+  fill,
 }: {
   left: { title: string; path: string; exists: boolean; content?: string };
   right: { title: string; path: string; exists: boolean; content?: string };
+  // When true, the diff fills its parent's height instead of capping at ~68vh.
+  fill?: boolean;
 }) {
   const { t } = useI18n();
-  const rows = diffRows(
-    left.exists ? left.content ?? "" : "",
-    right.exists ? right.content ?? "" : ""
-  );
+  const leftContent = left.exists ? left.content ?? "" : "";
+  const rightContent = right.exists ? right.content ?? "" : "";
+
+  const { rows, leftTok, rightTok } = useMemo(() => {
+    const language = languageForPath(left.path || right.path);
+    return {
+      rows: diffRows(leftContent, rightContent),
+      leftTok: highlightLines(leftContent, language),
+      rightTok: highlightLines(rightContent, language),
+    };
+  }, [leftContent, rightContent, left.path, right.path]);
+
+  // Start indices of each change block: a row that differs and follows an equal
+  // row (or is the first row). Drives the change-count and prev/next navigation.
+  const hunkStarts = useMemo(() => {
+    const starts: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].type !== "equal" && (i === 0 || rows[i - 1].type === "equal")) {
+        starts.push(i);
+      }
+    }
+    return starts;
+  }, [rows]);
+  const count = hunkStarts.length;
+
+  // Keep the two horizontal scrollers in lock-step without feedback loops.
+  const leftScroll = useRef<HTMLDivElement>(null);
+  const rightScroll = useRef<HTMLDivElement>(null);
+  const syncing = useRef(false);
+  const syncScroll = (from: HTMLDivElement | null, to: HTMLDivElement | null) => {
+    if (!from || !to || syncing.current) return;
+    syncing.current = true;
+    to.scrollTop = from.scrollTop;
+    to.scrollLeft = from.scrollLeft;
+    requestAnimationFrame(() => {
+      syncing.current = false;
+    });
+  };
+
+  // Index of the change block the user last jumped to (-1 = none yet).
+  const [current, setCurrent] = useState(-1);
+  useEffect(() => {
+    setCurrent(-1);
+    if (leftScroll.current) leftScroll.current.scrollTop = 0;
+    if (rightScroll.current) rightScroll.current.scrollTop = 0;
+  }, [rows]);
+
+  const goTo = (idx: number) => {
+    setCurrent(idx);
+    const el = leftScroll.current;
+    if (!el || rows.length === 0) return;
+    const rowH = el.scrollHeight / rows.length;
+    const top = Math.max(0, (hunkStarts[idx] - 2) * rowH);
+    el.scrollTop = top;
+    if (rightScroll.current) rightScroll.current.scrollTop = top;
+  };
+  const goRel = (delta: number) => {
+    if (count === 0) return;
+    const idx =
+      current < 0
+        ? delta > 0
+          ? 0
+          : count - 1
+        : ((current + delta) % count + count) % count;
+    goTo(idx);
+  };
+
   return (
-    <div className="overflow-hidden rounded-md border">
+    <div
+      className={cn(
+        "overflow-hidden rounded-md border bg-background text-foreground",
+        fill && "flex min-h-0 flex-1 flex-col"
+      )}
+    >
+      <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-xs">
+        <span className="font-medium">
+          {count > 0 ? t("feature.diffHunks", { count }) : t("feature.noChanges")}
+        </span>
+        {current >= 0 && count > 0 && (
+          <span className="tabular-nums text-muted-foreground">
+            {current + 1}/{count}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => goRel(-1)}
+            disabled={count === 0}
+            title={t("feature.prevChange")}
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+          >
+            <ChevronUp className="size-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => goRel(1)}
+            disabled={count === 0}
+            title={t("feature.nextChange")}
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+          >
+            <ChevronDown className="size-4" />
+          </button>
+        </div>
+      </div>
       <div className="grid grid-cols-2 border-b bg-muted/40 text-xs">
         <div className="min-w-0 border-r px-3 py-2">
           <div className="font-medium">{left.title}</div>
@@ -1787,31 +2016,106 @@ function DiffView({
           </div>
         </div>
       </div>
-      <div className="max-h-[68vh] overflow-auto bg-slate-950 font-mono text-xs leading-5 text-slate-100">
-        <table className="border-collapse">
-          <tbody>
-            {rows.map((row, i) => {
-              const leftBg =
-                row.type === "removed" || row.type === "changed" ? "bg-red-950/60" : "";
-              const rightBg =
-                row.type === "added" || row.type === "changed" ? "bg-emerald-950/60" : "";
-              return (
-                <tr key={i} className="align-top">
-                  <td className="select-none whitespace-nowrap px-2 text-right text-slate-600">
-                    {row.left?.n ?? ""}
-                  </td>
-                  <td className={cn("whitespace-pre px-2", leftBg)}>{row.left?.text ?? ""}</td>
-                  <td className="select-none whitespace-nowrap border-l border-slate-800 px-2 text-right text-slate-600">
-                    {row.right?.n ?? ""}
-                  </td>
-                  <td className={cn("whitespace-pre px-2", rightBg)}>{row.right?.text ?? ""}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div
+        className={cn(
+          "grid grid-cols-2 divide-x font-mono text-xs leading-5",
+          fill && "min-h-0 flex-1 grid-rows-1"
+        )}
+      >
+        <div
+          ref={leftScroll}
+          className={cn("min-w-0 overflow-auto", fill ? "h-full" : "max-h-[68vh]")}
+          onScroll={() => syncScroll(leftScroll.current, rightScroll.current)}
+        >
+          <DiffColumn rows={rows} tokens={leftTok} side="left" />
+        </div>
+        <div
+          ref={rightScroll}
+          className={cn("min-w-0 overflow-auto", fill ? "h-full" : "max-h-[68vh]")}
+          onScroll={() => syncScroll(rightScroll.current, leftScroll.current)}
+        >
+          <DiffColumn rows={rows} tokens={rightTok} side="right" />
+        </div>
       </div>
     </div>
+  );
+}
+
+// DiffColumn renders one side (left or right) of the side-by-side diff as a
+// 2-column table (line number + content). Both columns are built from the same
+// `rows`, so row i lines up across the two tables; one-sided rows render a
+// zero-width placeholder to preserve row height.
+function DiffColumn({
+  rows,
+  tokens,
+  side,
+}: {
+  rows: DiffRow[];
+  tokens: Token[][];
+  side: "left" | "right";
+}) {
+  return (
+    <table className="w-full border-collapse">
+      <tbody>
+        {rows.map((row, i) => {
+          const cell = side === "left" ? row.left : row.right;
+          const tinted =
+            side === "left"
+              ? row.type === "removed" || row.type === "changed"
+              : row.type === "added" || row.type === "changed";
+          const rowBg = !tinted
+            ? ""
+            : side === "left"
+              ? "bg-rose-100 dark:bg-rose-500/15"
+              : "bg-emerald-100 dark:bg-emerald-500/15";
+          const gutterBg = !tinted
+            ? ""
+            : side === "left"
+              ? "bg-rose-200/70 dark:bg-rose-500/20"
+              : "bg-emerald-200/70 dark:bg-emerald-500/20";
+
+          let pieces: Piece[] = [];
+          if (cell) {
+            const lineTok = tokens[cell.n - 1] ?? [{ text: cell.text, cls: "" }];
+            const segs =
+              row.type === "changed" && row.left && row.right
+                ? (side === "left"
+                    ? wordDiff(row.left.text, row.right.text).left
+                    : wordDiff(row.left.text, row.right.text).right)
+                : undefined;
+            pieces = composeLine(lineTok, segs);
+          }
+
+          return (
+            <tr key={i} className="h-5 align-top">
+              <td
+                className={cn(
+                  "select-none whitespace-nowrap px-2 text-right tabular-nums text-muted-foreground",
+                  gutterBg
+                )}
+              >
+                {cell?.n ?? ""}
+              </td>
+              <td className={cn("whitespace-pre px-2", rowBg)}>
+                {cell && pieces.length
+                  ? pieces.map((p, j) => (
+                      <span
+                        key={j}
+                        className={cn(
+                          p.cls,
+                          p.changed && (side === "left" ? "diff-word-del" : "diff-word-add")
+                        )}
+                      >
+                        {p.text}
+                      </span>
+                    ))
+                  : "​"}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -50,20 +49,12 @@ type App struct {
 	terminalMu   sync.Mutex
 	terminalSeq  int
 	terminals    map[string]*terminalProcess
-
-	// assets is the embedded frontend/dist filesystem, injected by main so the
-	// popout bridge can serve the SPA. bridge is the loopback server that backs
-	// detached popout windows (nil until startup succeeds).
-	assets fs.FS
-	bridge *bridgeServer
 }
 
-// emit forwards a Wails event to the main window and mirrors it to any detached
-// popout windows over the bridge. Every runtime.EventsEmit in this file goes
-// through here so popouts receive the same task/log/terminal/agent events.
+// emit forwards a Wails event to the frontend. Every runtime.EventsEmit in this
+// file goes through here so event emission stays in one place.
 func (a *App) emit(name string, data any) {
 	runtime.EventsEmit(a.ctx, name, data)
-	a.bridge.broadcast(name, data)
 }
 
 type gitCredential struct {
@@ -136,15 +127,6 @@ func (a *App) startup(ctx context.Context) {
 		a.emit("log:entry", e)
 	})
 	applog.Info("desktop app started")
-	// Start the loopback bridge that backs detached popout windows. A failure
-	// here must not stop the app launching; popout is simply unavailable.
-	if a.assets != nil {
-		if b, err := newBridge(a, a.assets); err != nil {
-			applog.Warn("popout bridge failed to start", "err", err)
-		} else {
-			a.bridge = b
-		}
-	}
 	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
 		a.emit("workspace:file-drop", map[string]any{
 			"x":     x,
@@ -1668,6 +1650,18 @@ func (a *App) AgentRestoreFromWorktree(name, repoName, path string) error {
 	return agent.RestoreFromWorktree(root, cfg, name, repoName, path)
 }
 
+func (a *App) AgentRestoreRepoFromWorktree(name, repoName string) (int, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return 0, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return 0, err
+	}
+	return agent.RestoreRepoFromWorktree(root, cfg, name, repoName)
+}
+
 func (a *App) AgentDelete(name string) error {
 	root, err := a.requireRoot()
 	if err != nil {
@@ -2268,22 +2262,6 @@ func (a *App) OpenURL(url string) error {
 		return fmt.Errorf("empty url")
 	}
 	runtime.BrowserOpenURL(a.ctx, url)
-	return nil
-}
-
-// OpenPopoutWindow detaches a tab into a separate OS window. Wails v2 cannot
-// create native secondary windows, so the view is opened in the system browser
-// pointed at the loopback bridge; the popout reaches this same backend over the
-// bridge (RPC + SSE), keeping terminals/diffs/file IO fully functional.
-// viewJSON is the JSON of the frontend View object for the detached tab.
-func (a *App) OpenPopoutWindow(viewJSON string) error {
-	if a.bridge == nil {
-		return fmt.Errorf("popout bridge is not running")
-	}
-	if strings.TrimSpace(viewJSON) == "" {
-		return fmt.Errorf("empty view")
-	}
-	runtime.BrowserOpenURL(a.ctx, a.bridge.popoutURL(viewJSON))
 	return nil
 }
 

@@ -132,6 +132,7 @@ type AppBindings = {
   SyncAndCommit(name: string, message: string, opt: SyncOptions): Promise<void>;
   SyncCommitPush(name: string, message: string, opt: SyncOptions): Promise<void>;
   AgentRestoreFromWorktree(name: string, repoName: string, path: string): Promise<void>;
+  AgentRestoreRepoFromWorktree(name: string, repoName: string): Promise<number>;
   AgentDelete(name: string): Promise<void>;
   AllSyncHistory(): Promise<SyncHistoryEntry[]>;
   RollbackSync(name: string, repo: string, id: string): Promise<void>;
@@ -157,8 +158,6 @@ type AppBindings = {
   Push(name: string, repoFilter: string): Promise<void>;
   CreateMergeRequests(name: string, title: string): Promise<RequestResults>;
   OpenURL(url: string): Promise<void>;
-  // Detaches a tab into a separate OS window. viewJSON is JSON.stringify(view).
-  OpenPopoutWindow(viewJSON: string): Promise<void>;
   SaveGitSettings(
     git: GitConfig,
     gitlab: GitLabConfig,

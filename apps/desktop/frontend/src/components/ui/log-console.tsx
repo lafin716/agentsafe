@@ -198,9 +198,18 @@ export function LogConsoleButton() {
   );
 }
 
-export function LogConsoleWindow() {
+// LogConsolePanel is the reusable, frameless log console body (task list + detail
+// pane). It is rendered inside the in-app modal (LogConsoleWindow). `headerActions`
+// lets the host inject its own buttons (close) into the header.
+export function LogConsolePanel({
+  headerActions,
+  className,
+}: {
+  headerActions?: React.ReactNode;
+  className?: string;
+}) {
   const { t } = useI18n();
-  const { entries, appLog, open, setOpen, clear } = useLogConsole();
+  const { entries, appLog, clear } = useLogConsole();
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
   const logRef = React.useRef<HTMLPreElement | null>(null);
@@ -232,19 +241,8 @@ export function LogConsoleWindow() {
       : "";
 
   React.useEffect(() => {
-    if (open && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [detail, open]);
-
-  React.useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, setOpen]);
-
-  if (!open) return null;
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [detail]);
 
   const copy = async () => {
     try {
@@ -264,112 +262,139 @@ export function LogConsoleWindow() {
   };
 
   return (
+    <div className={cn("flex flex-col overflow-hidden bg-card", className)}>
+      <div className="flex items-center gap-3 border-b px-5 py-3">
+        <ScrollText className="size-4 text-primary" />
+        <h2 className="flex-1 text-sm font-semibold">{t("logs.title")}</h2>
+        <button
+          type="button"
+          onClick={openFile}
+          className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          title={t("logs.openFile")}
+        >
+          <FileText className="size-3.5" />
+          {t("logs.openFile")}
+        </button>
+        <button
+          type="button"
+          onClick={openFolder}
+          className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          title={t("logs.openFolder")}
+        >
+          <FolderOpen className="size-3.5" />
+          {t("logs.openFolder")}
+        </button>
+        <button
+          type="button"
+          onClick={clear}
+          disabled={entries.length === 0 && appLog === ""}
+          className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+          title={t("logs.clear")}
+        >
+          <Trash2 className="size-3.5" />
+          {t("logs.clear")}
+        </button>
+        {headerActions}
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        <ul className="w-72 shrink-0 overflow-auto border-r">
+          <li>
+            <button
+              type="button"
+              onClick={() => setSelectedKey(APP_KEY)}
+              className={cn(
+                "flex w-full items-center gap-2 border-b px-3 py-2 text-left text-xs hover:bg-muted/60",
+                isApp && "bg-muted"
+              )}
+            >
+              <ScrollText className="size-3.5 shrink-0 text-primary" />
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {t("logs.appLog")}
+              </span>
+            </button>
+          </li>
+          {[...entries].reverse().map((entry) => (
+            <li key={entry.id}>
+              <button
+                type="button"
+                onClick={() => setSelectedKey(`t-${entry.id}`)}
+                className={cn(
+                  "flex w-full items-center gap-2 border-b px-3 py-2 text-left text-xs hover:bg-muted/60",
+                  !isApp && selectedTask?.id === entry.id && "bg-muted"
+                )}
+              >
+                <StatusIcon status={entry.status} />
+                <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {formatDuration(entry)}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center gap-2 border-b px-4 py-2">
+            <span className="min-w-0 flex-1 truncate text-xs font-medium">{title}</span>
+            <button
+              type="button"
+              onClick={copy}
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              title={t("logs.copy")}
+            >
+              <Copy className="size-3.5" />
+              {copied ? t("logs.copied") : t("logs.copy")}
+            </button>
+          </div>
+          <pre
+            ref={logRef}
+            className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/30 p-4 text-xs leading-relaxed"
+          >
+            {detail || t("logs.empty")}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function LogConsoleWindow() {
+  const { t } = useI18n();
+  const { open, setOpen } = useLogConsole();
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, setOpen]);
+
+  if (!open) return null;
+
+  return (
     <div
       className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-4"
       onClick={() => setOpen(false)}
     >
       <div
-        className="flex h-[80vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border bg-card shadow-2xl"
+        className="flex h-[80vh] w-full max-w-5xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center gap-3 border-b px-5 py-3">
-          <ScrollText className="size-4 text-primary" />
-          <h2 className="flex-1 text-sm font-semibold">{t("logs.title")}</h2>
-          <button
-            type="button"
-            onClick={openFile}
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-            title={t("logs.openFile")}
-          >
-            <FileText className="size-3.5" />
-            {t("logs.openFile")}
-          </button>
-          <button
-            type="button"
-            onClick={openFolder}
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-            title={t("logs.openFolder")}
-          >
-            <FolderOpen className="size-3.5" />
-            {t("logs.openFolder")}
-          </button>
-          <button
-            type="button"
-            onClick={clear}
-            disabled={entries.length === 0 && appLog === ""}
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-            title={t("logs.clear")}
-          >
-            <Trash2 className="size-3.5" />
-            {t("logs.clear")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            title={t("common.close")}
-          >
-            <X className="size-5" />
-          </button>
-        </div>
-
-        <div className="flex min-h-0 flex-1">
-          <ul className="w-72 shrink-0 overflow-auto border-r">
-            <li>
-              <button
-                type="button"
-                onClick={() => setSelectedKey(APP_KEY)}
-                className={cn(
-                  "flex w-full items-center gap-2 border-b px-3 py-2 text-left text-xs hover:bg-muted/60",
-                  isApp && "bg-muted"
-                )}
-              >
-                <ScrollText className="size-3.5 shrink-0 text-primary" />
-                <span className="min-w-0 flex-1 truncate font-medium">
-                  {t("logs.appLog")}
-                </span>
-              </button>
-            </li>
-            {[...entries].reverse().map((entry) => (
-              <li key={entry.id}>
-                <button
-                  type="button"
-                  onClick={() => setSelectedKey(`t-${entry.id}`)}
-                  className={cn(
-                    "flex w-full items-center gap-2 border-b px-3 py-2 text-left text-xs hover:bg-muted/60",
-                    !isApp && selectedTask?.id === entry.id && "bg-muted"
-                  )}
-                >
-                  <StatusIcon status={entry.status} />
-                  <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground">
-                    {formatDuration(entry)}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div className="flex min-w-0 flex-1 flex-col">
-            <div className="flex items-center gap-2 border-b px-4 py-2">
-              <span className="min-w-0 flex-1 truncate text-xs font-medium">{title}</span>
-              <button
-                type="button"
-                onClick={copy}
-                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                title={t("logs.copy")}
-              >
-                <Copy className="size-3.5" />
-                {copied ? t("logs.copied") : t("logs.copy")}
-              </button>
-            </div>
-            <pre
-              ref={logRef}
-              className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-muted/30 p-4 text-xs leading-relaxed"
+        <LogConsolePanel
+          className="h-full w-full rounded-lg border shadow-2xl"
+          headerActions={
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              title={t("common.close")}
             >
-              {detail || t("logs.empty")}
-            </pre>
-          </div>
-        </div>
+              <X className="size-5" />
+            </button>
+          }
+        />
       </div>
     </div>
   );

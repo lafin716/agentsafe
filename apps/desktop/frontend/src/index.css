@@ -55,3 +55,147 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 }
+
+/* Syntax highlighting (highlight.js) colors for the diff/change viewer. Token
+   classes are emitted by highlight.js; we color them ourselves so they follow the
+   app's light/dark theme. Palette follows GitHub's light/dark code themes. The
+   `.dark` overrides apply because the theme toggles a `dark` class on <html>. */
+.hljs-comment,
+.hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-formula {
+  color: #cf222e;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string,
+.hljs-char.escape_ {
+  color: #0a3069;
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-template-variable,
+.hljs-variable,
+.hljs-variable.language_ {
+  color: #0550ae;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-selector-id,
+.hljs-built_in {
+  color: #8250df;
+}
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-title.class_ {
+  color: #953800;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: #0550ae;
+}
+.hljs-tag,
+.hljs-name {
+  color: #116329;
+}
+.hljs-meta,
+.hljs-meta .hljs-keyword {
+  color: #6e7781;
+}
+.hljs-deletion {
+  color: #82071e;
+  background-color: #ffebe9;
+}
+.hljs-addition {
+  color: #116329;
+  background-color: #dafbe1;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+
+.dark .hljs-comment,
+.dark .hljs-quote {
+  color: #8b949e;
+}
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-literal,
+.dark .hljs-doctag,
+.dark .hljs-formula {
+  color: #ff7b72;
+}
+.dark .hljs-string,
+.dark .hljs-regexp,
+.dark .hljs-meta .hljs-string,
+.dark .hljs-char.escape_ {
+  color: #a5d6ff;
+}
+.dark .hljs-number,
+.dark .hljs-symbol,
+.dark .hljs-bullet,
+.dark .hljs-template-variable,
+.dark .hljs-variable,
+.dark .hljs-variable.language_ {
+  color: #79c0ff;
+}
+.dark .hljs-title,
+.dark .hljs-title.function_,
+.dark .hljs-section,
+.dark .hljs-selector-id,
+.dark .hljs-built_in {
+  color: #d2a8ff;
+}
+.dark .hljs-type,
+.dark .hljs-class .hljs-title,
+.dark .hljs-title.class_ {
+  color: #ffa657;
+}
+.dark .hljs-attr,
+.dark .hljs-attribute,
+.dark .hljs-property,
+.dark .hljs-selector-class,
+.dark .hljs-selector-attr,
+.dark .hljs-selector-pseudo {
+  color: #79c0ff;
+}
+.dark .hljs-tag,
+.dark .hljs-name {
+  color: #7ee787;
+}
+.dark .hljs-meta,
+.dark .hljs-meta .hljs-keyword {
+  color: #8b949e;
+}
+
+/* Word-level change emphasis inside a changed diff line. Layered on top of the
+   line's background tint so the exact changed tokens stand out, GitHub-style. */
+.diff-word-del {
+  background-color: rgb(252 165 165 / 0.7); /* rose-300/70 */
+  border-radius: 0.125rem;
+}
+.diff-word-add {
+  background-color: rgb(110 231 183 / 0.7); /* emerald-300/70 */
+  border-radius: 0.125rem;
+}
+.dark .diff-word-del {
+  background-color: rgb(239 68 68 / 0.4); /* rose-500/40 */
+}
+.dark .diff-word-add {
+  background-color: rgb(16 185 129 / 0.4); /* emerald-500/40 */
+}
