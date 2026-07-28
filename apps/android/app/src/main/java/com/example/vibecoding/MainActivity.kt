@@ -22,16 +22,16 @@ class MainActivity : Activity() {
         fun dp(value: Int): Int = (value * density).toInt()
 
         val input = EditText(this).apply {
-            hint = "Enter text for Go core"
+            hint = "Go 코어에 전달할 텍스트를 입력하세요"
             setSingleLine(false)
             minLines = 2
-            setText("hello")
+            setText("안녕하세요")
         }
         val button = Button(this).apply {
-            text = "Run Go Core"
+            text = "Go 코어 실행"
         }
         val result = TextView(this).apply {
-            text = "Result will appear here."
+            text = "결과가 여기에 표시됩니다."
             textSize = 16f
         }
 
@@ -65,7 +65,7 @@ class MainActivity : Activity() {
                 result.text = output
             } catch (t: Throwable) {
                 Log.e(tag, "Go bridge call failed", t)
-                result.text = "Error: ${t.message ?: t::class.java.simpleName}"
+                result.text = "오류: ${t.message ?: t::class.java.simpleName}"
             }
         }
     }
