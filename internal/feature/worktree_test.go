@@ -11,7 +11,10 @@ import (
 	aggit "github.com/agentsafe/agentsafe/internal/git"
 )
 
+// 같은 이름의 로컬 브랜치가 이미 있을 때 세 가지 ExistingBranchPolicy 가 각각
+// 기대대로 동작하는지 확인한다.
 func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
+	// error: 아무것도 만들지 않고, 대안을 안내하는 오류를 낸다.
 	t.Run("error", func(t *testing.T) {
 		root, cfg := testWorkspace(t, "repo")
 		repoPath := config.RepoPath(root, "repo")
@@ -25,6 +28,8 @@ func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
 		}
 	})
 
+	// reuse: 기존 로컬 브랜치를 그대로 체크아웃하고, 원격 짝이 없으므로 업스트림은
+	// base(origin/main)로 잡힌다.
 	t.Run("reuse", func(t *testing.T) {
 		root, cfg := testWorkspace(t, "repo")
 		repoPath := config.RepoPath(root, "repo")
@@ -44,6 +49,8 @@ func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
 		}
 	})
 
+	// recreate: 기존 브랜치를 지우고 base 에서 새로 만들므로, 이전 브랜치에만 있던
+	// 커밋(feature.txt)은 새 worktree 에 남지 않는다.
 	t.Run("recreate", func(t *testing.T) {
 		root, cfg := testWorkspace(t, "repo")
 		repoPath := config.RepoPath(root, "repo")
@@ -66,6 +73,8 @@ func TestCreateWithExistingLocalBranchPolicies(t *testing.T) {
 	})
 }
 
+// 새로 만든 feature 브랜치는 첫 push 전까지 base(origin/main)를 추적하고, push 로
+// 원격 브랜치가 생기고 나면 업스트림이 origin/<branch> 로 바뀐다.
 func TestCreateTracksBaseUntilFirstPush(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	if err := CreateWithOptions(root, cfg, "demo", CreateOptions{
@@ -90,6 +99,9 @@ func TestCreateTracksBaseUntilFirstPush(t *testing.T) {
 	}
 }
 
+// 한글 이름으로 feature 를 만들면 브랜치 이름에는 원래 이름이 그대로 쓰이지만,
+// 디스크 폴더는 ASCII 폴더 키를 쓴다(에디터 호환성). 메타데이터의 경로와 실제
+// 폴더가 일치하는지도 확인한다.
 func TestCreateUsesFeatHashForWorktreeFolder(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	name := "테스트2"
@@ -118,6 +130,9 @@ func TestCreateUsesFeatHashForWorktreeFolder(t *testing.T) {
 	}
 }
 
+// 레포 2개 중 뒤쪽에만 브랜치 충돌이 있을 때, 사전 점검은 모든 레포를 훑어 충돌을
+// 보고하되 디렉터리는 하나도 만들지 않는다. 이어서 error 정책으로 생성을 시도하면
+// 실패하는데, 이때 앞쪽 레포의 worktree 도 만들어지지 않아야 한다(부분 생성 방지).
 func TestCheckCreateReportsAllExistingBranchesWithoutCreatingWorktrees(t *testing.T) {
 	root, firstCfg := testWorkspace(t, "one")
 	secondRoot, secondCfg := testWorkspace(t, "two")
@@ -159,6 +174,8 @@ func TestCheckCreateReportsAllExistingBranchesWithoutCreatingWorktrees(t *testin
 	}
 }
 
+// 다른 worktree 가 이미 그 브랜치를 체크아웃하고 있으면 reuse 도 recreate 도 쓸 수
+// 없으므로, 사전 점검이 Blocked 로 표시하고 이유를 남긴다.
 func TestCheckCreateBlocksBranchUsedByAnotherWorktree(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	repoPath := config.RepoPath(root, "repo")
@@ -175,6 +192,8 @@ func TestCheckCreateBlocksBranchUsedByAnotherWorktree(t *testing.T) {
 	}
 }
 
+// 로컬에는 없고 원격에만 남아 있는 feature 브랜치도 reuse 로 이어받을 수 있다.
+// 원격 브랜치의 내용이 worktree 에 그대로 나오고, 업스트림은 origin/<branch> 가 된다.
 func TestCreateReusesRemoteOnlyBranch(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	repoPath := config.RepoPath(root, "repo")
@@ -202,6 +221,10 @@ func TestCreateReusesRemoteOnlyBranch(t *testing.T) {
 	}
 }
 
+// 레포 추가와 재생성의 전체 흐름을 순서대로 검증한다. (1) 레포를 추가하면 feature
+// 리비전이 오르고 에이전트 워크스페이스는 재준비가 필요해진다. (2) 커밋되지 않은
+// 변경이 있는 worktree 의 재생성은 거부되며 파일도 리비전도 그대로다. (3) Force 를
+// 주면 재생성되어 변경이 사라지고 리비전이 한 번 더 오른다.
 func TestConfigureRepositoryWorktreeAddAndRecreate(t *testing.T) {
 	root, firstCfg := testWorkspace(t, "one")
 	secondRoot, secondCfg := testWorkspace(t, "two")
@@ -281,6 +304,9 @@ func TestConfigureRepositoryWorktreeAddAndRecreate(t *testing.T) {
 	}
 }
 
+// worktree 는 만들어졌지만 메타데이터 저장 직전에 실패한 이전 시도를 재시도하는
+// 상황이다. 대상 경로의 worktree 를 입양해 오류 없이 진행하고, 메타데이터를 저장한
+// 뒤 업스트림까지 설정해야 한다(재시도가 멱등해야 한다).
 func TestConfigureRepositoryWorktreeAdoptsExistingTargetWorktree(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	name := "demo"
@@ -316,6 +342,9 @@ func TestConfigureRepositoryWorktreeAdoptsExistingTargetWorktree(t *testing.T) {
 	}
 }
 
+// 메타데이터에 저장된 브랜치 이름이 현재 설정의 접두사 규칙과 다르더라도(예전
+// 접두사로 만든 feature), 설정에서 새로 계산하지 않고 메타데이터의 브랜치를 그대로
+// 써야 한다.
 func TestConfigureRepositoryWorktreeUsesMetadataBranch(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	name := "demo"
@@ -339,6 +368,9 @@ func TestConfigureRepositoryWorktreeUsesMetadataBranch(t *testing.T) {
 	}
 }
 
+// 메인 클론이 feature 브랜치를 체크아웃하고 있으면 그 브랜치를 worktree 에 붙일 수
+// 없다. 클론이 깨끗하다면 메인 클론을 base 로 되돌리고 feature 브랜치를 worktree 로
+// 옮겨야 한다.
 func TestConfigureRepositoryWorktreeMovesFeatureBranchOutOfMainClone(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	name := "demo"
@@ -364,6 +396,8 @@ func TestConfigureRepositoryWorktreeMovesFeatureBranchOutOfMainClone(t *testing.
 	}
 }
 
+// base 도 레포의 DefaultBranch 도 비어 있으면 레포가 지금 체크아웃한 브랜치를 base
+// 로 삼는다. 그 브랜치에만 있는 파일이 worktree 에 나타나는지로 확인한다.
 func TestCreateUsesCurrentRepositoryBranchWhenBaseAndDefaultAreEmpty(t *testing.T) {
 	root, cfg := testWorkspace(t, "repo")
 	cfg.Repositories[0].DefaultBranch = ""
@@ -392,6 +426,10 @@ func TestCreateUsesCurrentRepositoryBranchWhenBaseAndDefaultAreEmpty(t *testing.
 	}
 }
 
+// testWorkspace 는 실제 git 을 쓰는 테스트 환경을 통째로 준비한다. bare 원격을 만들고,
+// 초기 커밋이 있는 seed 저장소를 push 한 뒤, 그 원격을 workspace root 안으로 클론해
+// 두고 대응하는 config.Config 를 함께 돌려준다. 반환하는 root 는 t.TempDir 이라
+// 테스트가 끝나면 자동으로 정리된다.
 func testWorkspace(t *testing.T, repoName string) (string, config.Config) {
 	t.Helper()
 	setTestGitTimeout(t)
@@ -428,6 +466,8 @@ func testWorkspace(t *testing.T, repoName string) (string, config.Config) {
 	return root, cfg
 }
 
+// testGit 은 dir 에서 git 명령을 실행하고, 실패하면 즉시 테스트를 중단한다.
+// dir 이 비어 있으면 명령의 인자에 담긴 경로를 대상으로 동작한다(init, clone 등).
 func testGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	if _, err := aggit.Run(dir, args...); err != nil {
@@ -435,6 +475,9 @@ func testGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// setTestGitTimeout 은 git 호출 타임아웃을 짧게 잡아, 네트워크나 인증 프롬프트에
+// 걸린 명령이 테스트를 오래 붙잡고 있지 않게 한다. 외부에서 이미 지정했다면 그
+// 값을 존중한다.
 func setTestGitTimeout(t *testing.T) {
 	t.Helper()
 	if os.Getenv("AGENTSAFE_GIT_TIMEOUT_SECONDS") == "" {
@@ -442,10 +485,9 @@ func setTestGitTimeout(t *testing.T) {
 	}
 }
 
-// TestStatusDataPreservesRepoOrder exercises the parallel StatusData worker pool
-// with multiple repos and asserts the output stays in m.Repositories order. It
-// uses bare `git init` worktrees (no remote/push) so it runs without the
-// push-to-remote setup the other worktree tests need.
+// StatusData 의 병렬 워커 풀을 레포 여러 개로 돌려, 결과가 m.Repositories 순서를
+// 그대로 유지하는지 확인한다. 원격 없이 `git init` 만 한 worktree 를 쓰므로, 다른
+// worktree 테스트들이 필요로 하는 원격 push 세팅 없이 돌아간다.
 func TestStatusDataPreservesRepoOrder(t *testing.T) {
 	setTestGitTimeout(t)
 	root := t.TempDir()

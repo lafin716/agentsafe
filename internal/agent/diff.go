@@ -33,6 +33,9 @@ type fileInfo struct {
 
 type hashFileFunc func(string) (string, error)
 
+// scanFiles는 root 하위를 순회하며 무시 대상이 아닌 파일의 메타데이터를
+// 상대 경로 기준으로 수집한다. withHashes가 true면 각 파일의 내용 해시까지
+// 함께 계산한다. root가 존재하지 않으면 빈 맵을 반환한다.
 func scanFiles(root string, matcher IgnoreMatcher, withHashes bool, hashFile hashFileFunc) (map[string]fileInfo, error) {
 	out := map[string]fileInfo{}
 	if _, err := os.Stat(root); err != nil {
@@ -73,17 +76,17 @@ func scanFiles(root string, matcher IgnoreMatcher, withHashes bool, hashFile has
 	return out, err
 }
 
-// Compare reports changes plus the number of content-hash operations it
-// performed (see compare).
+// Compare는 감지된 변경 목록과 수행한 내용 해시 연산 횟수를 반환한다
+// (자세한 내용은 compare 참고).
 func Compare(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool) ([]Change, int, error) {
 	return compare(repoName, source, target, matcher, masked, nil, fsutil.SHA256File)
 }
 
-// CompareIndexed uses prepare-time stat metadata as a Git-like index. Files
-// whose size and modification time still match both snapshots need no content
-// reads; only possible changes are hashed for confirmation. It also returns the
-// number of content-hash operations performed, so callers can distinguish the
-// indexed fast path (near zero) from the whole-tree hashing fallback.
+// CompareIndexed는 prepare 시점에 수집한 stat 메타데이터를 Git의 인덱스처럼
+// 활용한다. 크기와 수정 시각이 두 스냅샷 모두와 일치하는 파일은 내용을 읽지
+// 않고 건너뛰며, 변경 가능성이 있는 파일만 해시로 확인한다. 수행한 내용 해시
+// 연산 횟수도 함께 반환하므로, 호출자는 인덱스 기반 빠른 경로(거의 0회)와
+// 전체 트리 해시 폴백을 구분할 수 있다.
 func CompareIndexed(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool, index map[string]FileIndexEntry) ([]Change, int, error) {
 	if len(index) == 0 {
 		return Compare(repoName, source, target, matcher, masked)
@@ -91,11 +94,11 @@ func CompareIndexed(repoName, source, target string, matcher IgnoreMatcher, mask
 	return compare(repoName, source, target, matcher, masked, index, fsutil.SHA256File)
 }
 
-// compare returns the detected changes and a count of content-hash operations.
-// The count tallies every hashFile call (each scanned file in the no-index
-// fallback, and the source/target reads for index candidates), so source and
-// target reads of the same file count as two — magnitude, not file identity, is
-// what diagnoses a slow compare.
+// compare는 감지된 변경 목록과 내용 해시 연산 횟수를 반환한다. 이 횟수는
+// hashFile 호출을 모두 합산한 값이며(인덱스가 없는 폴백에서는 스캔한 모든
+// 파일, 인덱스 후보에 대해서는 source/target 읽기), 같은 파일이라도 source와
+// target을 읽으면 2회로 센다. compare가 느린 원인을 진단할 때 중요한 것은
+// 파일 식별이 아니라 연산 횟수의 규모이기 때문이다.
 func compare(repoName, source, target string, matcher IgnoreMatcher, masked map[string]bool, index map[string]FileIndexEntry, hashFile hashFileFunc) ([]Change, int, error) {
 	hashed := 0
 	countHash := func(p string) (string, error) {
@@ -172,8 +175,8 @@ func compare(repoName, source, target string, matcher IgnoreMatcher, masked map[
 		if change == nil {
 			continue
 		}
-		// Preserve the existing masking rule: an unchanged prepared agent copy
-		// is not a user edit, even when it differs from the live worktree.
+		// 기존 마스킹 규칙 유지: prepare된 에이전트 사본이 그대로라면 실제
+		// 워크트리와 내용이 달라도 사용자가 수정한 것으로 보지 않는다.
 		if change.Masked && sok {
 			currentHash := si.hash
 			if currentHash == "" {
@@ -191,6 +194,9 @@ func compare(repoName, source, target string, matcher IgnoreMatcher, masked map[
 	return changes, hashed, nil
 }
 
+// PrintChanges는 저장소별 변경 목록을 저장소 이름 순으로 정렬해 출력한다.
+// 변경이 없는 저장소는 NO CHANGES로 표시하고, 각 변경에는 RISKY/MASKED
+// 플래그를 덧붙인다.
 func PrintChanges(feature string, byRepo map[string][]Change) {
 	output.Printf("Feature: %s\n\n", feature)
 	repos := make([]string, 0, len(byRepo))
@@ -219,6 +225,8 @@ func PrintChanges(feature string, byRepo map[string][]Change) {
 	}
 }
 
+// IsRisky는 상대 경로가 자격 증명·비밀 설정 파일 같은 민감 파일 패턴에
+// 해당하는지 판단한다.
 func IsRisky(rel string) bool {
 	return NewIgnoreMatcher([]string{".env", ".env.*", "*.pem", "*.key", "*.p12", "*.jks", "application-secret.yml", "application-local.yml", "agentsafe.yaml", "mask.json", ".agentignore", "secrets.yml", "credentials.yml"}).Match(rel, false)
 }

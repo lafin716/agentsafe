@@ -8,6 +8,10 @@ import (
 	"github.com/agentsafe/agentsafe/internal/config"
 )
 
+// worktree 경로에 실제 git 레포가 없어 `git worktree remove` 가 실패하는 상황에서도
+// 삭제가 치명적 오류로 끝나지 않아야 한다. 실패는 경고로만 남기고, worktree 디렉터리·
+// feature 메타데이터·에이전트 워크스페이스·세션 메타데이터·동기화 이력까지 모두
+// 정리되는지 확인한다.
 func TestDeleteWithResultContinuesWhenGitWorktreeRemovalFails(t *testing.T) {
 	root := t.TempDir()
 	name := "broken-worktrees"
