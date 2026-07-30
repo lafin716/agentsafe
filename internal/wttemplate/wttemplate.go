@@ -289,6 +289,22 @@ func InferTarget(root, src string, repoNames []string) (string, []string) {
 	return TargetWorkspaceRoot, []string{}
 }
 
+// WorkspaceRepoNames lists the repositories configured for a workspace, ready to
+// hand to InferTarget. A workspace whose config cannot be read has no
+// recognizable repository folders, so inference falls back to the workspace root
+// instead of failing the registration.
+func WorkspaceRepoNames(root string) []string {
+	cfg, err := config.Load(root)
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.Repositories))
+	for _, r := range cfg.Repositories {
+		names = append(names, r.Name)
+	}
+	return names
+}
+
 // workspaceSegments splits the path of src relative to the workspace root into
 // its path elements, or returns nil when src is the root itself or lives
 // outside it.

@@ -2729,6 +2729,76 @@ func (a *App) OverwriteTemplateFromFile(path string) error {
 	return wttemplate.WriteTemplateTreeFile(root, mark.ID, mark.RelPath, string(content))
 }
 
+// WorkspacePathState reports whether a single workspace path is tracked by Git
+// and which worktree template already uses it as a source, if any. The File
+// Explorer detail panel asks for one selected path at a time, so offering to
+// register untracked content as a template costs no work while browsing.
+type WorkspacePathState struct {
+	Tracked    bool   `json:"tracked"`
+	TemplateID string `json:"templateId,omitempty"`
+}
+
+func (a *App) WorkspacePathState(path string) (WorkspacePathState, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return WorkspacePathState{}, err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return WorkspacePathState{}, err
+	}
+	tracked, err := aggit.IsTracked(target)
+	if err != nil {
+		return WorkspacePathState{}, err
+	}
+	existing, found, err := wttemplate.FindBySourcePath(root, target)
+	if err != nil {
+		return WorkspacePathState{}, err
+	}
+	state := WorkspacePathState{Tracked: tracked}
+	if found {
+		state.TemplateID = existing.ID
+	}
+	return state, nil
+}
+
+// RegisterWorktreeTemplateFromPath registers a workspace file or folder as a
+// worktree template, copying it into the template store. The destination is
+// inferred from where the source lives so the explorer can register in one step;
+// it stays editable on the Worktree Templates page afterwards.
+func (a *App) RegisterWorktreeTemplateFromPath(path string) (wttemplate.Template, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return wttemplate.Template{}, err
+	}
+	target, err := workspacePath(root, path)
+	if err != nil {
+		return wttemplate.Template{}, err
+	}
+	if err := ensureTemplateRegistrable(root, target); err != nil {
+		return wttemplate.Template{}, err
+	}
+	return wttemplate.RegisterPath(root, target, wttemplate.RegisterOptions{
+		Enabled:        true,
+		WorkspaceRepos: wttemplate.WorkspaceRepoNames(root),
+	})
+}
+
+// ensureTemplateRegistrable rejects sources that must never become templates:
+// the workspace root, whose whole tree would be copied into every destination,
+// and agentsafe's own metadata, which is per-workspace state rather than content
+// to seed worktrees with.
+func ensureTemplateRegistrable(root, target string) error {
+	if sameAbsPath(root, target) {
+		return fmt.Errorf("cannot register the workspace root as a template")
+	}
+	meta := filepath.Join(root, config.DirName)
+	if sameAbsPath(target, meta) || pathContains(meta, target) {
+		return fmt.Errorf("agentsafe metadata cannot be registered as a template: %s", target)
+	}
+	return nil
+}
+
 func ensureExplorerDeleteAllowed(root, target string) error {
 	if sameAbsPath(root, target) {
 		return fmt.Errorf("cannot delete the workspace root")
