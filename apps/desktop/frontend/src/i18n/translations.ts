@@ -367,6 +367,9 @@ const en: Dict = {
   "explorer.overwriteTemplate": "Overwrite template",
   "explorer.overwriteTemplateConfirm":
     'Overwrite the worktree template source with the current content of "{name}"?',
+  "explorer.registerTemplate": "Register as template",
+  "explorer.registerTemplateConfirm":
+    'Register "{name}" as a worktree template? The destination is inferred from its location and stays editable on the Worktree Templates page.',
   "explorer.applyRootTemplates": "Apply root templates",
   "explorer.fileSaved": "File saved",
   "explorer.unsavedConfirm": "Close \"{name}\" without saving changes?",
@@ -563,6 +566,7 @@ const en: Dict = {
   "toast.templatesCleared": "Templates cleared",
   "toast.pathDeleted": "Path deleted",
   "toast.templateOverwritten": "Template updated from file",
+  "toast.templateRegistered": 'Registered as template "{name}"',
   "task.running": "In progress…",
   "task.done": "Completed",
   "task.failed": "Failed",
@@ -952,6 +956,9 @@ const ko: Dict = {
   "explorer.overwriteTemplate": "템플릿 덮어쓰기",
   "explorer.overwriteTemplateConfirm":
     '"{name}"의 현재 내용으로 워크트리 템플릿 원본을 덮어쓸까요?',
+  "explorer.registerTemplate": "템플릿으로 등록",
+  "explorer.registerTemplateConfirm":
+    '"{name}"을(를) 워크트리 템플릿으로 등록할까요? 대상 위치는 경로에 따라 자동으로 정해지며 워크트리 템플릿 화면에서 바꿀 수 있습니다.',
   "explorer.applyRootTemplates": "루트 템플릿 적용",
   "explorer.fileSaved": "파일을 저장했습니다",
   "explorer.unsavedConfirm": "변경사항을 저장하지 않고 \"{name}\" 탭을 닫을까요?",
@@ -1144,6 +1151,7 @@ const ko: Dict = {
   "toast.templatesCleared": "템플릿을 모두 삭제했습니다",
   "toast.pathDeleted": "경로 삭제됨",
   "toast.templateOverwritten": "파일 내용으로 템플릿을 갱신했습니다",
+  "toast.templateRegistered": '"{name}" 템플릿으로 등록했습니다',
   "task.running": "진행 중…",
   "task.done": "완료됨",
   "task.failed": "실패",

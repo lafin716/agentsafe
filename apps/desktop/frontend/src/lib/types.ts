@@ -93,6 +93,13 @@ export interface WorktreeTemplateTree {
   root: WorktreeTemplateTreeNode;
 }
 
+// Resolved for the one path selected in the File Explorer, not for the whole
+// tree: templateId is set when the path is already a worktree template source.
+export interface WorkspacePathState {
+  tracked: boolean;
+  templateId?: string;
+}
+
 export interface WorkspaceTreeNode {
   name: string;
   path: string;

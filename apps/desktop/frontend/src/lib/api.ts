@@ -30,6 +30,7 @@ import type {
   TerminalSession,
   TerminalSnapshot,
   WorkspaceEntry,
+  WorkspacePathState,
   WorkspaceTreeNode,
   WorktreeTemplate,
   WorktreeTemplateTree,
@@ -69,6 +70,11 @@ type AppBindings = {
   ApplyWorktreeTemplates(name: string): Promise<void>;
   ApplyAgentTemplates(name: string): Promise<void>;
   WorkspaceTree(path: string): Promise<WorkspaceTreeNode>;
+  // Resolved per selected path, so browsing the tree runs no Git work.
+  WorkspacePathState(path: string): Promise<WorkspacePathState>;
+  // Registers an existing workspace path as a worktree template, inferring the
+  // destination from where the source lives.
+  RegisterWorktreeTemplateFromPath(path: string): Promise<WorktreeTemplate>;
   ReadWorkspaceFile(path: string): Promise<string>;
   SaveWorkspaceFile(path: string, content: string): Promise<void>;
   // Writes a modified workspace file back over its worktree-template source.

@@ -18,10 +18,16 @@ import {
   Save,
   Terminal as TerminalIcon,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
-import type { Config, TerminalSession, WorkspaceTreeNode } from "@/lib/types";
+import type {
+  Config,
+  TerminalSession,
+  WorkspacePathState,
+  WorkspaceTreeNode,
+} from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -111,6 +117,7 @@ export function FileExplorerPage({
   const [selected, setSelected] = useState<WorkspaceTreeNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [selectedState, setSelectedState] = useState<WorkspacePathState | null>(null);
   const [editors, setEditors] = useState<EditorTab[]>([]);
 
   const activeEditor = useMemo(
@@ -142,6 +149,33 @@ export function FileExplorerPage({
   useEffect(() => {
     void loadRoot();
   }, [loadRoot]);
+
+  const loadSelectedState = useCallback(async (path: string) => {
+    try {
+      return await api.WorkspacePathState(path);
+    } catch {
+      // A path whose state cannot be resolved simply offers no register action.
+      return null;
+    }
+  }, []);
+
+  // Resolved for the selected path only, so expanding folders stays free of Git
+  // work. The cancel flag drops a response the user has already navigated past.
+  const selectedPath = selected?.path ?? "";
+  useEffect(() => {
+    setSelectedState(null);
+    if (!selectedPath) return;
+    let cancelled = false;
+    void loadSelectedState(selectedPath).then((state) => {
+      if (!cancelled) setSelectedState(state);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadSelectedState, selectedPath]);
+
+  const canRegisterTemplate =
+    selectedState !== null && !selectedState.tracked && !selectedState.templateId;
 
   if (!config) {
     return (
@@ -219,6 +253,31 @@ export function FileExplorerPage({
       notify(t("toast.templateOverwritten"), "success");
       // Re-fetch just this node so its template/modified state refreshes in both
       // the detail panel and the tree without collapsing the explorer.
+      const refreshed = await api.WorkspaceTree(selected.path);
+      setSelected(refreshed);
+      setRoot((prev) => (prev ? replaceNode(prev, selected.path, refreshed) : prev));
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function registerTemplate() {
+    if (!selected || !canRegisterTemplate) return;
+    if (
+      !(await confirm({
+        message: t("explorer.registerTemplateConfirm", { name: selected.name }),
+      }))
+    )
+      return;
+    try {
+      setBusy(true);
+      const created = await api.RegisterWorktreeTemplateFromPath(selected.path);
+      notify(t("toast.templateRegistered", { name: created.name }), "success");
+      setSelectedState(await loadSelectedState(selected.path));
+      // The source can itself be a template destination (a workspace-root file,
+      // for example), so refresh the node to pick up any new template marks.
       const refreshed = await api.WorkspaceTree(selected.path);
       setSelected(refreshed);
       setRoot((prev) => (prev ? replaceNode(prev, selected.path, refreshed) : prev));
@@ -567,6 +626,11 @@ export function FileExplorerPage({
                     {!selected.isDir && selected.templateId && selected.templateModified && (
                       <Button variant="outline" size="sm" onClick={overwriteTemplate} disabled={busy}>
                         <FileUp className="size-4" /> {t("explorer.overwriteTemplate")}
+                      </Button>
+                    )}
+                    {canRegisterTemplate && (
+                      <Button variant="outline" size="sm" onClick={registerTemplate} disabled={busy}>
+                        <Upload className="size-4" /> {t("explorer.registerTemplate")}
                       </Button>
                     )}
                     <Button variant="outline" size="sm" onClick={copyPath} disabled={busy}>
