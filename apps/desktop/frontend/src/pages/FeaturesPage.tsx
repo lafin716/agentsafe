@@ -111,11 +111,11 @@ export function FeaturesPage({
   // as a tab in the shared per-feature list, makes it active, and expands the panel.
   async function openNewTerminal(
     name: string,
-    program = defaultTerminalProgram()
+    terminalProgram = defaultTerminalProgram()
   ) {
     try {
       setBusy(true);
-      const session = await api.TerminalOpenFeatureAgent(name, program);
+      const session = await api.TerminalOpenFeatureAgent(name, terminalProgram);
       // External terminals open an OS window with no embeddable pty; don't add a tab.
       if (session.external) {
         notify(t("toast.openedPath", { path: session.path }), "success");
@@ -237,10 +237,10 @@ export function FeaturesPage({
     window.addEventListener("pointerup", onUp);
   }
 
-  async function openFeatureTool(name: string, program: string) {
+  async function openFeatureTool(name: string, toolCommand: string) {
     try {
       setBusy(true);
-      const path = await api.OpenInEditor(name, program);
+      const path = await api.OpenInEditor(name, toolCommand);
       notify(t("toast.openedPath", { path }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
@@ -251,15 +251,15 @@ export function FeaturesPage({
   }
 
   async function browseAndOpenFeatureTool(name: string) {
-    let program: string;
+    let toolCommand: string;
     try {
-      program = await api.SelectProgram();
+      toolCommand = await api.SelectProgram();
     } catch (e) {
       notify(errMessage(e), "error");
       throw e;
     }
-    if (!program) return;
-    await openFeatureTool(name, program);
+    if (!toolCommand) return;
+    await openFeatureTool(name, toolCommand);
   }
 
   async function openFolder(name: string) {
@@ -449,11 +449,11 @@ export function FeaturesPage({
                               terminalDisabled={!f.agentReady}
                               toolDisabled={!f.agentReady}
                               onFolder={() => void openFolder(f.name)}
-                              onTerminal={(program) => {
-                                if (program) return openNewTerminal(f.name, program);
+                              onTerminal={(terminalProgram) => {
+                                if (terminalProgram) return openNewTerminal(f.name, terminalProgram);
                                 togglePanel(f.name);
                               }}
-                              onTool={(program) => openFeatureTool(f.name, program)}
+                              onTool={(toolCommand) => openFeatureTool(f.name, toolCommand)}
                               onToolBrowse={() => browseAndOpenFeatureTool(f.name)}
                             />
                             <Button

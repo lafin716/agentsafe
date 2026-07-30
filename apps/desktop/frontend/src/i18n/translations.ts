@@ -56,9 +56,8 @@ const en: Dict = {
   "toolOpen.folder": "Folder",
   "toolOpen.terminal": "Terminal",
   "toolOpen.otherTerminals": "Other terminals",
-  "toolOpen.otherPrograms": "Other programs",
   "toolOpen.more": "More",
-  "toolOpen.browse": "Choose program…",
+  "toolOpen.browse": "Choose executable…",
 
   // workspace switcher
   "switcher.select": "Select workspace",
@@ -416,7 +415,6 @@ const en: Dict = {
   "settings.hintUrlScheme": "Should start with https://.",
   "settings.defaultToolTitle": "Default tool",
   "settings.defaultToolDesc": "Register local Open Tools and choose the fallback used before each location has a last-used tool.",
-  "settings.toolPick": "Pick a program…",
   "settings.registeredTools": "Registered tools",
   "settings.toolAdd": "Add tool",
   "settings.toolEdit": "Edit tool",
@@ -560,7 +558,6 @@ const en: Dict = {
   "toast.featureCreated": 'Worktree "{name}" created',
   "toast.featureRepoAdded": 'Added "{repo}" to the worktree',
   "toast.featureRepoRecreated": 'Recreated the worktree for "{repo}"',
-  "toast.programSelected": "Program set to {program}",
   "toast.agentPrepared": "Agent workspace prepared ({count} files)",
   "toast.agentStarted": "Agent started in the embedded terminal",
   "toast.agentFinished": "Agent finished — review the changes and sync",
@@ -663,9 +660,8 @@ const ko: Dict = {
   "toolOpen.folder": "폴더",
   "toolOpen.terminal": "터미널",
   "toolOpen.otherTerminals": "다른 터미널",
-  "toolOpen.otherPrograms": "다른 프로그램",
   "toolOpen.more": "더보기",
-  "toolOpen.browse": "직접 선택…",
+  "toolOpen.browse": "실행 파일 선택…",
 
   // workspace switcher
   "switcher.select": "워크스페이스 선택",
@@ -1022,7 +1018,6 @@ const ko: Dict = {
   "settings.hintUrlScheme": "https://로 시작해야 합니다.",
   "settings.defaultToolTitle": "기본 툴",
   "settings.defaultToolDesc": "이 기기의 툴을 등록하고 위치별 마지막 사용 기록이 없을 때 사용할 기본 툴을 선택합니다.",
-  "settings.toolPick": "직접 선택…",
   "settings.registeredTools": "등록된 툴",
   "settings.toolAdd": "툴 추가",
   "settings.toolEdit": "툴 수정",
@@ -1162,7 +1157,6 @@ const ko: Dict = {
   "toast.featureCreated": '"{name}" 워크트리 생성됨',
   "toast.featureRepoAdded": '"{repo}" 저장소 워크트리 추가됨',
   "toast.featureRepoRecreated": '"{repo}" 저장소 워크트리 재생성됨',
-  "toast.programSelected": "프로그램을 {program}(으)로 설정",
   "toast.agentPrepared": "에이전트 워크스페이스 준비됨 ({count}개 파일)",
   "toast.agentStarted": "임베디드 터미널에서 에이전트를 시작했습니다",
   "toast.agentFinished": "에이전트 종료됨 — 변경 내역을 검토하고 동기화하세요",

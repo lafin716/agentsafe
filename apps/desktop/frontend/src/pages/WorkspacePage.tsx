@@ -286,11 +286,11 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
     }
   }
 
-  async function openWorkspaceTerminalTab(program?: string) {
+  async function openWorkspaceTerminalTab(terminalProgram?: string) {
     try {
       setBusy(true);
-      const s = program
-        ? await api.TerminalOpenWithProgram(root, program)
+      const s = terminalProgram
+        ? await api.TerminalOpenWithProgram(root, terminalProgram)
         : await api.TerminalOpen(root);
       if (s.external) {
         notify(t("toast.openedWorkspaceTerminal", { path: s.path }), "success");
@@ -304,10 +304,10 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
     }
   }
 
-  async function openWorkspaceTool(program: string) {
+  async function openWorkspaceTool(toolCommand: string) {
     try {
       setBusy(true);
-      const path = await api.OpenPathInProgram("", program);
+      const path = await api.OpenPathInProgram("", toolCommand);
       notify(t("toast.openedPath", { path }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
@@ -318,15 +318,15 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
   }
 
   async function browseAndOpenWorkspaceTool() {
-    let program: string;
+    let toolCommand: string;
     try {
-      program = await api.SelectProgram();
+      toolCommand = await api.SelectProgram();
     } catch (e) {
       notify(errMessage(e), "error");
       throw e;
     }
-    if (!program) return;
-    await openWorkspaceTool(program);
+    if (!toolCommand) return;
+    await openWorkspaceTool(toolCommand);
   }
 
   async function checkoutRepo(name: string) {

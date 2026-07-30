@@ -215,10 +215,10 @@ export function FileExplorerPage({
     }
   }
 
-  async function openTool(program: string) {
+  async function openTool(toolCommand: string) {
     if (!selected) return;
     try {
-      const p = await api.OpenPathInProgram(selected.path, program);
+      const p = await api.OpenPathInProgram(selected.path, toolCommand);
       notify(t("toast.openedPath", { path: p }), "success");
     } catch (e) {
       notify(errMessage(e), "error");

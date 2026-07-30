@@ -23,6 +23,7 @@ import {
   deleteToolEntry,
   reorderToolEntries,
   setDefaultToolId,
+  ToolSettingsError,
   toolLabel,
   type ToolEntry,
   updateToolEntry,
@@ -422,16 +423,10 @@ function toolSettingsError(
   t: (key: string, vars?: Record<string, string | number>) => string,
   error: unknown
 ): string {
-  const code = errMessage(error);
-  const known = new Set([
-    "requiredLabel",
-    "requiredCommand",
-    "invalidCommand",
-    "duplicateLabel",
-    "duplicateCommand",
-    "lastTool",
-  ]);
-  return known.has(code) ? t(`settings.toolError.${code}`) : code;
+  if (error instanceof ToolSettingsError) {
+    return t(`settings.toolError.${error.code}`);
+  }
+  return errMessage(error);
 }
 
 function WorkspaceTransfer({

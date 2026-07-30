@@ -39,6 +39,17 @@ describe("Open Tool settings", () => {
     );
   });
 
+  it("normalizes a legacy code command without creating a duplicate tool", () => {
+    localStorage.setItem("agentsafe.program", "CODE");
+
+    expect(getToolSettings()).toEqual({
+      version: 1,
+      tools: [{ id: "vscode", label: "VS Code", command: "code" }],
+      defaultToolId: "vscode",
+      lastToolIds: {},
+    });
+  });
+
   it("repairs structurally invalid persisted settings", () => {
     localStorage.setItem(
       "agentsafe.toolSettings",
@@ -69,6 +80,12 @@ describe("Open Tool settings", () => {
     expect(() => addToolEntry("Reuse", "code --reuse-window")).toThrow(
       "invalidCommand"
     );
+    expect(() => addToolEntry("Cmd", "cmd /c calc")).toThrow("invalidCommand");
+    expect(() => addToolEntry("Profile", "code --profile/foo")).toThrow(
+      "invalidCommand"
+    );
+    expect(() => addToolEntry("Pipe", "foo|bar")).toThrow("invalidCommand");
+    expect(() => addToolEntry("Chain", "foo;bar")).toThrow("invalidCommand");
   });
 
   it("uses the app default only until a location has its own last tool", () => {

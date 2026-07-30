@@ -20,7 +20,7 @@ import { cn } from "@/lib/utils";
 // ToolOpenMenu renders an external-open button that opens a dropdown with
 // three actions: folder / terminal / <configured tool>. The terminal and tool
 // rows carry an arrow sub-button that expands an inline list of alternative
-// terminals / programs. It is purely presentational — each host wires the
+// terminals / Open Tools. It is purely presentational — each host wires the
 // actions to its own context.
 export function ToolOpenMenu({
   location,
@@ -36,11 +36,10 @@ export function ToolOpenMenu({
 }: {
   location: ToolLocation;
   onFolder: () => void;
-  // program omitted => host's default; provided => open with that program.
-  onTerminal: (program?: string) => void;
-  onTool: (program: string) => void | Promise<void>;
-  // When provided, an extra "choose program…" item is shown that lets the host
-  // pick an arbitrary executable (e.g. via a file dialog).
+  // terminal command omitted => host's default; provided => use that terminal.
+  onTerminal: (terminalProgram?: string) => void;
+  onTool: (toolCommand: string) => void | Promise<void>;
+  // When provided, an executable picker lets the host launch a temporary Tool.
   onToolBrowse?: () => void | Promise<void>;
   terminalDisabled?: boolean;
   toolDisabled?: boolean;

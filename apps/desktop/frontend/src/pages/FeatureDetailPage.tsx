@@ -626,10 +626,10 @@ export function FeatureDetailPage({
       notify(t("toast.openedEmbeddedTerminal", { path: s.path }), "success");
     });
 
-  const openWorktreeTool = (prog: string) =>
+  const openWorktreeTool = (toolCommand: string) =>
     runTool(async () => {
       if (!featurePaths?.worktreePath) return;
-      const p = await api.OpenPathInProgram(featurePaths.worktreePath, prog);
+      const p = await api.OpenPathInProgram(featurePaths.worktreePath, toolCommand);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -650,10 +650,10 @@ export function FeatureDetailPage({
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
-  const openAgentTool = (prog: string) =>
+  const openAgentTool = (toolCommand: string) =>
     runTool(async () => {
       if (!featurePaths?.agentPath) return;
-      const p = await api.OpenPathInProgram(featurePaths.agentPath, prog);
+      const p = await api.OpenPathInProgram(featurePaths.agentPath, toolCommand);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -692,11 +692,11 @@ export function FeatureDetailPage({
       notify(t("toast.openedEmbeddedTerminal", { path: s.path }), "success");
     });
 
-  const openRepoAgentTool = (repoName: string, prog: string) =>
+  const openRepoAgentTool = (repoName: string, toolCommand: string) =>
     runTool(async () => {
       const path = repoPathsByName.get(repoName)?.agentPath;
       if (!path) return;
-      const p = await api.OpenPathInProgram(path, prog);
+      const p = await api.OpenPathInProgram(path, toolCommand);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -721,9 +721,9 @@ export function FeatureDetailPage({
       await loadDiff(true);
     });
 
-  const openRepoProgram = (repo: string, prog: string) =>
+  const openRepoTool = (repo: string, toolCommand: string) =>
     runTool(async () => {
-      const p = await api.OpenRepoInProgram(name, repo, prog.trim());
+      const p = await api.OpenRepoInProgram(name, repo, toolCommand.trim());
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -1369,7 +1369,7 @@ export function FeatureDetailPage({
                               disabled={busy || !included}
                               onFolder={() => openRepoFolder(repoName)}
                               onTerminal={(prog) => openRepoWorktreeTerminal(repoName, prog)}
-                              onTool={(prog) => openRepoProgram(repoName, prog)}
+                              onTool={(toolCommand) => openRepoTool(repoName, toolCommand)}
                               onToolBrowse={() => browseAndOpenRepo(repoName)}
                             />
                           </div>
@@ -1509,7 +1509,7 @@ export function FeatureDetailPage({
                             disabled={busy || !repo.agentReady || !paths?.agentPath}
                             onFolder={() => openRepoAgentFolder(repo.name)}
                             onTerminal={(prog) => openRepoAgentTerminal(repo.name, prog)}
-                            onTool={(prog) => openRepoAgentTool(repo.name, prog)}
+                            onTool={(toolCommand) => openRepoAgentTool(repo.name, toolCommand)}
                             onToolBrowse={() => browseAndOpen(paths?.agentPath)}
                           />
                         </div>
