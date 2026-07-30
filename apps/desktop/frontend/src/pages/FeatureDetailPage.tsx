@@ -68,7 +68,6 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
-import { useDefaultTool } from "@/lib/tool";
 import { cn } from "@/lib/utils";
 import { diffRows, wordDiff, type DiffRow } from "@/lib/linediff";
 import {
@@ -108,7 +107,6 @@ export function FeatureDetailPage({
   const { notify } = useToast();
   const { t } = useI18n();
   const confirm = useConfirm();
-  const tool = useDefaultTool();
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -158,13 +156,6 @@ export function FeatureDetailPage({
   const [actingRepo, setActingRepo] = useState<string | null>(null);
   const [mrTitle, setMrTitle] = useState("");
   const [requests, setRequests] = useState<RequestResults | null>(null);
-  const [program, setProgram] = useState(() => {
-    try {
-      return localStorage.getItem("agentsafe.program") || "code";
-    } catch {
-      return "code";
-    }
-  });
   const [terminalProgram, setTerminalProgram] = useState(() => {
     try {
       return localStorage.getItem("agentsafe.terminalProgram") || "powershell";
@@ -370,6 +361,18 @@ export function FeatureDetailPage({
     }
   }
 
+  async function runTool(fn: () => Promise<void>) {
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      notify(errMessage(e), "error");
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const prepare = () =>
     run(async () => {
       const meta = await api.AgentPrepare(name, backupOnPrepare);
@@ -513,12 +516,6 @@ export function FeatureDetailPage({
       onBack();
     });
 
-  // Display name for a program command/path (drop directories and ".app").
-  function programLabel(prog: string) {
-    const base = prog.split(/[\\/]/).pop() || prog;
-    return base.replace(/\.app$/i, "");
-  }
-
   function terminalTabId(id: string): FeatureDetailTab {
     return `terminal:${id}`;
   }
@@ -629,10 +626,10 @@ export function FeatureDetailPage({
       notify(t("toast.openedEmbeddedTerminal", { path: s.path }), "success");
     });
 
-  const openWorktreeTool = (prog?: string) =>
-    run(async () => {
+  const openWorktreeTool = (prog: string) =>
+    runTool(async () => {
       if (!featurePaths?.worktreePath) return;
-      const p = await api.OpenPathInProgram(featurePaths.worktreePath, prog ?? tool.value);
+      const p = await api.OpenPathInProgram(featurePaths.worktreePath, prog);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -653,10 +650,10 @@ export function FeatureDetailPage({
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
-  const openAgentTool = (prog?: string) =>
-    run(async () => {
+  const openAgentTool = (prog: string) =>
+    runTool(async () => {
       if (!featurePaths?.agentPath) return;
-      const p = await api.OpenPathInProgram(featurePaths.agentPath, prog ?? tool.value);
+      const p = await api.OpenPathInProgram(featurePaths.agentPath, prog);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -695,11 +692,11 @@ export function FeatureDetailPage({
       notify(t("toast.openedEmbeddedTerminal", { path: s.path }), "success");
     });
 
-  const openRepoAgentTool = (repoName: string, prog?: string) =>
-    run(async () => {
+  const openRepoAgentTool = (repoName: string, prog: string) =>
+    runTool(async () => {
       const path = repoPathsByName.get(repoName)?.agentPath;
       if (!path) return;
-      const p = await api.OpenPathInProgram(path, prog ?? tool.value);
+      const p = await api.OpenPathInProgram(path, prog);
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -724,9 +721,9 @@ export function FeatureDetailPage({
       await loadDiff(true);
     });
 
-  const openRepoProgram = (repo: string, prog?: string) =>
-    run(async () => {
-      const p = await api.OpenRepoInProgram(name, repo, (prog ?? program).trim());
+  const openRepoProgram = (repo: string, prog: string) =>
+    runTool(async () => {
+      const p = await api.OpenRepoInProgram(name, repo, prog.trim());
       notify(t("toast.openedPath", { path: p }), "success");
     });
 
@@ -737,19 +734,6 @@ export function FeatureDetailPage({
       if (!sel) return;
       const p = await api.OpenRepoInProgram(name, repo, sel);
       notify(t("toast.openedPath", { path: p }), "success");
-    });
-
-  const chooseProgram = () =>
-    run(async () => {
-      const sel = await api.SelectProgram();
-      if (!sel) return;
-      setProgram(sel);
-      try {
-        localStorage.setItem("agentsafe.program", sel);
-      } catch {
-        /* ignore */
-      }
-      notify(t("toast.programSelected", { program: programLabel(sel) }), "success");
     });
 
   // doCommit commits a single repo (repoName set) or all repos (repoName "")
@@ -1311,6 +1295,7 @@ export function FeatureDetailPage({
                   {statusLoading ? t("common.loading") : t("common.refresh")}
                 </Button>
                 <ToolOpenMenu
+                  location="worktree"
                   disabled={busy || !featurePaths?.worktreePath}
                   onFolder={openFeatureFolder}
                   onTerminal={openWorktreeTerminal}
@@ -1379,6 +1364,7 @@ export function FeatureDetailPage({
                               </Button>
                             )}
                             <ToolOpenMenu
+                              location="worktree"
                               iconOnly
                               disabled={busy || !included}
                               onFolder={() => openRepoFolder(repoName)}
@@ -1465,6 +1451,7 @@ export function FeatureDetailPage({
                       <Trash2 className="size-4" /> {t("common.delete")}
                     </Button>
                     <ToolOpenMenu
+                      location="agent"
                       disabled={busy || !featurePaths?.agentPath}
                       onFolder={openAgentFolder}
                       onTerminal={openTerminal}
@@ -1517,6 +1504,7 @@ export function FeatureDetailPage({
                             {repo.agentReady ? t("feature.agentRepoRegenerate") : t("feature.agentRepoPrepare")}
                           </Button>
                           <ToolOpenMenu
+                            location="agent"
                             iconOnly
                             disabled={busy || !repo.agentReady || !paths?.agentPath}
                             onFolder={() => openRepoAgentFolder(repo.name)}

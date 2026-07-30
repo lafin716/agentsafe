@@ -10,8 +10,6 @@ import {
 import {
   AlertTriangle,
   ChevronUp,
-  Code2,
-  FolderOpen,
   Loader2,
   Plus,
   RefreshCw,
@@ -45,6 +43,7 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { useI18n } from "@/i18n/I18nProvider";
 import { TerminalPanel } from "@/components/TerminalPanel";
+import { ToolOpenMenu } from "@/components/ToolOpenMenu";
 
 interface Props {
   onOpen: (name: string) => void;
@@ -110,10 +109,13 @@ export function FeaturesPage({
 
   // openNewTerminal starts an additional pty session for the feature, appends it
   // as a tab in the shared per-feature list, makes it active, and expands the panel.
-  async function openNewTerminal(name: string) {
+  async function openNewTerminal(
+    name: string,
+    program = defaultTerminalProgram()
+  ) {
     try {
       setBusy(true);
-      const session = await api.TerminalOpenFeatureAgent(name, defaultTerminalProgram());
+      const session = await api.TerminalOpenFeatureAgent(name, program);
       // External terminals open an OS window with no embeddable pty; don't add a tab.
       if (session.external) {
         notify(t("toast.openedPath", { path: session.path }), "success");
@@ -235,13 +237,29 @@ export function FeaturesPage({
     window.addEventListener("pointerup", onUp);
   }
 
-  async function openVSCode(name: string) {
+  async function openFeatureTool(name: string, program: string) {
     try {
-      await api.OpenInEditor(name, "code");
-      notify(t("toast.openedVSCode", { name }), "success");
+      setBusy(true);
+      const path = await api.OpenInEditor(name, program);
+      notify(t("toast.openedPath", { path }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
+      throw e;
+    } finally {
+      setBusy(false);
     }
+  }
+
+  async function browseAndOpenFeatureTool(name: string) {
+    let program: string;
+    try {
+      program = await api.SelectProgram();
+    } catch (e) {
+      notify(errMessage(e), "error");
+      throw e;
+    }
+    if (!program) return;
+    await openFeatureTool(name, program);
   }
 
   async function openFolder(name: string) {
@@ -424,47 +442,20 @@ export function FeaturesPage({
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center justify-end gap-1">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title={t("features.openFolder")}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openFolder(f.name);
+                            <ToolOpenMenu
+                              location="agent"
+                              iconOnly
+                              disabled={busy}
+                              terminalDisabled={!f.agentReady}
+                              toolDisabled={!f.agentReady}
+                              onFolder={() => void openFolder(f.name)}
+                              onTerminal={(program) => {
+                                if (program) return openNewTerminal(f.name, program);
+                                togglePanel(f.name);
                               }}
-                            >
-                              <FolderOpen className="size-4" />
-                            </Button>
-                            <div className="relative">
-                              <Button
-                                variant={terminalExpanded ? "secondary" : "ghost"}
-                                size="icon"
-                                title={t("features.openTerminal")}
-                                disabled={busy && terminals.length === 0}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  togglePanel(f.name);
-                                }}
-                              >
-                                <Terminal className="size-4" />
-                              </Button>
-                              {terminals.length > 0 && (
-                                <span className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium leading-none text-primary-foreground">
-                                  {terminals.length}
-                                </span>
-                              )}
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title={t("features.openVSCode")}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openVSCode(f.name);
-                              }}
-                            >
-                              <Code2 className="size-4" />
-                            </Button>
+                              onTool={(program) => openFeatureTool(f.name, program)}
+                              onToolBrowse={() => browseAndOpenFeatureTool(f.name)}
+                            />
                             <Button
                               variant="ghost"
                               size="icon"

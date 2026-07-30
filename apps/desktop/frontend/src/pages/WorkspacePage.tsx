@@ -11,7 +11,6 @@ import {
 import { api, errMessage } from "@/lib/api";
 import type { Config, RepoRuntimeState, TerminalSession } from "@/lib/types";
 import { ToolOpenMenu } from "@/components/ToolOpenMenu";
-import { useDefaultTool } from "@/lib/tool";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -70,7 +69,6 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
   const { notify } = useToast();
   const confirm = useConfirm();
   const { t } = useI18n();
-  const tool = useDefaultTool();
   const [busy, setBusy] = useState(false);
   const [actingRepo, setActingRepo] = useState<string | null>(null);
   const [repoLocalStates, setRepoLocalStates] = useState<Record<string, boolean>>({});
@@ -288,10 +286,12 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
     }
   }
 
-  async function openWorkspaceTerminalTab() {
+  async function openWorkspaceTerminalTab(program?: string) {
     try {
       setBusy(true);
-      const s = await api.TerminalOpen(root);
+      const s = program
+        ? await api.TerminalOpenWithProgram(root, program)
+        : await api.TerminalOpen(root);
       if (s.external) {
         notify(t("toast.openedWorkspaceTerminal", { path: s.path }), "success");
         return;
@@ -302,6 +302,31 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
     } finally {
       setBusy(false);
     }
+  }
+
+  async function openWorkspaceTool(program: string) {
+    try {
+      setBusy(true);
+      const path = await api.OpenPathInProgram("", program);
+      notify(t("toast.openedPath", { path }), "success");
+    } catch (e) {
+      notify(errMessage(e), "error");
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function browseAndOpenWorkspaceTool() {
+    let program: string;
+    try {
+      program = await api.SelectProgram();
+    } catch (e) {
+      notify(errMessage(e), "error");
+      throw e;
+    }
+    if (!program) return;
+    await openWorkspaceTool(program);
   }
 
   async function checkoutRepo(name: string) {
@@ -371,6 +396,7 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
           </div>
           <div className="flex shrink-0 justify-end">
             <ToolOpenMenu
+              location="workspace"
               disabled={busy}
               onFolder={() =>
                 openWorkspace(
@@ -379,12 +405,8 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
                 )
               }
               onTerminal={openWorkspaceTerminalTab}
-              onTool={() =>
-                openWorkspace(
-                  () => api.OpenPathInProgram("", tool.value),
-                  "toast.openedPath"
-                )
-              }
+              onTool={openWorkspaceTool}
+              onToolBrowse={browseAndOpenWorkspaceTool}
             />
           </div>
         </CardHeader>

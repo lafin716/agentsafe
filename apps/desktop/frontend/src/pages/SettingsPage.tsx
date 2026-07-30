@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bug, Download, FolderOpen, Languages, Save, Stethoscope, Terminal, Upload, Wrench } from "lucide-react";
+import { Bug, Download, FolderOpen, GripVertical, Languages, Pencil, Plus, Save, Stethoscope, Terminal, Trash2, Upload, Wrench, X } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -19,11 +19,14 @@ import { api, errMessage } from "@/lib/api";
 import type { Config, GitDiag } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
-  TOOL_PRESETS,
-  TOOL_PRESET_VALUES,
-  getDefaultTool,
-  setDefaultTool,
+  addToolEntry,
+  deleteToolEntry,
+  reorderToolEntries,
+  setDefaultToolId,
   toolLabel,
+  type ToolEntry,
+  updateToolEntry,
+  useToolSettings,
 } from "@/lib/tool";
 
 interface Props {
@@ -48,25 +51,6 @@ export function SettingsPage({ config, onChanged }: Props) {
       return false;
     }
   });
-  const [tool, setTool] = useState(getDefaultTool);
-
-  async function changeTool(v: string) {
-    if (v === "__pick__") {
-      try {
-        const sel = await api.SelectProgram();
-        if (!sel) return;
-        setDefaultTool(sel);
-        setTool(sel);
-        notify(t("settings.saved"), "success");
-      } catch (e) {
-        notify(errMessage(e), "error");
-      }
-      return;
-    }
-    setDefaultTool(v);
-    setTool(v);
-    notify(t("settings.saved"), "success");
-  }
 
   function choose(l: Locale) {
     if (l === locale) return;
@@ -164,35 +148,7 @@ export function SettingsPage({ config, onChanged }: Props) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Wrench className="size-5" /> {t("settings.defaultToolTitle")}
-          </CardTitle>
-          <CardDescription>{t("settings.defaultToolDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-1.5">
-            <Label htmlFor="defaultTool">{t("settings.defaultToolTitle")}</Label>
-            <select
-              id="defaultTool"
-              value={TOOL_PRESET_VALUES.includes(tool) ? tool : "__custom__"}
-              onChange={(e) => changeTool(e.target.value)}
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-            >
-              {TOOL_PRESETS.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-              {!TOOL_PRESET_VALUES.includes(tool) && (
-                <option value="__custom__">{toolLabel(tool)}</option>
-              )}
-              <option value="__pick__">{t("settings.toolPick")}</option>
-            </select>
-          </div>
-        </CardContent>
-      </Card>
+      <ToolSettingsCard />
 
       <Card>
         <CardHeader>
@@ -226,6 +182,256 @@ export function SettingsPage({ config, onChanged }: Props) {
       )}
     </div>
   );
+}
+
+function ToolSettingsCard() {
+  const { t } = useI18n();
+  const { notify } = useToast();
+  const confirm = useConfirm();
+  const settings = useToolSettings();
+  const [dialogEntry, setDialogEntry] = useState<ToolEntry | null | undefined>();
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+
+  function changeDefault(id: string) {
+    setDefaultToolId(id);
+    notify(t("settings.saved"), "success");
+  }
+
+  function dropOn(targetId: string) {
+    if (!draggingId || draggingId === targetId) return;
+    const ids = settings.tools.map((entry) => entry.id);
+    const from = ids.indexOf(draggingId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ids.splice(from, 1);
+    ids.splice(to, 0, draggingId);
+    reorderToolEntries(ids);
+    setDraggingId(null);
+    notify(t("settings.saved"), "success");
+  }
+
+  async function remove(entry: ToolEntry) {
+    const ok = await confirm({
+      message: t("settings.toolDeleteConfirm", { label: entry.label }),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      deleteToolEntry(entry.id);
+      notify(t("settings.saved"), "success");
+    } catch (e) {
+      notify(toolSettingsError(t, e), "error");
+    }
+  }
+
+  return (
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Wrench className="size-5" /> {t("settings.defaultToolTitle")}
+          </CardTitle>
+          <CardDescription>{t("settings.defaultToolDesc")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="space-y-1.5">
+            <Label htmlFor="defaultTool">{t("settings.defaultToolTitle")}</Label>
+            <select
+              id="defaultTool"
+              value={settings.defaultToolId}
+              onChange={(event) => changeDefault(event.target.value)}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              {settings.tools.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <Label>{t("settings.registeredTools")}</Label>
+              <Button size="sm" variant="outline" onClick={() => setDialogEntry(null)}>
+                <Plus className="size-4" /> {t("settings.toolAdd")}
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {settings.tools.map((entry) => (
+                <div
+                  key={entry.id}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={() => dropOn(entry.id)}
+                  className="flex items-center gap-2 rounded-md border bg-card p-2"
+                >
+                  <button
+                    type="button"
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      setDraggingId(entry.id);
+                    }}
+                    onDragEnd={() => setDraggingId(null)}
+                    title={t("settings.toolDrag")}
+                    aria-label={t("settings.toolDrag")}
+                    className="cursor-grab rounded p-1 text-muted-foreground hover:bg-accent active:cursor-grabbing"
+                  >
+                    <GripVertical className="size-4" />
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{entry.label}</div>
+                    <div className="truncate font-mono text-xs text-muted-foreground">
+                      {entry.command}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-8"
+                    title={t("settings.toolEdit")}
+                    onClick={() => setDialogEntry(entry)}
+                  >
+                    <Pencil className="size-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:text-destructive"
+                    title={t("common.delete")}
+                    disabled={settings.tools.length === 1}
+                    onClick={() => void remove(entry)}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {dialogEntry !== undefined && (
+        <ToolEntryDialog
+          entry={dialogEntry}
+          onClose={() => setDialogEntry(undefined)}
+        />
+      )}
+    </>
+  );
+}
+
+function ToolEntryDialog({
+  entry,
+  onClose,
+}: {
+  entry: ToolEntry | null;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const { notify } = useToast();
+  const [label, setLabel] = useState(entry?.label ?? "");
+  const [command, setCommand] = useState(entry?.command ?? "");
+  const [error, setError] = useState("");
+
+  async function pickProgram() {
+    try {
+      const selected = await api.SelectProgram();
+      if (!selected) return;
+      setCommand(selected);
+      if (!label.trim()) setLabel(toolLabel(selected));
+    } catch (e) {
+      notify(errMessage(e), "error");
+    }
+  }
+
+  function save(event: React.FormEvent) {
+    event.preventDefault();
+    try {
+      if (entry) updateToolEntry(entry.id, label, command);
+      else addToolEntry(label, command);
+      notify(t("settings.saved"), "success");
+      onClose();
+    } catch (e) {
+      setError(toolSettingsError(t, e));
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="toolEntryDialogTitle"
+        className="w-full max-w-lg rounded-lg border bg-card p-5 shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={save}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="toolEntryDialogTitle" className="text-base font-semibold">
+              {t(entry ? "settings.toolEdit" : "settings.toolAdd")}
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t("settings.toolDialogDesc")}
+            </p>
+          </div>
+          <Button type="button" variant="ghost" size="icon" className="size-8" onClick={onClose}>
+            <X className="size-4" />
+          </Button>
+        </div>
+        <div className="mt-4 space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="toolLabel">{t("settings.toolLabel")}</Label>
+            <Input id="toolLabel" autoFocus value={label} onChange={(event) => setLabel(event.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="toolCommand">{t("settings.toolCommand")}</Label>
+            <div className="flex gap-2">
+              <Input
+                id="toolCommand"
+                value={command}
+                onChange={(event) => setCommand(event.target.value)}
+                placeholder="code"
+              />
+              <Button type="button" variant="outline" onClick={() => void pickProgram()}>
+                <FolderOpen className="size-4" /> {t("settings.toolChooseFile")}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">{t("settings.toolCommandHint")}</p>
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button type="submit">{t("common.save")}</Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function toolSettingsError(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  error: unknown
+): string {
+  const code = errMessage(error);
+  const known = new Set([
+    "requiredLabel",
+    "requiredCommand",
+    "invalidCommand",
+    "duplicateLabel",
+    "duplicateCommand",
+    "lastTool",
+  ]);
+  return known.has(code) ? t(`settings.toolError.${code}`) : code;
 }
 
 function WorkspaceTransfer({

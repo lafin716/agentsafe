@@ -8,7 +8,13 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/I18nProvider";
-import { TERMINAL_PRESETS, TOOL_PRESETS, useDefaultTool } from "@/lib/tool";
+import {
+  TERMINAL_PRESETS,
+  setLastToolForLocation,
+  type ToolEntry,
+  type ToolLocation,
+  useLocationTool,
+} from "@/lib/tool";
 import { cn } from "@/lib/utils";
 
 // ToolOpenMenu renders an external-open button that opens a dropdown with
@@ -17,27 +23,33 @@ import { cn } from "@/lib/utils";
 // terminals / programs. It is purely presentational — each host wires the
 // actions to its own context.
 export function ToolOpenMenu({
+  location,
   onFolder,
   onTerminal,
   onTool,
   onToolBrowse,
+  terminalDisabled = false,
+  toolDisabled = false,
   disabled,
   align = "end",
   iconOnly = false,
 }: {
+  location: ToolLocation;
   onFolder: () => void;
   // program omitted => host's default; provided => open with that program.
   onTerminal: (program?: string) => void;
-  onTool: (program?: string) => void;
+  onTool: (program: string) => void | Promise<void>;
   // When provided, an extra "choose program…" item is shown that lets the host
   // pick an arbitrary executable (e.g. via a file dialog).
-  onToolBrowse?: () => void;
+  onToolBrowse?: () => void | Promise<void>;
+  terminalDisabled?: boolean;
+  toolDisabled?: boolean;
   disabled?: boolean;
   align?: "start" | "end";
   iconOnly?: boolean;
 }) {
   const { t } = useI18n();
-  const { label } = useDefaultTool();
+  const { tool, settings } = useLocationTool(location);
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState<"terminal" | "tool" | null>(null);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -68,11 +80,35 @@ export function ToolOpenMenu({
     fn();
   };
 
+  const launchTool = async (entry: ToolEntry) => {
+    setOpen(false);
+    try {
+      await onTool(entry.command);
+      setLastToolForLocation(location, entry.id);
+    } catch {
+      // Hosts own error presentation; a rejected launch must not change history.
+    }
+  };
+
+  const launchTemporaryTool = async () => {
+    if (!onToolBrowse) return;
+    setOpen(false);
+    try {
+      await onToolBrowse();
+    } catch {
+      // Temporary launches are never remembered; hosts own error presentation.
+    }
+  };
+
   const toggleExpand = (key: "terminal" | "tool") =>
     setExpanded((prev) => (prev === key ? null : key));
 
   return (
-    <div ref={ref} className="relative inline-block">
+    <div
+      ref={ref}
+      className="relative inline-block"
+      onClick={(event) => event.stopPropagation()}
+    >
       {iconOnly ? (
         <Button
           variant="ghost"
@@ -119,8 +155,9 @@ export function ToolOpenMenu({
             onClick={() => choose(() => onTerminal())}
             onToggle={() => toggleExpand("terminal")}
             toggleTitle={t("toolOpen.otherTerminals")}
+            disabled={terminalDisabled}
           />
-          {expanded === "terminal" &&
+          {expanded === "terminal" && !terminalDisabled &&
             TERMINAL_PRESETS.map((p) => (
               <ToolSubItem
                 key={p.value}
@@ -128,27 +165,39 @@ export function ToolOpenMenu({
                 onClick={() => choose(() => onTerminal(p.value))}
               />
             ))}
-          <ToolMenuRow
+          <ToolMenuItem
             icon={<ExternalLink className="size-4" />}
-            label={label}
-            expanded={expanded === "tool"}
-            onClick={() => choose(() => onTool())}
-            onToggle={() => toggleExpand("tool")}
-            toggleTitle={t("toolOpen.otherPrograms")}
+            label={tool.label}
+            onClick={() => void launchTool(tool)}
+            disabled={toolDisabled}
           />
-          {expanded === "tool" && (
+          <ToolMenuItem
+            icon={
+              expanded === "tool" ? (
+                <ChevronDown className="size-4" />
+              ) : (
+                <ChevronRight className="size-4" />
+              )
+            }
+            label={t("toolOpen.more")}
+            onClick={() => toggleExpand("tool")}
+            disabled={toolDisabled}
+          />
+          {expanded === "tool" && !toolDisabled && (
             <>
-              {TOOL_PRESETS.map((p) => (
+              {settings.tools
+                .filter((entry) => entry.id !== tool.id)
+                .map((entry) => (
                 <ToolSubItem
-                  key={p.value}
-                  label={p.label}
-                  onClick={() => choose(() => onTool(p.value))}
+                  key={entry.id}
+                  label={entry.label}
+                  onClick={() => void launchTool(entry)}
                 />
               ))}
               {onToolBrowse && (
                 <ToolSubItem
                   label={t("toolOpen.browse")}
-                  onClick={() => choose(onToolBrowse)}
+                  onClick={() => void launchTemporaryTool()}
                 />
               )}
             </>
@@ -163,17 +212,20 @@ function ToolMenuItem({
   icon,
   label,
   onClick,
+  disabled = false,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       role="menuitem"
       onClick={onClick}
-      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+      disabled={disabled}
+      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
     >
       {icon}
       <span className="truncate">{label}</span>
@@ -190,6 +242,7 @@ function ToolMenuRow({
   onClick,
   onToggle,
   toggleTitle,
+  disabled = false,
 }: {
   icon: ReactNode;
   label: string;
@@ -197,6 +250,7 @@ function ToolMenuRow({
   onClick: () => void;
   onToggle: () => void;
   toggleTitle: string;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex items-center rounded hover:bg-accent hover:text-accent-foreground">
@@ -204,7 +258,8 @@ function ToolMenuRow({
         type="button"
         role="menuitem"
         onClick={onClick}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-l px-2 py-1.5 text-left text-sm"
+        disabled={disabled}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-l px-2 py-1.5 text-left text-sm disabled:pointer-events-none disabled:opacity-50"
       >
         {icon}
         <span className="truncate">{label}</span>
@@ -212,10 +267,11 @@ function ToolMenuRow({
       <button
         type="button"
         onClick={onToggle}
+        disabled={disabled}
         title={toggleTitle}
         aria-label={toggleTitle}
         aria-expanded={expanded}
-        className="flex size-7 shrink-0 items-center justify-center rounded-r hover:bg-accent-foreground/10"
+        className="flex size-7 shrink-0 items-center justify-center rounded-r hover:bg-accent-foreground/10 disabled:pointer-events-none disabled:opacity-50"
       >
         {expanded ? (
           <ChevronDown className="size-4" />

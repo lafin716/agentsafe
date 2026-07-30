@@ -43,7 +43,6 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/utils";
 import { TerminalPanel } from "@/components/TerminalPanel";
 import { ToolOpenMenu } from "@/components/ToolOpenMenu";
-import { useDefaultTool } from "@/lib/tool";
 
 interface Props {
   config: Config | null;
@@ -112,7 +111,6 @@ export function FileExplorerPage({
   const { t } = useI18n();
   const { notify } = useToast();
   const confirm = useConfirm();
-  const tool = useDefaultTool();
   const [root, setRoot] = useState<WorkspaceTreeNode | null>(null);
   const [selected, setSelected] = useState<WorkspaceTreeNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -217,13 +215,14 @@ export function FileExplorerPage({
     }
   }
 
-  async function openTool(program?: string) {
+  async function openTool(program: string) {
     if (!selected) return;
     try {
-      const p = await api.OpenPathInProgram(selected.path, program ?? tool.value);
+      const p = await api.OpenPathInProgram(selected.path, program);
       notify(t("toast.openedPath", { path: p }), "success");
     } catch (e) {
       notify(errMessage(e), "error");
+      throw e;
     }
   }
 
@@ -611,12 +610,13 @@ export function FileExplorerPage({
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <ToolOpenMenu
+                      location="explorer"
                       align="start"
                       disabled={busy || !selected}
                       onFolder={openSelected}
                       onTerminal={(prog) => void openEmbeddedTerminal(prog)}
-                      onTool={(prog) => void openTool(prog)}
-                      onToolBrowse={() => void browseAndOpenTool()}
+                      onTool={openTool}
+                      onToolBrowse={browseAndOpenTool}
                     />
                     {!selected.isDir && (
                       <Button variant="outline" size="sm" onClick={() => openEditor(selected)} disabled={busy}>
