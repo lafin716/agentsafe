@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -177,6 +178,148 @@ func ImportFolder(root, src string) (Template, error) {
 		return Template{}, err
 	}
 	return t, nil
+}
+
+// RegisterOptions describes the destination and flags applied to a template
+// created by RegisterPath. An empty TargetMode asks for the destination to be
+// inferred from where the source lives, in which case WorkspaceRepos must name
+// the workspace's repositories so repository areas can be recognized.
+type RegisterOptions struct {
+	TargetMode     string
+	RepoNames      []string
+	Overwrite      bool
+	Enabled        bool
+	WorkspaceRepos []string
+}
+
+// RegisterPath registers an existing workspace file or folder as a worktree
+// template, copying it into the template store. A source path that already
+// backs a template is rejected, because the second template would keep writing
+// the same source to a destination the first one already covers.
+func RegisterPath(root, src string, opts RegisterOptions) (Template, error) {
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return Template{}, fmt.Errorf("path is required")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return Template{}, err
+	}
+	existing, found, err := FindBySourcePath(root, src)
+	if err != nil {
+		return Template{}, err
+	}
+	if found {
+		return Template{}, fmt.Errorf("%s is already registered as template %q", src, existing.Name)
+	}
+	var t Template
+	if info.IsDir() {
+		t, err = ImportFolder(root, src)
+	} else {
+		var added []Template
+		added, err = ImportFiles(root, []string{src})
+		if err == nil {
+			t = added[0]
+		}
+	}
+	if err != nil {
+		return Template{}, err
+	}
+	t.TargetMode, t.RepoNames = opts.TargetMode, dedupeStrings(opts.RepoNames)
+	if t.TargetMode == "" {
+		t.TargetMode, t.RepoNames = InferTarget(root, src, opts.WorkspaceRepos)
+	}
+	t.Overwrite = opts.Overwrite
+	t.Enabled = opts.Enabled
+	if err := Update(root, t); err != nil {
+		return Template{}, err
+	}
+	return t, nil
+}
+
+// FindBySourcePath returns the template registered for src, if any. Paths are
+// compared after normalization, so a trailing separator, a relative spelling,
+// or different casing on Windows still resolves to the same template.
+func FindBySourcePath(root, src string) (Template, bool, error) {
+	templates, err := List(root)
+	if err != nil {
+		return Template{}, false, err
+	}
+	for _, t := range templates {
+		if samePath(t.SourcePath, src) {
+			return t, true, nil
+		}
+	}
+	return Template{}, false, nil
+}
+
+// InferTarget guesses the destination of a source path from where it sits in
+// the workspace: a repository area maps to that repository, a feature or agent
+// root to that root, and everything else — including a path outside the
+// workspace — to the workspace root. repoNames tells repository folders apart
+// from other content, so it must list the workspace's repositories.
+func InferTarget(root, src string, repoNames []string) (string, []string) {
+	segments := workspaceSegments(root, src)
+	if len(segments) < 2 {
+		return TargetWorkspaceRoot, []string{}
+	}
+	rootMode, repoMode := TargetFeatureRoot, TargetSelectedRepos
+	switch {
+	case sameName(segments[0], "main"):
+		if containsRepo(repoNames, segments[1]) {
+			return TargetSelectedRepos, []string{segments[1]}
+		}
+		return TargetWorkspaceRoot, []string{}
+	case sameName(segments[0], "agent"):
+		rootMode, repoMode = TargetAgentRoot, TargetAgentSelectedRepos
+	case !sameName(segments[0], "feature"):
+		return TargetWorkspaceRoot, []string{}
+	}
+	// feature/<key> and agent/<key> hold one folder per repository next to
+	// whatever the feature or agent root itself carries.
+	if len(segments) == 2 {
+		return rootMode, []string{}
+	}
+	if containsRepo(repoNames, segments[2]) {
+		return repoMode, []string{segments[2]}
+	}
+	if len(segments) == 3 {
+		return rootMode, []string{}
+	}
+	return TargetWorkspaceRoot, []string{}
+}
+
+// workspaceSegments splits the path of src relative to the workspace root into
+// its path elements, or returns nil when src is the root itself or lives
+// outside it.
+func workspaceSegments(root, src string) []string {
+	rel, err := filepath.Rel(cleanPath(root), cleanPath(src))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil
+	}
+	return strings.Split(rel, string(filepath.Separator))
+}
+
+func samePath(a, b string) bool { return sameName(cleanPath(a), cleanPath(b)) }
+
+// cleanPath makes a path comparable: absolute where the working directory
+// allows it, without redundant or trailing separators.
+func cleanPath(p string) string {
+	p = strings.TrimSpace(p)
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return filepath.Clean(p)
+	}
+	return abs
+}
+
+// sameName compares two path elements the way the local filesystem does, so a
+// differently cased spelling of the same name still matches on Windows.
+func sameName(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 func Update(root string, next Template) error {
@@ -765,9 +908,12 @@ func addTemplateExcludes(worktreePath string, patterns []string) error {
 	return os.WriteFile(excludePath, []byte(b.String()), 0o644)
 }
 
+// containsRepo reports whether repoName is one of names, comparing the way the
+// filesystem does so a repository folder's on-disk spelling matches its
+// configured name.
 func containsRepo(names []string, repoName string) bool {
 	for _, name := range names {
-		if name == repoName {
+		if sameName(name, repoName) {
 			return true
 		}
 	}
