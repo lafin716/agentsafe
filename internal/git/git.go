@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -360,6 +361,44 @@ func WorktreeForBranch(repoPath, branch string) string {
 		}
 	}
 	return ""
+}
+
+// IsTracked reports whether path is tracked by the Git repository containing
+// it. A path that lives outside any work tree is reported as untracked instead
+// of an error, so callers can ask about arbitrary workspace paths. A directory
+// counts as tracked when at least one tracked file lives beneath it.
+func IsTracked(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	dir, pathspec := path, ""
+	if !info.IsDir() {
+		dir, pathspec = filepath.Dir(path), filepath.Base(path)
+	}
+	// A non-work-tree directory (no repository, or a bare one) has nothing tracked.
+	if inside, err := Output(dir, "rev-parse", "--is-inside-work-tree"); err != nil || inside != "true" {
+		return false, nil
+	}
+	// ls-files reads the index, so a staged-but-uncommitted file counts as
+	// tracked. The global --literal-pathspecs stops names holding glob
+	// characters (weird[1].txt) from matching anything but themselves, and -z
+	// keeps unusual names intact. Without a pathspec git lists the whole
+	// subtree of dir, which answers the directory case.
+	args := []string{"--literal-pathspecs", "ls-files", "-z"}
+	if pathspec != "" {
+		args = append(args, "--", pathspec)
+	}
+	res, err := Run(dir, args...)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range strings.Split(res.Stdout, "\x00") {
+		if entry != "" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func AddWorktree(repoPath, dest, branch, start string, create bool) error {
