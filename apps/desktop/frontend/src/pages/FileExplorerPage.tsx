@@ -101,6 +101,15 @@ function defaultTerminalProgram(): string {
   }
 }
 
+async function loadSelectedState(path: string): Promise<WorkspacePathState | null> {
+  try {
+    return await api.WorkspacePathState(path);
+  } catch {
+    // A path whose state cannot be resolved simply offers no register action.
+    return null;
+  }
+}
+
 export function FileExplorerPage({
   config,
   terminals,
@@ -148,15 +157,6 @@ export function FileExplorerPage({
     void loadRoot();
   }, [loadRoot]);
 
-  const loadSelectedState = useCallback(async (path: string) => {
-    try {
-      return await api.WorkspacePathState(path);
-    } catch {
-      // A path whose state cannot be resolved simply offers no register action.
-      return null;
-    }
-  }, []);
-
   // Resolved for the selected path only, so expanding folders stays free of Git
   // work. The cancel flag drops a response the user has already navigated past.
   const selectedPath = selected?.path ?? "";
@@ -170,7 +170,7 @@ export function FileExplorerPage({
     return () => {
       cancelled = true;
     };
-  }, [loadSelectedState, selectedPath]);
+  }, [selectedPath]);
 
   const canRegisterTemplate =
     selectedState !== null && !selectedState.tracked && !selectedState.templateId;

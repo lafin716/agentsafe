@@ -383,8 +383,9 @@ func IsTracked(path string) (bool, error) {
 	// ls-files reads the index, so a staged-but-uncommitted file counts as
 	// tracked. The global --literal-pathspecs stops names holding glob
 	// characters (weird[1].txt) from matching anything but themselves, and -z
-	// keeps unusual names intact. Without a pathspec git lists the whole
-	// subtree of dir, which answers the directory case.
+	// makes the output NUL-separated whatever core.quotePath says. Without a
+	// pathspec git lists the whole subtree of dir, which answers the directory
+	// case.
 	args := []string{"--literal-pathspecs", "ls-files", "-z"}
 	if pathspec != "" {
 		args = append(args, "--", pathspec)
@@ -393,12 +394,8 @@ func IsTracked(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, entry := range strings.Split(res.Stdout, "\x00") {
-		if entry != "" {
-			return true, nil
-		}
-	}
-	return false, nil
+	// Any listed name means tracked; only the separators are left to strip.
+	return strings.Trim(res.Stdout, "\x00") != "", nil
 }
 
 func AddWorktree(repoPath, dest, branch, start string, create bool) error {
