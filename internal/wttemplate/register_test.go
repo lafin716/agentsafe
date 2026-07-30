@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/agentsafe/agentsafe/internal/config"
 )
 
 func TestRegisterPathFileInfersRepoTarget(t *testing.T) {
@@ -159,6 +161,63 @@ func TestRegisterPathMissingSource(t *testing.T) {
 	}
 	if _, err := RegisterPath(root, "  ", RegisterOptions{Enabled: true}); err == nil {
 		t.Fatal("expected an error for a blank path")
+	}
+}
+
+// The CLI registers whatever path the user typed, so a relative source must be
+// stored the way the desktop app sees it — absolute — or the same content would
+// register twice and the duplicate guard would miss it.
+func TestRegisterPathStoresAbsoluteSource(t *testing.T) {
+	root := t.TempDir()
+	want := filepath.Join(root, "NOTES.md")
+	writeRegisterTestFile(t, want, "notes")
+	t.Chdir(root)
+
+	item, err := RegisterPath(root, "NOTES.md", RegisterOptions{Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(item.SourcePath) {
+		t.Fatalf("SourcePath = %q, want an absolute path", item.SourcePath)
+	}
+	if !samePath(item.SourcePath, want) {
+		t.Fatalf("SourcePath = %q, want %q", item.SourcePath, want)
+	}
+	if _, found, err := FindBySourcePath(root, item.SourcePath); err != nil || !found {
+		t.Fatalf("FindBySourcePath found = %v (err %v), want true", found, err)
+	}
+}
+
+// Registering the workspace root would copy the whole workspace into every
+// destination, and agentsafe's metadata is per-workspace state rather than
+// content to seed worktrees with.
+func TestRegisterPathRejectsProtectedPaths(t *testing.T) {
+	root := t.TempDir()
+	meta := filepath.Join(root, config.DirName)
+	inside := filepath.Join(meta, "features", "feat-1.json")
+	writeRegisterTestFile(t, inside, "{}")
+
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"workspace root", root},
+		{"metadata folder", meta},
+		{"metadata file", inside},
+		{"metadata folder with trailing separator", meta + string(filepath.Separator)},
+	}
+	for _, tc := range cases {
+		if _, err := RegisterPath(root, tc.path, RegisterOptions{Enabled: true}); err == nil {
+			t.Errorf("RegisterPath(%s) succeeded, want a rejection", tc.name)
+		}
+	}
+
+	stored, err := List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("expected an empty store, got %+v", stored)
 	}
 }
 

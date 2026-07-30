@@ -2775,28 +2775,10 @@ func (a *App) RegisterWorktreeTemplateFromPath(path string) (wttemplate.Template
 	if err != nil {
 		return wttemplate.Template{}, err
 	}
-	if err := ensureTemplateRegistrable(root, target); err != nil {
-		return wttemplate.Template{}, err
-	}
 	return wttemplate.RegisterPath(root, target, wttemplate.RegisterOptions{
 		Enabled:        true,
 		WorkspaceRepos: wttemplate.WorkspaceRepoNames(root),
 	})
-}
-
-// ensureTemplateRegistrable rejects sources that must never become templates:
-// the workspace root, whose whole tree would be copied into every destination,
-// and agentsafe's own metadata, which is per-workspace state rather than content
-// to seed worktrees with.
-func ensureTemplateRegistrable(root, target string) error {
-	if sameAbsPath(root, target) {
-		return fmt.Errorf("cannot register the workspace root as a template")
-	}
-	meta := filepath.Join(root, config.DirName)
-	if sameAbsPath(target, meta) || pathContains(meta, target) {
-		return fmt.Errorf("agentsafe metadata cannot be registered as a template: %s", target)
-	}
-	return nil
 }
 
 func ensureExplorerDeleteAllowed(root, target string) error {

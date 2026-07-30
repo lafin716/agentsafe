@@ -201,6 +201,12 @@ func RegisterPath(root, src string, opts RegisterOptions) (Template, error) {
 	if src == "" {
 		return Template{}, fmt.Errorf("path is required")
 	}
+	// Store an absolute source so a path registered from the CLI's working
+	// directory and the same path seen by the desktop app are one template.
+	src = cleanPath(src)
+	if err := ensureRegistrable(root, src); err != nil {
+		return Template{}, err
+	}
 	info, err := os.Stat(src)
 	if err != nil {
 		return Template{}, err
@@ -235,6 +241,21 @@ func RegisterPath(root, src string, opts RegisterOptions) (Template, error) {
 		return Template{}, err
 	}
 	return t, nil
+}
+
+// ensureRegistrable rejects sources that must never become templates: the
+// workspace root, whose whole tree would be copied into every destination, and
+// agentsafe's own metadata, which is per-workspace state rather than content to
+// seed worktrees with.
+func ensureRegistrable(root, src string) error {
+	if samePath(src, root) {
+		return fmt.Errorf("cannot register the workspace root as a template")
+	}
+	meta := filepath.Join(root, config.DirName)
+	if samePath(src, meta) || workspaceSegments(meta, src) != nil {
+		return fmt.Errorf("agentsafe metadata cannot be registered as a template: %s", src)
+	}
+	return nil
 }
 
 // FindBySourcePath returns the template registered for src, if any. Paths are

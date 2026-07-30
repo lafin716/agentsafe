@@ -14,6 +14,7 @@ import (
 	"github.com/agentsafe/agentsafe/internal/agent"
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
+	aggit "github.com/agentsafe/agentsafe/internal/git"
 	"github.com/agentsafe/agentsafe/internal/output"
 	"github.com/agentsafe/agentsafe/internal/repo"
 	"github.com/agentsafe/agentsafe/internal/wttemplate"
@@ -32,6 +33,15 @@ type repoListResult struct {
 type repoEntry struct {
 	Name string `json:"name" yaml:"name"`
 	URL  string `json:"url"  yaml:"url"`
+}
+
+// registeredTemplate reports one path registered as a worktree template. Tracked
+// state is informational: registering is aimed at untracked content, but a
+// tracked path is still allowed, so callers can see what they registered.
+type registeredTemplate struct {
+	Path     string              `json:"path"     yaml:"path"`
+	Tracked  bool                `json:"tracked"  yaml:"tracked"`
+	Template wttemplate.Template `json:"template" yaml:"template"`
 }
 
 type diffResult struct {
@@ -480,6 +490,50 @@ func worktreeTemplateCmd() *cobra.Command {
 	}}
 	applyFlags(addFolder)
 
+	register := &cobra.Command{Use: "register PATH [PATH...]", Short: "Register existing workspace path(s) as worktree templates", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		root, _, err := cwdConfig()
+		if err != nil {
+			return err
+		}
+		opts := wttemplate.RegisterOptions{
+			RepoNames:      repos,
+			Overwrite:      overwrite,
+			Enabled:        !disabled,
+			WorkspaceRepos: wttemplate.WorkspaceRepoNames(root),
+		}
+		// Without an explicit --target the destination is inferred from where the
+		// source lives, which is what registering an existing path usually wants.
+		if cmd.Flags().Changed("target") {
+			opts.TargetMode = target
+		}
+		items := make([]registeredTemplate, 0, len(args))
+		for _, path := range args {
+			tracked, err := aggit.IsTracked(path)
+			if err != nil {
+				return err
+			}
+			t, err := wttemplate.RegisterPath(root, path, opts)
+			if err != nil {
+				return err
+			}
+			items = append(items, registeredTemplate{Path: path, Tracked: tracked, Template: t})
+		}
+		if output.IsStructured() {
+			return output.Emit(struct {
+				Registered []registeredTemplate `json:"registered" yaml:"registered"`
+			}{Registered: items})
+		}
+		for _, item := range items {
+			state := "untracked"
+			if item.Tracked {
+				state = "tracked"
+			}
+			fmt.Printf("Registered %s (%s) as template %s -> %s\n", item.Path, state, item.Template.Name, item.Template.TargetMode)
+		}
+		return nil
+	}}
+	applyFlags(register)
+
 	del := &cobra.Command{Use: "delete ID", Short: "Delete a worktree template", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
 		if err != nil {
@@ -540,7 +594,7 @@ func worktreeTemplateCmd() *cobra.Command {
 		return nil
 	}}
 	apply.Flags().StringVar(&applyTarget, "target", "all", "apply target: worktree, agent, or all")
-	c.AddCommand(list, addFile, addFolder, del, clear, apply)
+	c.AddCommand(list, addFile, addFolder, register, del, clear, apply)
 	return c
 }
 
