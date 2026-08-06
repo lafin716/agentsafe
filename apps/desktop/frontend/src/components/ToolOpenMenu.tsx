@@ -164,22 +164,13 @@ export function ToolOpenMenu({
                 onClick={() => choose(() => onTerminal(p.value))}
               />
             ))}
-          <ToolMenuItem
+          <ToolMenuRow
             icon={<ExternalLink className="size-4" />}
             label={tool.label}
+            expanded={expanded === "tool"}
             onClick={() => void launchTool(tool)}
-            disabled={toolDisabled}
-          />
-          <ToolMenuItem
-            icon={
-              expanded === "tool" ? (
-                <ChevronDown className="size-4" />
-              ) : (
-                <ChevronRight className="size-4" />
-              )
-            }
-            label={t("toolOpen.more")}
-            onClick={() => toggleExpand("tool")}
+            onToggle={() => toggleExpand("tool")}
+            toggleTitle={t("toolOpen.otherTools")}
             disabled={toolDisabled}
           />
           {expanded === "tool" && !toolDisabled && (

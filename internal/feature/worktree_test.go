@@ -88,8 +88,15 @@ func TestCreateTracksBaseUntilFirstPush(t *testing.T) {
 		t.Fatalf("upstream = %q, err = %v; want origin/main", upstream, err)
 	}
 
-	if err := Push(root, "demo", ""); err != nil {
+	res, err := Push(root, "demo", "", PushOptions{})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if res.Failed() {
+		t.Fatalf("push reported a failure: %+v", res.Repositories)
+	}
+	if res.Pushed() != 1 {
+		t.Fatalf("pushed = %d, want 1 (result: %+v)", res.Pushed(), res.Repositories)
 	}
 	if !aggit.RemoteBranchExists(worktree, "feature/demo") {
 		t.Fatal("first push did not create origin/feature/demo")

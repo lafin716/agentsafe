@@ -43,6 +43,10 @@ type Workspace struct {
 type GitConfig struct {
 	DefaultBaseBranch string `yaml:"defaultBaseBranch"` // 분기 기준이 되는 기본 브랜치
 	BranchPrefix      string `yaml:"branchPrefix"`      // feature 브랜치 이름 앞에 붙일 접두사
+	// CommitMessageTemplate은 명시적 메시지 없이 실행된 전달 동작(동기화→커밋→푸시)이
+	// 쓸 커밋 메시지 패턴이다. 비어 있으면 내장 기본값을 쓴다. 지원 변수와 검증은
+	// internal/agent 의 Commit Message Template 함수들이 담당한다.
+	CommitMessageTemplate string `yaml:"commitMessageTemplate,omitempty"`
 }
 
 // Repository는 워크스페이스가 관리하는 저장소 하나를 나타낸다.

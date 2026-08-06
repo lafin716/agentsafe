@@ -16,7 +16,7 @@ import { useConfirm } from "@/components/ui/confirm";
 import { useI18n } from "@/i18n/I18nProvider";
 import { LOCALES, type Locale } from "@/i18n/translations";
 import { api, errMessage } from "@/lib/api";
-import type { Config, GitDiag } from "@/lib/types";
+import type { CommitMessageTemplateInfo, Config, GitDiag } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   addToolEntry,
@@ -589,6 +589,13 @@ function GitSettings({
   // Git
   const [baseBranch, setBaseBranch] = useState("");
   const [branchPrefix, setBranchPrefix] = useState("");
+  // Commit Message Template, with the variables it may use and what it renders
+  // to. The preview is fetched rather than rendered here so the app and the CLI
+  // cannot disagree about what a template produces.
+  const [commitTemplate, setCommitTemplate] = useState("");
+  const [templateInfo, setTemplateInfo] = useState<CommitMessageTemplateInfo | null>(
+    null
+  );
   // GitLab
   const [glUrl, setGlUrl] = useState("");
   const [glToken, setGlToken] = useState("");
@@ -597,9 +604,27 @@ function GitSettings({
   const [ghToken, setGhToken] = useState("");
   const [ghTarget, setGhTarget] = useState("");
 
+  // Refreshed whenever the config changes, so the preview follows a save. An
+  // empty feature name previews with stand-in values.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .CommitMessageTemplateInfo("")
+      .then((info) => {
+        if (!cancelled) setTemplateInfo(info);
+      })
+      .catch(() => {
+        if (!cancelled) setTemplateInfo(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config]);
+
   useEffect(() => {
     setBaseBranch(config.Git?.DefaultBaseBranch ?? "");
     setBranchPrefix(config.Git?.BranchPrefix ?? "");
+    setCommitTemplate(config.Git?.CommitMessageTemplate ?? "");
     setGlUrl(config.GitLab?.BaseURL ?? "");
     setGlToken(config.GitLab?.TokenEnv ?? "");
     setGlTarget(config.GitLab?.TargetBranch ?? "");
@@ -611,7 +636,14 @@ function GitSettings({
     try {
       setBusy(true);
       await api.SaveGitSettings(
-        { DefaultBaseBranch: baseBranch.trim(), BranchPrefix: branchPrefix.trim() },
+        {
+          DefaultBaseBranch: baseBranch.trim(),
+          BranchPrefix: branchPrefix.trim(),
+          // Rejected at save time if it uses a variable that cannot be
+          // rendered, so an unusable template is refused while the user is
+          // still looking at the field.
+          CommitMessageTemplate: commitTemplate.trim(),
+        },
         {
           BaseURL: glUrl.trim(),
           TokenEnv: glToken.trim(),
@@ -663,6 +695,29 @@ function GitSettings({
           </Field>
           <Field label={t("workspace.branchPrefix")} hint={prefixHint}>
             <Input value={branchPrefix} onChange={(e) => setBranchPrefix(e.target.value)} placeholder="feature/" />
+          </Field>
+          <Field
+            label={t("settings.commitTemplate")}
+            hint={t("settings.commitTemplateHint", {
+              vars: (templateInfo?.variables ?? [])
+                .map((v) => `{{${v}}}`)
+                .join(" "),
+            })}
+          >
+            <Input
+              value={commitTemplate}
+              onChange={(e) => setCommitTemplate(e.target.value)}
+              placeholder={t("settings.commitTemplatePlaceholder")}
+            />
+            {templateInfo?.error ? (
+              <p className="mt-1 text-xs text-destructive">{templateInfo.error}</p>
+            ) : templateInfo?.preview ? (
+              <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                {t("settings.commitTemplatePreview", {
+                  preview: templateInfo.preview,
+                })}
+              </p>
+            ) : null}
           </Field>
         </Section>
 

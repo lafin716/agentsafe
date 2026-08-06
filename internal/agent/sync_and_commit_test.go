@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentsafe/agentsafe/internal/config"
 	"github.com/agentsafe/agentsafe/internal/feature"
@@ -93,7 +94,7 @@ func TestSyncCommitPushDryRunDoesNothing(t *testing.T) {
 }
 
 func TestDefaultCommitMessageIncludesFeature(t *testing.T) {
-	msg := DefaultCommitMessage("checkout")
+	msg := DefaultCommitMessage("checkout", time.Now())
 	if !strings.Contains(msg, "checkout") {
 		t.Fatalf("DefaultCommitMessage = %q, want it to include the feature name", msg)
 	}

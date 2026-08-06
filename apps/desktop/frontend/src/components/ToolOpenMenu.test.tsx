@@ -39,11 +39,37 @@ describe("ToolOpenMenu", () => {
     await user.click(screen.getByRole("button", { name: "toolOpen.title" }));
     expect(screen.getByRole("menuitem", { name: "Cursor" })).toBeTruthy();
 
-    await user.click(screen.getByRole("menuitem", { name: "toolOpen.more" }));
+    await user.click(
+      screen.getByRole("button", { name: "toolOpen.otherTools" })
+    );
     await user.click(screen.getByRole("menuitem", { name: "VS Code" }));
 
     expect(onTool).toHaveBeenCalledWith("code");
     expect(getToolForLocation("worktree").id).toBe("vscode");
+  });
+
+  it("launches the location tool from the row body, not the expand arrow", async () => {
+    const cursor = addToolEntry("Cursor", "cursor");
+    setDefaultToolId(cursor.id);
+    const onTool = vi.fn(async () => undefined);
+    const user = userEvent.setup();
+
+    render(
+      <ToolOpenMenu
+        location="worktree"
+        onFolder={vi.fn()}
+        onTerminal={vi.fn()}
+        onTool={onTool}
+        onToolBrowse={vi.fn()}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "toolOpen.title" }));
+    await user.click(screen.getByRole("menuitem", { name: "Cursor" }));
+
+    expect(onTool).toHaveBeenCalledWith("cursor");
+    // The row body runs the tool and closes the menu instead of expanding.
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("keeps the previous location tool when an alternative launch fails", async () => {
@@ -63,7 +89,9 @@ describe("ToolOpenMenu", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "toolOpen.title" }));
-    await user.click(screen.getByRole("menuitem", { name: "toolOpen.more" }));
+    await user.click(
+      screen.getByRole("button", { name: "toolOpen.otherTools" })
+    );
     await user.click(screen.getByRole("menuitem", { name: "Cursor" }));
 
     expect(getToolForLocation("worktree").id).toBe("vscode");
@@ -84,7 +112,9 @@ describe("ToolOpenMenu", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "toolOpen.title" }));
-    await user.click(screen.getByRole("menuitem", { name: "toolOpen.more" }));
+    await user.click(
+      screen.getByRole("button", { name: "toolOpen.otherTools" })
+    );
     await user.click(screen.getByRole("menuitem", { name: "toolOpen.browse" }));
 
     expect(onToolBrowse).toHaveBeenCalledOnce();

@@ -1297,24 +1297,225 @@ func (a *App) configureFeatureRepo(name, repoName, existingBranch string, recrea
 	return result, err
 }
 
-// RebaseFeature rebases the feature's worktrees onto their base branch.
-// repoFilter, when non-empty, limits the operation to one repository.
-func (a *App) RebaseFeature(name, repoFilter string) (feature.RebaseResult, error) {
+// RebaseFeature replays the feature's repo worktree branches onto their base
+// branch. repoFilter, when non-empty, limits the operation to one repository.
+// upstream overrides the base branch, which is how the commit graph rebases onto
+// a ref the user clicked.
+//
+// A conflict is left in place as an Interrupted Integration rather than aborted
+// (docs/adr/0002); ContinueIntegration or AbortIntegration finishes it.
+// Repositories holding unreviewed Agent Changes are refused.
+func (a *App) RebaseFeature(name, repoFilter, upstream string) (feature.IntegrationResult, error) {
+	return a.integrateFeature("Rebase", name, repoFilter, upstream, agent.RebaseFeature)
+}
+
+// MergeFeature merges the base branch into the feature's repo worktree branches —
+// the alternative to a rebase for a branch that has already been pushed. Only
+// this direction exists; see docs/adr/0001.
+func (a *App) MergeFeature(name, repoFilter, upstream string) (feature.IntegrationResult, error) {
+	return a.integrateFeature("Merge", name, repoFilter, upstream, agent.MergeFeature)
+}
+
+type integrateFunc func(root string, cfg config.Config, name, repoFilter string, opts feature.IntegrateOptions) (feature.IntegrationResult, error)
+
+func (a *App) integrateFeature(label, name, repoFilter, upstream string, run integrateFunc) (feature.IntegrationResult, error) {
 	root, err := a.requireRoot()
 	if err != nil {
-		return feature.RebaseResult{}, err
+		return feature.IntegrationResult{}, err
 	}
 	cfg, err := config.Load(root)
 	if err != nil {
-		return feature.RebaseResult{}, err
+		return feature.IntegrationResult{}, err
 	}
-	var res feature.RebaseResult
-	err = a.runTask("Rebase: "+name, func() error {
+	var res feature.IntegrationResult
+	err = a.runTask(label+": "+taskTarget(name, repoFilter), func() error {
 		var e error
-		res, e = feature.Rebase(root, cfg, name, repoFilter)
+		res, e = run(root, cfg, name, repoFilter, feature.IntegrateOptions{Upstream: upstream})
 		return e
 	})
 	return res, err
+}
+
+// CheckIntegration reports, per repository, whether a rebase or merge may run —
+// what the confirm dialog shows before anything is changed. Comparing agent
+// workspaces costs filesystem work, so this is called when the dialog opens
+// rather than on every graph read.
+func (a *App) CheckIntegration(name, repoFilter string) (agent.IntegrationReadiness, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return agent.IntegrationReadiness{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return agent.IntegrationReadiness{}, err
+	}
+	return agent.CheckIntegration(root, cfg, name, repoFilter)
+}
+
+// ContinueIntegration resumes an Interrupted Integration whose conflicts have
+// been resolved and staged.
+func (a *App) ContinueIntegration(name, repoFilter string) (feature.IntegrationResult, error) {
+	return a.resolveIntegration("Continue", name, repoFilter, feature.ContinueIntegration)
+}
+
+// AbortIntegration discards an Interrupted Integration, restoring the repo
+// worktree to where it was before the rebase or merge started.
+func (a *App) AbortIntegration(name, repoFilter string) (feature.IntegrationResult, error) {
+	return a.resolveIntegration("Abort", name, repoFilter, feature.AbortIntegration)
+}
+
+func (a *App) resolveIntegration(label, name, repoFilter string,
+	run func(root, name, repoFilter string) (feature.IntegrationResult, error),
+) (feature.IntegrationResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.IntegrationResult{}, err
+	}
+	var res feature.IntegrationResult
+	err = a.runTask(label+" integration: "+taskTarget(name, repoFilter), func() error {
+		var e error
+		res, e = run(root, name, repoFilter)
+		return e
+	})
+	return res, err
+}
+
+// RepoCommitGraph reads one repository's commit graph from its main clone.
+// Because every repo worktree shares that object database, this single read
+// already covers every feature branch.
+func (a *App) RepoCommitGraph(repoName string, allBranches bool, limit int, extraRefs []string) (repo.CommitGraph, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return repo.CommitGraph{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return repo.CommitGraph{}, err
+	}
+	return repo.LoadCommitGraph(root, cfg, repoName, repo.CommitGraphOptions{
+		AllBranches: allBranches,
+		Limit:       limit,
+		ExtraRefs:   extraRefs,
+	})
+}
+
+// CommitFileChanges lists the paths one commit touched. Costs a git subprocess,
+// so the frontend calls it when a commit is selected and caches by SHA.
+func (a *App) CommitFileChanges(repoName, sha string) ([]aggit.CommitFileChange, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := findRepo(cfg, repoName); !ok {
+		return nil, fmt.Errorf("repository %q not found", repoName)
+	}
+	if strings.TrimSpace(sha) == "" {
+		return nil, fmt.Errorf("commit sha is required")
+	}
+	return aggit.CommitFiles(config.RepoPath(root, repoName), sha)
+}
+
+// PushFeature pushes the feature's branches and reports the outcome per
+// repository. force uses --force-with-lease against the SHA origin/<branch> is
+// read to hold, which is required after a rebase rewrote the branch and refuses
+// the push if someone else moved the remote branch since the last fetch.
+//
+// The per-repository result is what the caller must branch on: a repository
+// that failed to push is not an error of the whole operation, and reporting it
+// as success is the bug this replaces.
+func (a *App) PushFeature(name, repoFilter string, force bool) (feature.PushResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.PushResult{}, err
+	}
+	label := "Push: "
+	if force {
+		label = "Force-push: "
+	}
+	var res feature.PushResult
+	err = a.runTask(label+taskTarget(name, repoFilter), func() error {
+		var e error
+		res, e = feature.Push(root, name, repoFilter, feature.PushOptions{Force: force})
+		return e
+	})
+	return res, err
+}
+
+// UnpushedCommits lists what a push would send, per repository, together with
+// the range expression each count was taken from. The badge on the delivery
+// screen and this list go through the same resolution, so they cannot disagree
+// about what "unpushed" means.
+func (a *App) UnpushedCommits(name, repoFilter string, limit int) (feature.UnpushedResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.UnpushedResult{}, err
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	return feature.UnpushedCommits(root, name, repoFilter, limit)
+}
+
+// WorktreeCommits lists the commits one Repo Worktree is sitting on. Scoped to
+// that worktree's HEAD rather than the repository's whole graph, so the base
+// branch and other Features' commits do not appear. RepoCommitGraph is the
+// repository-wide view.
+func (a *App) WorktreeCommits(name, repoName string, limit int) (feature.UnpushedRepo, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.UnpushedRepo{}, err
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	return feature.WorktreeCommits(root, name, repoName, limit)
+}
+
+// RebasePreflight inspects every repository of a feature without changing any of
+// them. The dialog opens immediately and calls this to fill itself in, because
+// the checks cost several git subprocesses per repository.
+func (a *App) RebasePreflight(name, repoFilter string) (agent.RebasePreflightResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return agent.RebasePreflightResult{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return agent.RebasePreflightResult{}, err
+	}
+	return agent.RebasePreflight(root, cfg, name, repoFilter)
+}
+
+// RebaseAndPush rebases, then force-pushes the repositories the rebase actually
+// rewrote. Which repositories those are is decided in internal/feature, so the
+// CLI and this method cannot drift on it (docs/adr/0003).
+func (a *App) RebaseAndPush(name, repoFilter, upstream string, push bool) (feature.IntegrationPushResult, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return feature.IntegrationPushResult{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return feature.IntegrationPushResult{}, err
+	}
+	var out feature.IntegrationPushResult
+	err = a.runTask("Rebase: "+taskTarget(name, repoFilter), func() error {
+		res, e := agent.RebaseFeature(root, cfg, name, repoFilter, feature.IntegrateOptions{Upstream: upstream})
+		if e != nil {
+			return e
+		}
+		out.Integration = res
+		if !push {
+			return nil
+		}
+		out.Pushes, e = feature.PushIntegrated(root, name, res)
+		return e
+	})
+	return out, err
 }
 
 // FeatureDelete removes a feature's worktrees and artifacts. deleteBranch also
@@ -1456,13 +1657,7 @@ func (a *App) AgentChangeFileView(name, repoName, path string) (ChangeFileView, 
 	if err != nil {
 		return ChangeFileView{}, err
 	}
-	var repoMeta *feature.RepoMeta
-	for i := range fm.Repositories {
-		if fm.Repositories[i].Name == repoName {
-			repoMeta = &fm.Repositories[i]
-			break
-		}
-	}
+	repoMeta := findFeatureRepo(fm, repoName)
 	if repoMeta == nil {
 		return ChangeFileView{}, fmt.Errorf("repository %q is not part of feature %q", repoName, name)
 	}
@@ -1481,6 +1676,66 @@ func (a *App) AgentChangeFileView(name, repoName, path string) (ChangeFileView, 
 		Agent:    readFileViewSide(agentPath),
 		Worktree: readFileViewSide(worktreePath),
 	}, nil
+}
+
+// WorktreeChangeFileView shows one Repo Worktree Change: the file as the last
+// commit on the branch has it, against the file on disk now — that is, exactly
+// what the next commit would record.
+//
+// This is the counterpart of AgentChangeFileView, which compares the agent copy
+// against the worktree. A newly added file has no committed side and a deleted
+// one has no worktree side; both render as an empty panel rather than an error.
+func (a *App) WorktreeChangeFileView(name, repoName, path string) (ChangeFileView, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return ChangeFileView{}, err
+	}
+	fm, err := feature.Load(root, name)
+	if err != nil {
+		return ChangeFileView{}, err
+	}
+	repoMeta := findFeatureRepo(fm, repoName)
+	if repoMeta == nil {
+		return ChangeFileView{}, fmt.Errorf("repository %q is not part of feature %q", repoName, name)
+	}
+	rel := filepath.FromSlash(path)
+	worktreeRoot := filepath.Join(root, filepath.FromSlash(repoMeta.WorktreePath))
+	worktreePath := filepath.Join(worktreeRoot, rel)
+	if err := fsutil.EnsureInside(worktreeRoot, worktreePath); err != nil {
+		return ChangeFileView{}, err
+	}
+	return ChangeFileView{
+		// "Agent" carries the committed side here so the frontend can reuse the
+		// two-panel diff component unchanged; the panel titles name what each
+		// side actually is.
+		Agent:    committedFileViewSide(worktreeRoot, path),
+		Worktree: readFileViewSide(worktreePath),
+	}, nil
+}
+
+// committedFileViewSide reads a path as of HEAD.
+func committedFileViewSide(worktreeRoot, relPath string) FileViewSide {
+	side := FileViewSide{Path: relPath}
+	content, exists, err := aggit.ShowFileAtRev(worktreeRoot, "HEAD", relPath)
+	if err != nil {
+		side.Error = err.Error()
+		return side
+	}
+	if !exists {
+		return side
+	}
+	side.Exists = true
+	return fillFileViewContent(side, []byte(content))
+}
+
+// findFeatureRepo returns the repository's metadata within a feature, or nil.
+func findFeatureRepo(fm feature.Metadata, repoName string) *feature.RepoMeta {
+	for i := range fm.Repositories {
+		if fm.Repositories[i].Name == repoName {
+			return &fm.Repositories[i]
+		}
+	}
+	return nil
 }
 
 func readFileViewSide(path string) FileViewSide {
@@ -1507,6 +1762,16 @@ func readFileViewSide(path string) FileViewSide {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		side.Error = err.Error()
+		return side
+	}
+	return fillFileViewContent(side, b)
+}
+
+// fillFileViewContent applies the previewability limits shared by both sides of
+// a diff, whichever store the bytes came from.
+func fillFileViewContent(side FileViewSide, b []byte) FileViewSide {
+	if int64(len(b)) > maxEditableWorkspaceFileSize {
+		side.Error = "file is too large to preview in the app (max 2 MB)"
 		return side
 	}
 	if hasNUL(b) || !utf8.Valid(b) {
@@ -1563,10 +1828,24 @@ func (a *App) ScanSecurityPreviewFile(repoName, path string) (SecurityPreviewFil
 
 // SyncOptions is the frontend-facing subset of agent.Options.
 type SyncOptions struct {
-	Repo            string `json:"repo"`
-	DryRun          bool   `json:"dryRun"`
-	IncludeRisky    bool   `json:"includeRisky"`
-	AllowMaskedSync bool   `json:"allowMaskedSync"`
+	Repo string `json:"repo"`
+	// Paths narrows the sync to specific repo-relative files. Requires Repo.
+	Paths           []string `json:"paths,omitempty"`
+	DryRun          bool     `json:"dryRun"`
+	IncludeRisky    bool     `json:"includeRisky"`
+	AllowMaskedSync bool     `json:"allowMaskedSync"`
+}
+
+func (opt SyncOptions) agentOptions() agent.Options {
+	return agent.Options{
+		Repo:            opt.Repo,
+		Paths:           opt.Paths,
+		DryRun:          opt.DryRun,
+		IncludeRisky:    opt.IncludeRisky,
+		AllowMaskedSync: opt.AllowMaskedSync,
+		// The GUI shows the diff before syncing, so there is no prompt to answer.
+		Yes: true,
+	}
 }
 
 func (a *App) AgentSync(name string, opt SyncOptions) error {
@@ -1578,16 +1857,22 @@ func (a *App) AgentSync(name string, opt SyncOptions) error {
 	if err != nil {
 		return err
 	}
-	// Yes:true — the GUI shows the diff before syncing, so no interactive prompt.
-	return a.runTask("Sync: "+name, func() error {
-		return agent.Sync(root, cfg, name, agent.Options{
-			Repo:            opt.Repo,
-			DryRun:          opt.DryRun,
-			IncludeRisky:    opt.IncludeRisky,
-			AllowMaskedSync: opt.AllowMaskedSync,
-			Yes:             true,
-		})
+	return a.runTask(syncTaskLabel("Sync", name, opt), func() error {
+		return agent.Sync(root, cfg, name, opt.agentOptions())
 	})
+}
+
+// syncTaskLabel names what a sync is about to touch, so the progress box
+// distinguishes resolving one file from resolving a whole repository.
+func syncTaskLabel(verb, name string, opt SyncOptions) string {
+	switch {
+	case len(opt.Paths) == 1:
+		return fmt.Sprintf("%s: %s/%s · %s", verb, name, opt.Repo, opt.Paths[0])
+	case len(opt.Paths) > 1:
+		return fmt.Sprintf("%s: %s/%s · %d file(s)", verb, name, opt.Repo, len(opt.Paths))
+	default:
+		return verb + ": " + taskTarget(name, opt.Repo)
+	}
 }
 
 // SyncAndCommit syncs reviewed agent changes back to the worktrees and, unless
@@ -1602,14 +1887,8 @@ func (a *App) SyncAndCommit(name, message string, opt SyncOptions) error {
 	if err != nil {
 		return err
 	}
-	return a.runTask("Sync & commit: "+name, func() error {
-		return agent.SyncAndCommit(root, cfg, name, message, agent.Options{
-			Repo:            opt.Repo,
-			DryRun:          opt.DryRun,
-			IncludeRisky:    opt.IncludeRisky,
-			AllowMaskedSync: opt.AllowMaskedSync,
-			Yes:             true,
-		})
+	return a.runTask(syncTaskLabel("Sync & commit", name, opt), func() error {
+		return agent.SyncAndCommit(root, cfg, name, message, opt.agentOptions())
 	})
 }
 
@@ -1627,14 +1906,8 @@ func (a *App) SyncCommitPush(name, message string, opt SyncOptions) error {
 	if err != nil {
 		return err
 	}
-	return a.runTask("Sync + commit + push: "+name, func() error {
-		return agent.SyncCommitPush(root, cfg, name, message, agent.Options{
-			Repo:            opt.Repo,
-			DryRun:          opt.DryRun,
-			IncludeRisky:    opt.IncludeRisky,
-			AllowMaskedSync: opt.AllowMaskedSync,
-			Yes:             true,
-		})
+	return a.runTask(syncTaskLabel("Sync + commit + push", name, opt), func() error {
+		return agent.SyncCommitPush(root, cfg, name, message, opt.agentOptions())
 	})
 }
 
@@ -2143,16 +2416,11 @@ func (a *App) Commit(name, message, repoFilter string) error {
 	})
 }
 
-// Push pushes a feature's branches. When repoFilter is non-empty, only that
-// repository is pushed; otherwise every repository is.
-func (a *App) Push(name, repoFilter string) error {
-	root, err := a.requireRoot()
-	if err != nil {
-		return err
-	}
-	return a.runTask("Push: "+taskTarget(name, repoFilter), func() error {
-		return feature.Push(root, name, repoFilter)
-	})
+// Push pushes a feature's branches without rewriting history. When repoFilter is
+// non-empty, only that repository is pushed; otherwise every repository is.
+// PushFeature is the same operation with the force-with-lease option exposed.
+func (a *App) Push(name, repoFilter string) (feature.PushResult, error) {
+	return a.PushFeature(name, repoFilter, false)
 }
 
 // taskTarget formats a progress-task label target as "<feature>/<repo>" when a
@@ -2314,6 +2582,12 @@ func (a *App) SaveGitSettings(git config.GitConfig, gitlab config.GitLabConfig, 
 	if err != nil {
 		return err
 	}
+	// Refuse an unusable Commit Message Template while the user is looking at it,
+	// rather than silently falling back at commit time.
+	git.CommitMessageTemplate = strings.TrimSpace(git.CommitMessageTemplate)
+	if err := agent.ValidateCommitMessageTemplate(git.CommitMessageTemplate); err != nil {
+		return err
+	}
 	gitlab.BaseURL = strings.TrimRight(strings.TrimSpace(gitlab.BaseURL), "/")
 	if github.TokenEnv == "" {
 		github.TokenEnv = "GITHUB_TOKEN"
@@ -2325,6 +2599,58 @@ func (a *App) SaveGitSettings(git config.GitConfig, gitlab config.GitLabConfig, 
 	cfg.GitLab = gitlab
 	cfg.GitHub = github
 	return config.Save(root, cfg)
+}
+
+// CommitMessageTemplateInfo is what the settings and delivery screens need to
+// explain a Commit Message Template: which variables exist, and what the saved
+// one produces right now.
+type CommitMessageTemplateInfo struct {
+	Template  string   `json:"template"`
+	Variables []string `json:"variables"`
+	// Preview is the template rendered against a feature, or against placeholder
+	// values when no feature was named. Shown as the commit message field's
+	// placeholder rather than as its value, so {{timestamp}} is not frozen to
+	// whenever the screen happened to open.
+	Preview string `json:"preview"`
+	// Error is set when the saved template cannot be rendered, in which case
+	// Preview shows the built-in default that would be used instead.
+	Error string `json:"error,omitempty"`
+}
+
+// CommitMessageTemplateInfo renders the workspace's Commit Message Template for
+// a feature. An empty feature name previews with stand-in values, which is what
+// the settings screen shows.
+func (a *App) CommitMessageTemplateInfo(featureName string) (CommitMessageTemplateInfo, error) {
+	root, err := a.requireRoot()
+	if err != nil {
+		return CommitMessageTemplateInfo{}, err
+	}
+	cfg, err := config.Load(root)
+	if err != nil {
+		return CommitMessageTemplateInfo{}, err
+	}
+	info := CommitMessageTemplateInfo{
+		Template:  cfg.Git.CommitMessageTemplate,
+		Variables: agent.CommitMessageVariables(),
+	}
+	if tmplErr := agent.ValidateCommitMessageTemplate(cfg.Git.CommitMessageTemplate); tmplErr != nil {
+		info.Error = tmplErr.Error()
+	}
+	values := agent.CommitMessageValues{
+		Feature: "example-feature",
+		Branch:  cfg.Git.BranchPrefix + "example-feature",
+		Base:    cfg.Git.DefaultBaseBranch,
+		Now:     time.Now(),
+	}
+	if strings.TrimSpace(featureName) != "" {
+		loaded, loadErr := agent.CommitMessageValuesFor(root, featureName, time.Now())
+		if loadErr != nil {
+			return info, loadErr
+		}
+		values = loaded
+	}
+	info.Preview = agent.CommitMessageFor(cfg.Git.CommitMessageTemplate, values)
+	return info, nil
 }
 
 // RepoDiag is a per-repository diagnostic entry.

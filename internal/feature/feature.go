@@ -2,6 +2,7 @@ package feature
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -792,32 +793,134 @@ type RepoStatus struct {
 	// 있으면 그 기준, 없으면 base 브랜치 기준). 지금 push 하면 올라갈 분량이다.
 	Ahead int    `json:"ahead"             yaml:"ahead"`
 	Error string `json:"error,omitempty"   yaml:"error,omitempty"`
+	// Integration 은 이 Repo Worktree 에 열려 있는 Interrupted Integration 이다.
+	// 리베이스 중에는 HEAD 가 detached 라서 Status 의 브랜치가 비어 보이므로, 화면은
+	// 빈 브랜치를 그리는 대신 이 값을 설명해야 한다. 파일시스템만 읽으므로 git
+	// 하위 프로세스를 추가하지 않는다.
+	Integration aggit.IntegrationState `json:"integration" yaml:"integration"`
+	// Branch 는 이 Repo Worktree 가 체크아웃한 feature 브랜치다. 화면이 저장소
+	// 설정의 DefaultBranch(= base 브랜치)를 브랜치명처럼 보여주던 것을 대체한다.
+	Branch string `json:"branch" yaml:"branch"`
+	// BaseBranch 는 이 브랜치가 얹혀 있는 base 브랜치다. 브랜치명 옆이 아니라
+	// 툴팁으로 보여줄 값이다.
+	BaseBranch string `json:"baseBranch" yaml:"baseBranch"`
+	// LastCommit 은 이 Repo Worktree 의 HEAD 커밋이다. 브랜치명 옆에 단축 SHA 와
+	// 제목을 함께 보여주기 위한 것으로, 커밋이 하나도 없는 브랜치에서는 nil 이다.
+	LastCommit *aggit.Commit `json:"lastCommit,omitempty" yaml:"lastCommit,omitempty"`
 }
 
-// unpushedCount 는 feature 브랜치에서 아직 push 되지 않은 커밋 수를 센다.
-// origin/<branch> 가 있으면 그보다 앞선 커밋을 세고, 없으면(한 번도 push 하지 않은
-// 브랜치) base 대비 추가된 커밋을 센다.
-func unpushedCount(path, branch, base string) int {
+// unpushedRange 는 "아직 push 되지 않은 커밋"의 범위 표현식과 그 개수를 함께
+// 돌려준다. 배지 숫자와 커밋 목록 팝업이 같은 함수를 거치게 하려고 분리했다 —
+// 둘이 서로 다른 범위를 쓰면 "3개 미푸시"라고 해놓고 목록에는 5개가 뜬다.
+//
+// 후보 범위를 우선순위대로(origin/<branch> → origin/<base> → 로컬 base) 시도하고,
+// 처음으로 해석되는 ref 를 쓴다. ref 가 없다는 사실을 rev-list 자체의 오류로
+// 판단하면 RemoteBranchExists 를 따로 띄우지 않아도 된다 — AV 검사가 도는
+// Windows 에서는 git 하위 프로세스 하나당 약 2초가 들고, status 는 worktree 상세
+// 화면의 핫 패스에 있다.
+//
+// 어느 후보도 해석되지 않으면 빈 범위와 0 을 돌려준다.
+func unpushedRange(path, branch, base string) (string, int) {
 	if branch == "" {
-		return 0
+		return "", 0
 	}
-	// 후보 범위를 원래 우선순위대로(origin/<branch> → origin/<base> → 로컬 base)
-	// 시도하고, 처음으로 해석되는 ref 를 쓴다. ref 가 없다는 사실을 rev-list 자체의
-	// 오류로 판단하면 RemoteBranchExists 를 따로 띄우지 않아도 된다 — AV 검사가
-	// 도는 Windows 에서는 git 하위 프로세스 하나당 약 2초가 들고, status 는
-	// worktree 상세 화면의 핫 패스에 있다.
-	if n, err := aggit.RevListCount(path, "origin/"+branch+"..HEAD"); err == nil {
-		return n
-	}
+	candidates := []string{"origin/" + branch + "..HEAD"}
 	if base != "" {
-		if n, err := aggit.RevListCount(path, "origin/"+base+"..HEAD"); err == nil {
-			return n
-		}
-		if n, err := aggit.RevListCount(path, base+"..HEAD"); err == nil {
-			return n
+		candidates = append(candidates,
+			"origin/"+base+"..HEAD",
+			base+"..HEAD",
+		)
+	}
+	for _, rangeExpr := range candidates {
+		if n, err := aggit.RevListCount(path, rangeExpr); err == nil {
+			return rangeExpr, n
 		}
 	}
-	return 0
+	return "", 0
+}
+
+// unpushedCount 는 feature 브랜치에서 아직 push 되지 않은 커밋 수다.
+func unpushedCount(path, branch, base string) int {
+	_, n := unpushedRange(path, branch, base)
+	return n
+}
+
+
+// UnpushedCommits 는 지금 push 하면 올라갈 커밋 목록과, 그것을 고른 범위 표현식을
+// 돌려준다. 범위를 함께 내보내는 이유는 화면에서 "무엇을 기준으로 센 숫자인지"를
+// 밝히기 위해서다 — origin/<branch> 가 없으면 base 기준으로 폴백하므로 기준이
+// 상황에 따라 달라진다.
+func UnpushedCommits(root, name, repoFilter string, limit int) (UnpushedResult, error) {
+	m, err := Load(root, name)
+	if err != nil {
+		return UnpushedResult{}, err
+	}
+	result := UnpushedResult{Feature: m.Name, Repositories: []UnpushedRepo{}}
+	for _, r := range selectRepos(m, repoFilter) {
+		p := filepath.Join(root, r.WorktreePath)
+		entry := UnpushedRepo{Name: r.Name, Branch: r.Branch, Commits: []aggit.Commit{}}
+		rangeExpr, count := unpushedRange(p, r.Branch, r.BaseBranch)
+		entry.Range, entry.Count = rangeExpr, count
+		if rangeExpr == "" || count == 0 {
+			result.Repositories = append(result.Repositories, entry)
+			continue
+		}
+		commits, logErr := aggit.Log(p, []string{rangeExpr}, limit)
+		if logErr != nil {
+			entry.Error = logErr.Error()
+		} else {
+			entry.Commits = commits
+		}
+		result.Repositories = append(result.Repositories, entry)
+	}
+	return result, nil
+}
+
+// WorktreeCommits 는 Repo Worktree 하나가 실제로 올라타 있는 커밋 목록이다.
+// 저장소 전체 그래프(repo.LoadCommitGraph)와 달리 이 워크트리의 HEAD 에서만
+// 거슬러 올라가므로, base 브랜치나 다른 Feature 의 커밋이 섞이지 않는다.
+//
+// 브랜치 이름이 아니라 HEAD 를 읽는다: Interrupted Integration 중에는 HEAD 가
+// detached 라서 브랜치 ref 는 리베이스 이전 상태를 가리키지만, 화면이 물어보는
+// 것은 "이 워크트리가 지금 어디에 있는가"이기 때문이다.
+func WorktreeCommits(root, name, repoName string, limit int) (UnpushedRepo, error) {
+	m, err := Load(root, name)
+	if err != nil {
+		return UnpushedRepo{}, err
+	}
+	repos := selectRepos(m, repoName)
+	if len(repos) == 0 {
+		return UnpushedRepo{}, fmt.Errorf("repository %q is not part of feature %q", repoName, name)
+	}
+	r := repos[0]
+	entry := UnpushedRepo{Name: r.Name, Branch: r.Branch, Range: "HEAD", Commits: []aggit.Commit{}}
+	commits, logErr := aggit.Log(filepath.Join(root, r.WorktreePath), []string{"HEAD"}, limit)
+	if logErr != nil {
+		// 커밋이 하나도 없는 갓 만든 브랜치가 여기로 온다. 오류가 아니라 빈 목록이다.
+		entry.Error = logErr.Error()
+		return entry, nil
+	}
+	entry.Commits = commits
+	entry.Count = len(commits)
+	return entry, nil
+}
+
+// UnpushedRepo 는 레포 하나의 미push 커밋 목록이다.
+type UnpushedRepo struct {
+	Name   string `json:"name"   yaml:"name"`
+	Branch string `json:"branch" yaml:"branch"`
+	// Range 는 커밋을 고른 범위 표현식(예: "origin/feature/x..HEAD")이다. 비어 있으면
+	// 비교 대상이 될 ref 를 하나도 찾지 못했다는 뜻이다.
+	Range   string         `json:"range"           yaml:"range"`
+	Count   int            `json:"count"           yaml:"count"`
+	Commits []aggit.Commit `json:"commits"         yaml:"commits"`
+	Error   string         `json:"error,omitempty" yaml:"error,omitempty"`
+}
+
+// UnpushedResult 는 feature 전체의 미push 커밋 목록이다.
+type UnpushedResult struct {
+	Feature      string         `json:"feature"      yaml:"feature"`
+	Repositories []UnpushedRepo `json:"repositories" yaml:"repositories"`
 }
 
 // RepoFileStatus 는 worktree 안에서 변경된 파일 하나를 나타낸다. Code 는 git 의
@@ -858,6 +961,32 @@ func ListData(root string) (FeatureListResult, error) {
 		}
 	}
 	return FeatureListResult{Features: features}, nil
+}
+
+// LoadAll 은 저장된 모든 feature 메타데이터를 읽어 돌려준다. ListData 와 달리
+// Repositories 를 그대로 유지하므로, 특정 레포에 Repo Worktree 를 가진 feature 를
+// 찾는 데 쓸 수 있다. 읽거나 파싱할 수 없는 파일은 건너뛴다.
+func LoadAll(root string) ([]Metadata, error) {
+	dir := filepath.Join(root, config.DirName, "features")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var all []Metadata
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		b, readErr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if readErr != nil {
+			continue
+		}
+		var m Metadata
+		if json.Unmarshal(b, &m) == nil && m.Name != "" {
+			all = append(all, m)
+		}
+	}
+	return all, nil
 }
 
 // List 는 feature 목록을 사람이 읽는 표 형태로 출력한다.
@@ -950,12 +1079,19 @@ func StatusData(root, name string) (FeatureStatusResult, error) {
 	return result, nil
 }
 
-// repoStatusFor 는 레포 하나의 상태를 계산한다. 작업 트리 상태와 미push 커밋 수는
-// 서로 독립적인 git 호출이라 동시에 실행하며, 그래서 레포당 소요 시간은 둘의 합이
-// 아니라 더 느린 쪽이 된다.
+// repoStatusFor 는 레포 하나의 상태를 계산한다. 작업 트리 상태, 미push 커밋 수,
+// 마지막 커밋은 서로 독립적인 git 호출이라 동시에 실행하며, 그래서 레포당 소요
+// 시간은 셋의 합이 아니라 가장 느린 하나가 된다. 마지막 커밋을 세 번째 갈래로
+// 붙여도 벽시계 시간이 거의 늘지 않는 이유는, 미push 계산이 내부에서 rev-list 를
+// 최대 3회 직렬로 돌기 때문이다.
 func repoStatusFor(root, name, folderKey string, preparedRepos map[string]int, r RepoMeta) RepoStatus {
 	p := filepath.Join(root, r.WorktreePath)
-	repoStatus := RepoStatus{Name: r.Name, Changes: []RepoFileStatus{}}
+	repoStatus := RepoStatus{
+		Name:       r.Name,
+		Changes:    []RepoFileStatus{},
+		Branch:     r.Branch,
+		BaseBranch: r.BaseBranch,
+	}
 
 	var (
 		s             string
@@ -963,10 +1099,12 @@ func repoStatusFor(root, name, folderKey string, preparedRepos map[string]int, r
 		statusErr     error
 		statusFilesMs int64
 		unpushedMs    int64
+		lastCommitMs  int64
 		ahead         int
+		lastCommit    *aggit.Commit
 		wg            sync.WaitGroup
 	)
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		t := time.Now()
@@ -979,9 +1117,31 @@ func repoStatusFor(root, name, folderKey string, preparedRepos map[string]int, r
 		ahead = unpushedCount(p, r.Branch, r.BaseBranch)
 		unpushedMs = time.Since(t).Milliseconds()
 	}()
+	go func() {
+		defer wg.Done()
+		t := time.Now()
+		// 커밋이 하나도 없는 갓 만든 브랜치에서는 실패한다. 그건 오류가 아니라
+		// "보여줄 커밋이 없다"는 뜻이므로 nil 로 남긴다.
+		if commits, err := aggit.Log(p, []string{"HEAD"}, 1); err == nil && len(commits) > 0 {
+			lastCommit = &commits[0]
+		}
+		lastCommitMs = time.Since(t).Milliseconds()
+	}()
 	wg.Wait()
 
 	repoStatus.Status = s
+	repoStatus.LastCommit = lastCommit
+	// Read from disk rather than by shelling out, so an open Interrupted
+	// Integration is visible on every screen without adding to the git cost of
+	// the status hot path. Conflicted paths are listed only when one is open.
+	if state, stateErr := aggit.IntegrationStateOf(p); stateErr == nil {
+		if state.InProgress() {
+			if paths, err := aggit.IntegrationConflicts(p); err == nil {
+				state.ConflictPaths = paths
+			}
+		}
+		repoStatus.Integration = state
+	}
 	if st, statErr := os.Stat(config.AgentPath(root, folderKey, r.Name)); statErr == nil && st.IsDir() {
 		if revision, ok := preparedRepos[r.Name]; ok {
 			repoStatus.AgentReady = true
@@ -1013,6 +1173,7 @@ func repoStatusFor(root, name, folderKey string, preparedRepos map[string]int, r
 		"repo", r.Name,
 		"statusFilesMs", statusFilesMs,
 		"unpushedMs", unpushedMs,
+		"lastCommitMs", lastCommitMs,
 		"changes", len(repoStatus.Changes),
 	)
 	return repoStatus
@@ -1027,6 +1188,21 @@ func Status(root, name string) error {
 	fmt.Printf("Feature: %s\nBranch: %s\n\n", data.Feature, data.Branch)
 	for _, r := range data.Repositories {
 		fmt.Printf("[%s]\n", r.Name)
+		// 브랜치 한 줄은 GUI 의 워크트리 행과 같은 정보다. 리베이스 중에는 HEAD 가
+		// detached 라 브랜치가 비므로, 빈 줄 대신 그 상태를 설명한다.
+		switch {
+		case r.Integration.InProgress():
+			fmt.Printf("%s in progress on %s (%d/%d), %d conflict(s)\n",
+				r.Integration.Kind, r.Integration.Branch,
+				r.Integration.Step, r.Integration.Total, len(r.Integration.ConflictPaths))
+		case r.LastCommit != nil:
+			fmt.Printf("%s  %s %s\n", r.Branch, aggit.ShortSHA(r.LastCommit.SHA), r.LastCommit.Subject)
+		case r.Branch != "":
+			fmt.Printf("%s  (no commits yet)\n", r.Branch)
+		}
+		if r.Ahead > 0 {
+			fmt.Printf("%d commit(s) to push\n", r.Ahead)
+		}
 		if r.Status == "" {
 			fmt.Println("clean")
 		} else {
@@ -1066,107 +1242,202 @@ func Commit(root, name, message, repoFilter string) error {
 	return nil
 }
 
-// RebaseRepoResult 는 레포 하나의 리베이스 결과다. Detail 은 사용자에게 보여줄
-// 설명이다.
-type RebaseRepoResult struct {
-	Name       string `json:"name"       yaml:"name"`
-	Branch     string `json:"branch"     yaml:"branch"`
-	BaseBranch string `json:"baseBranch" yaml:"baseBranch"`
-	Status     string `json:"status"     yaml:"status"` // rebased | up-to-date | skipped | failed
-	Detail     string `json:"detail"     yaml:"detail"`
+// Integration operations (rebase, merge, and resolving an Interrupted
+// Integration) live in integrate.go.
+
+// PushOptions 는 push 동작을 조절한다.
+type PushOptions struct {
+	// Force 는 --force-with-lease 로 밀어 올린다. 리베이스한 브랜치는 히스토리가
+	// 갈라져서 일반 push 로는 올라가지 않는다. lease 를 쓰므로, 마지막 fetch 이후
+	// 다른 사람이 원격 브랜치를 옮겼다면 push 는 거부된다.
+	Force bool
 }
 
-// RebaseResult 는 feature 전체의 리베이스 결과다.
-type RebaseResult struct {
-	Feature      string             `json:"feature"      yaml:"feature"`
-	Repositories []RebaseRepoResult `json:"repositories" yaml:"repositories"`
+// PushRepoResult 는 레포 하나의 push 결과다.
+//
+// Status 는 다음 중 하나다:
+//
+//	pushed        origin 으로 올라갔다
+//	up-to-date    올릴 커밋이 없어 건너뛰었다
+//	skipped       전제 조건이 맞지 않아 건너뛰었다(예: Interrupted Integration)
+//	failed        push 가 실패했다
+type PushRepoResult struct {
+	Name   string `json:"name"   yaml:"name"`
+	Branch string `json:"branch" yaml:"branch"`
+	Status string `json:"status" yaml:"status"`
+	Detail string `json:"detail" yaml:"detail"`
+	// Forced 는 이 레포가 --force-with-lease 로 올라갔는지다.
+	Forced bool `json:"forced" yaml:"forced"`
+	// Error 는 사람이 읽는 실패 요약이고, GitOutput 은 실행한 명령어와 stdout/stderr
+	// 원문이다. 둘을 나눠 두어야 화면이 요약만 보여주고 원문은 「자세히」로 접어둘 수
+	// 있다 — lease 거부처럼 원문에만 이유가 적히는 실패가 있기 때문이다.
+	Error     string `json:"error,omitempty"     yaml:"error,omitempty"`
+	GitOutput string `json:"gitOutput,omitempty" yaml:"gitOutput,omitempty"`
 }
 
-// Rebase 는 각 feature worktree 의 브랜치를 최신 base 브랜치(가능하면
-// origin/<base>) 위로 다시 얹는다. 커밋되지 않은 변경이 있는 worktree 는 건너뛰고,
-// 충돌이 난 리베이스는 abort 해서 worktree 를 원래대로 남겨둔다. repoFilter 가 비어
-// 있지 않으면 그 레포 하나만 처리한다.
-func Rebase(root string, cfg config.Config, name, repoFilter string) (RebaseResult, error) {
-	m, err := Load(root, name)
-	if err != nil {
-		return RebaseResult{}, err
+// PushResult 는 feature 전체의 push 결과다.
+type PushResult struct {
+	Feature      string           `json:"feature"      yaml:"feature"`
+	Repositories []PushRepoResult `json:"repositories" yaml:"repositories"`
+}
+
+// Failures 는 push 에 실패한 레포들이다. "실패했는가"를 판단하는 곳이 여러 군데라
+// 각자 Status 를 걸러내면 조건이 갈라지므로, 거르는 일은 여기서만 한다.
+func (r PushResult) Failures() []PushRepoResult {
+	out := []PushRepoResult{}
+	for _, repo := range r.Repositories {
+		if repo.Status == "failed" {
+			out = append(out, repo)
+		}
 	}
-	result := RebaseResult{Feature: m.Name}
-	for _, r := range m.Repositories {
-		if repoFilter != "" && r.Name != repoFilter {
-			continue
-		}
-		base := r.BaseBranch
-		if base == "" {
-			base = cfg.Git.DefaultBaseBranch
-		}
-		rr := RebaseRepoResult{Name: r.Name, Branch: r.Branch, BaseBranch: base}
-		p := filepath.Join(root, r.WorktreePath)
+	return out
+}
 
-		if aggit.HasChanges(p) {
-			rr.Status = "skipped"
-			rr.Detail = "uncommitted changes; commit or stash first"
-			result.Repositories = append(result.Repositories, rr)
-			continue
-		}
+// Failed 는 실패한 레포가 하나라도 있는지 알려준다. 호출자가 "푸시 완료" 토스트를
+// 띄워도 되는지 판단하는 지점이다.
+func (r PushResult) Failed() bool { return len(r.Failures()) > 0 }
 
-		_ = aggit.Fetch(p) // 실패해도 무방하다. 리베이스는 로컬 ref 로 폴백한다.
-
-		upstream := base
-		if aggit.RemoteBranchExists(p, base) {
-			upstream = "origin/" + base
-		} else if !aggit.LocalBranchExists(p, base) {
-			rr.Status = "skipped"
-			rr.Detail = fmt.Sprintf("base branch %q not found", base)
-			result.Repositories = append(result.Repositories, rr)
-			continue
+// Pushed 는 실제로 origin 으로 올라간 레포 수다.
+func (r PushResult) Pushed() int {
+	n := 0
+	for _, repo := range r.Repositories {
+		if repo.Status == "pushed" {
+			n++
 		}
-
-		before, _ := aggit.HeadSHA(p)
-		if err := aggit.RebaseOnto(p, upstream); err != nil {
-			_ = aggit.RebaseAbort(p)
-			rr.Status = "failed"
-			rr.Detail = fmt.Sprintf("rebase onto %s failed (conflict); aborted, resolve manually", upstream)
-			result.Repositories = append(result.Repositories, rr)
-			continue
-		}
-		after, _ := aggit.HeadSHA(p)
-		if before == after {
-			rr.Status = "up-to-date"
-			rr.Detail = fmt.Sprintf("already based on %s", upstream)
-		} else {
-			rr.Status = "rebased"
-			rr.Detail = fmt.Sprintf("rebased onto %s", upstream)
-		}
-		result.Repositories = append(result.Repositories, rr)
 	}
-	return result, nil
+	return n
+}
+
+// FailureSummaries 는 실패한 레포마다 "<repo>: <사유>" 한 줄씩을 만든다. git 원문은
+// GitOutput 에 그대로 남아 있으므로, 이건 사람이 읽을 요약 전용이다.
+func (r PushResult) FailureSummaries() []string {
+	var out []string
+	for _, repo := range r.Failures() {
+		reason := repo.Error
+		if reason == "" {
+			reason = repo.Detail
+		}
+		out = append(out, repo.Name+": "+reason)
+	}
+	return out
 }
 
 // Push 는 각 레포의 feature 브랜치를 origin 으로 push 한다. repoFilter 가 비어 있지
 // 않으면 그 레포만, 비어 있으면 모든 레포를 대상으로 한다. 올릴 커밋이 없는 레포는
 // 건너뛴다.
-func Push(root, name, repoFilter string) error {
+//
+// 레포 하나가 실패해도 나머지는 계속 처리하고, 결과는 레포별로 돌려준다. 예전에는
+// 실패를 output 으로만 흘리고 nil 을 반환해서, 모든 레포가 실패해도 호출자에게는
+// 성공으로 보였다.
+func Push(root, name, repoFilter string, opt PushOptions) (PushResult, error) {
 	m, err := Load(root, name)
 	if err != nil {
-		return err
+		return PushResult{}, err
 	}
-	for _, r := range m.Repositories {
-		if repoFilter != "" && r.Name != repoFilter {
-			continue
-		}
-		p := filepath.Join(root, r.WorktreePath)
-		remoteExists := aggit.RemoteBranchExists(p, r.Branch)
-		if remoteExists && unpushedCount(p, r.Branch, r.BaseBranch) == 0 {
-			output.Printf("[%s] nothing to push, skipped\n", r.Name)
-			continue
-		}
-		output.Printf("[%s] pushing %s\n", r.Name, r.Branch)
-		if err := aggit.Push(p, r.Branch); err != nil {
-			output.Printf("failed: %v\n", err)
-		} else {
-			output.Println("pushed")
-		}
+	result := PushResult{Feature: m.Name, Repositories: []PushRepoResult{}}
+	for _, r := range selectRepos(m, repoFilter) {
+		result.Repositories = append(result.Repositories, pushRepo(root, r, opt))
 	}
-	return nil
+	return result, nil
 }
+
+func pushRepo(root string, r RepoMeta, opt PushOptions) PushRepoResult {
+	res := PushRepoResult{Name: r.Name, Branch: r.Branch, Forced: opt.Force}
+	p := filepath.Join(root, r.WorktreePath)
+
+	if state, stateErr := aggit.IntegrationStateOf(p); stateErr == nil && state.InProgress() {
+		res.Status = "skipped"
+		res.Detail = fmt.Sprintf("%s in progress; resolve or abort it first", state.Kind)
+		output.Printf("[%s] %s in progress, skipped\n", r.Name, state.Kind)
+		return res
+	}
+
+	remoteExists := aggit.RemoteBranchExists(p, r.Branch)
+	// force 일 때는 "올릴 것이 없다"는 판단을 건너뛴다. 리베이스 후에는 커밋 수가
+	// 그대로여서(unpushedCount 가 0) 정작 필요한 push 가 생략될 수 있다.
+	if !opt.Force && remoteExists && unpushedCount(p, r.Branch, r.BaseBranch) == 0 {
+		res.Status = "up-to-date"
+		res.Detail = "nothing to push"
+		output.Printf("[%s] nothing to push, skipped\n", r.Name)
+		return res
+	}
+
+	var pushErr error
+	switch {
+	case opt.Force && remoteExists:
+		// 명시적 lease: 방금 확인한 origin/<branch> 값을 기대값으로 못 박는다.
+		// 인수 없는 --force-with-lease 는 브랜치의 업스트림 추적 정보를 기준으로
+		// 삼는데, configureWorktreeUpstream 이 첫 push 전까지 업스트림을 base
+		// 브랜치로 걸어두므로 무엇을 기준으로 삼을지 확신할 수 없다.
+		// 자세한 근거는 docs/adr/0003 참조.
+		expected, shaErr := aggit.RemoteBranchSHA(p, r.Branch)
+		if shaErr != nil {
+			res.Status = "failed"
+			res.Error = fmt.Sprintf("could not read origin/%s to build the lease", r.Branch)
+			res.GitOutput = gitOutputOf(shaErr)
+			res.Detail = res.Error
+			output.Printf("[%s] failed: %v\n", r.Name, shaErr)
+			return res
+		}
+		output.Printf("[%s] force-pushing %s (lease on %s)\n", r.Name, r.Branch, aggit.ShortSHA(expected))
+		pushErr = aggit.PushWithLease(p, r.Branch, expected)
+	case opt.Force:
+		// origin 에 브랜치가 없으면 덮어쓸 것도 없다. lease 를 걸 대상이 없으므로
+		// 평범한 첫 push 다.
+		output.Printf("[%s] pushing %s (new branch)\n", r.Name, r.Branch)
+		pushErr = aggit.Push(p, r.Branch)
+	default:
+		output.Printf("[%s] pushing %s\n", r.Name, r.Branch)
+		pushErr = aggit.Push(p, r.Branch)
+	}
+
+	if pushErr != nil {
+		res.Status = "failed"
+		res.Error = summarizePushError(pushErr, r.Branch)
+		res.GitOutput = gitOutputOf(pushErr)
+		res.Detail = res.Error
+		output.Printf("[%s] failed: %v\n", r.Name, pushErr)
+		return res
+	}
+	res.Status = "pushed"
+	res.Detail = fmt.Sprintf("pushed %s", r.Branch)
+	output.Printf("[%s] pushed\n", r.Name)
+	return res
+}
+
+// summarizePushError 는 사람이 읽을 한 줄 요약을 만든다. lease 거부는 따로 알아볼
+// 수 있어야 한다 — 그건 "내 브랜치가 잘못됐다"가 아니라 "그 사이 원격이 움직였다"는
+// 뜻이고, 해결책도 다르기 때문이다. 어떤 경우에도 --force 로 다시 시도하지 않는다.
+func summarizePushError(err error, branch string) string {
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "stale info"):
+		return fmt.Sprintf("origin/%s moved since the last fetch; the lease refused the push. "+
+			"Fetch and review before pushing again", branch)
+	case aggit.IsAuthenticationError(err):
+		return "authentication failed for origin"
+	case strings.Contains(text, "non-fast-forward"),
+		strings.Contains(text, "fetch first"):
+		return fmt.Sprintf("origin/%s has commits this branch does not; rebase or merge first", branch)
+	default:
+		return fmt.Sprintf("push of %s failed", branch)
+	}
+}
+
+// gitOutputOf 는 git.Error 안의 명령어와 stdout/stderr 원문을 꺼낸다. git 호출이
+// 아닌 오류라면 오류 문자열 그대로다.
+func gitOutputOf(err error) string {
+	var gitErr *aggit.Error
+	if !errors.As(err, &gitErr) {
+		return err.Error()
+	}
+	parts := []string{"$ " + gitErr.Result.Command}
+	if out := strings.TrimRight(gitErr.Result.Stdout, "\r\n"); out != "" {
+		parts = append(parts, out)
+	}
+	if errOut := strings.TrimRight(gitErr.Result.Stderr, "\r\n"); errOut != "" {
+		parts = append(parts, errOut)
+	}
+	return strings.Join(parts, "\n")
+}
+

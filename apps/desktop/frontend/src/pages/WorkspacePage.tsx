@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   DownloadCloud,
   FolderOpen,
+  History,
   Loader2,
   Plus,
   RefreshCw,
@@ -9,8 +10,15 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
-import type { Config, RepoRuntimeState, TerminalSession } from "@/lib/types";
+import type {
+  Config,
+  GraphCommit,
+  RepoRuntimeState,
+  TerminalSession,
+} from "@/lib/types";
 import { ToolOpenMenu } from "@/components/ToolOpenMenu";
+import { CommitList } from "@/components/CommitList";
+import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -71,6 +79,9 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [actingRepo, setActingRepo] = useState<string | null>(null);
+  // Repository whose commit list is open. Coexists with the commit graph page:
+  // this answers "what has landed here" without leaving the workspace screen.
+  const [logRepo, setLogRepo] = useState<string | null>(null);
   const [repoLocalStates, setRepoLocalStates] = useState<Record<string, boolean>>({});
   const [repoRuntimeStates, setRepoRuntimeStates] = useState<Record<string, RepoRuntimeState>>({});
   const [selectedRemoteBranches, setSelectedRemoteBranches] = useState<Record<string, string>>({});
@@ -529,16 +540,29 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
                       </Button>
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:text-destructive"
-                        disabled={busy || actingRepo === r.Name}
-                        title={t("repo.removeTitle")}
-                        onClick={() => removeRepo(r.Name)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground"
+                          // Only a cloned repository has a commit graph to read.
+                          disabled={busy || !repoLocalStates[r.Name]}
+                          title={t("workspace.repoLog")}
+                          onClick={() => setLogRepo(r.Name)}
+                        >
+                          <History className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-destructive"
+                          disabled={busy || actingRepo === r.Name}
+                          title={t("repo.removeTitle")}
+                          onClick={() => removeRepo(r.Name)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -595,7 +619,60 @@ export function WorkspacePage({ config, root, onLoaded, onChanged, onOpenTermina
         }}
       />
     )}
+    {logRepo && (
+      <RepoLogModal repo={logRepo} onClose={() => setLogRepo(null)} />
+    )}
     </>
+  );
+}
+
+// A repository's commit list. Read from its main clone, whose object database
+// every repo worktree of that repository shares, so one read covers every
+// feature branch.
+function RepoLogModal({
+  repo,
+  onClose,
+}: {
+  repo: string;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const [commits, setCommits] = useState<GraphCommit[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .RepoCommitGraph(repo, false, 200, [])
+      .then((graph) => {
+        if (!cancelled) setCommits(graph.commits ?? []);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errMessage(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [repo]);
+
+  return (
+    <Modal
+      title={t("workspace.repoLogTitle", { repo })}
+      description={t("workspace.repoLogDesc")}
+      onClose={onClose}
+      size="lg"
+    >
+      {error ? (
+        <p className="p-4 text-sm text-destructive">{error}</p>
+      ) : commits === null ? (
+        <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" />
+          {t("common.loading")}
+        </div>
+      ) : (
+        <CommitList commits={commits} emptyLabel={t("workspace.repoLogEmpty")} />
+      )}
+    </Modal>
   );
 }
 

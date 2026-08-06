@@ -13,6 +13,7 @@ import {
   FileText,
   FolderGit2,
   FolderOpen,
+  GitGraph,
   History,
   LayoutGrid,
   PanelLeft,
@@ -41,6 +42,7 @@ import { BackupsPage } from "@/pages/BackupsPage";
 import { HistoryPage } from "@/pages/HistoryPage";
 import { WorktreeTemplatesPage } from "@/pages/WorktreeTemplatesPage";
 import { FileExplorerPage } from "@/pages/FileExplorerPage";
+import { GitGraphPage } from "@/pages/GitGraphPage";
 import agentsafeLogo from "@/assets/agentsafe-logo.png";
 
 export type View =
@@ -49,6 +51,10 @@ export type View =
   | { kind: "feature"; name: string }
   | { kind: "templates" }
   | { kind: "explorer" }
+  // Scoped to one repository: commits only relate to each other inside a single
+  // object database, so there is no workspace-wide graph. Repo-per-tab identity
+  // also lets two repositories sit side by side in split panes.
+  | { kind: "git"; repo?: string }
   | { kind: "agentsec" }
   | { kind: "backups" }
   | { kind: "history"; feature?: string }
@@ -144,6 +150,8 @@ function viewId(view: View): string {
   switch (view.kind) {
     case "feature":
       return `feature:${view.name}`;
+    case "git":
+      return view.repo ? `git:${view.repo}` : "git";
     case "history":
       return view.feature ? `history:${view.feature}` : "history";
     case "terminal":
@@ -443,6 +451,11 @@ export default function App() {
   const [featuresTerminalHeights, setFeaturesTerminalHeights] = useState<
     Record<string, number>
   >({});
+  // Starting point handed over when the commit graph asks to branch from a
+  // commit. Kept here rather than in the Features view so it reaches a Features
+  // tab that is already open (openView activates such a tab without replacing
+  // its view).
+  const [pendingFeatureBase, setPendingFeatureBase] = useState("");
 
   // Mirror of the live window state, refreshed every render, so callbacks can
   // snapshot the current workspace's windows without going stale.
@@ -605,6 +618,7 @@ export default function App() {
     { view: { kind: "features" }, label: t("nav.features"), icon: LayoutGrid },
     { view: { kind: "templates" }, label: t("nav.worktreeTemplates"), icon: FileText },
     { view: { kind: "explorer" }, label: t("nav.fileExplorer"), icon: FolderOpen },
+    { view: { kind: "git" }, label: t("nav.commitGraph"), icon: GitGraph },
     { view: { kind: "agentsec" }, label: t("nav.agentSecurity"), icon: ShieldCheck },
     { view: { kind: "backups" }, label: t("nav.backups"), icon: Archive },
     { view: { kind: "history" }, label: t("nav.history"), icon: History },
@@ -629,6 +643,10 @@ export default function App() {
         return t("header.worktreeTemplates");
       case "explorer":
         return t("header.fileExplorer");
+      case "git":
+        return view.repo
+          ? `${t("header.commitGraph")} · ${view.repo}`
+          : t("header.commitGraph");
       case "agentsec":
         return t("header.agentSecurity");
       case "backups":
@@ -655,6 +673,8 @@ export default function App() {
         return FileText;
       case "explorer":
         return FolderOpen;
+      case "git":
+        return GitGraph;
       case "agentsec":
         return ShieldCheck;
       case "backups":
@@ -962,6 +982,8 @@ export default function App() {
         return opened ? (
           <FeaturesPage
             onOpen={(name) => openView({ kind: "feature", name })}
+            initialBase={pendingFeatureBase}
+            onInitialBaseConsumed={() => setPendingFeatureBase("")}
             terminalTabs={featureTerminalTabs}
             setTerminalTabs={setFeatureTerminalTabs}
             expanded={featuresExpanded}
@@ -1015,6 +1037,20 @@ export default function App() {
             setTerminals={setExplorerTerminals}
             activeTab={explorerActiveTab}
             setActiveTab={setExplorerActiveTab}
+          />
+        );
+      case "git":
+        return (
+          <GitGraphPage
+            config={config}
+            repo={view.repo}
+            onSelectRepo={(repo) => openView({ kind: "git", repo })}
+            onOpenTerminal={openTerminalTab}
+            onOpenFeature={(name) => openView({ kind: "feature", name })}
+            onCreateFeature={(base) => {
+              setPendingFeatureBase(base);
+              openView({ kind: "features" });
+            }}
           />
         );
       case "agentsec":

@@ -17,6 +17,10 @@ export interface WorkspaceEntry {
 export interface GitConfig {
   DefaultBaseBranch: string;
   BranchPrefix: string;
+  // Pattern used for the commit message when a delivery action runs without an
+  // explicit one. Empty means the built-in default. Only sync → commit → push
+  // uses it; the commit buttons still require a message the user typed.
+  CommitMessageTemplate?: string;
 }
 
 export interface Repository {
@@ -166,6 +170,16 @@ export interface RepoStatus {
   error?: string;
   agentReady?: boolean;
   agentNeedsPrepare?: boolean;
+  // Any Interrupted Integration open in this repo worktree. Mid-rebase the HEAD
+  // is detached, so `branch` reads as empty — show this instead of a blank.
+  integration?: IntegrationState;
+  // The feature branch this repo worktree has checked out, and the base branch
+  // it sits on top of. The status rows used to show the repository's configured
+  // default branch here, which is the base — not what is checked out.
+  branch?: string;
+  baseBranch?: string;
+  // HEAD of this repo worktree. Absent on a branch with no commits yet.
+  lastCommit?: GraphCommit;
 }
 
 export interface RepoFileStatus {
@@ -182,24 +196,227 @@ export interface FeatureStatusResult {
   repositories: RepoStatus[] | null;
 }
 
-export type RebaseStatus =
+// A rebase or merge that stopped on conflict, leaving a repo worktree in a
+// partial state. Left in place rather than aborted so it can be resolved —
+// see docs/adr/0002-integration-conflicts-are-left-in-place.md.
+export interface IntegrationState {
+  kind?: "rebase" | "merge" | "";
+  // Branch being replayed (rebase) or merged into (merge).
+  branch?: string;
+  // Commit being replayed onto, or merged in. Always a raw SHA.
+  onto?: string;
+  // Rebase progress; both absent for a merge.
+  step?: number;
+  total?: number;
+  summary?: string;
+  conflictPaths: string[] | null;
+}
+
+export function integrationInProgress(
+  state: IntegrationState | undefined
+): boolean {
+  return !!state?.kind;
+}
+
+export type IntegrationStatus =
   | "rebased"
+  | "merged"
   | "up-to-date"
   | "skipped"
+  | "conflicted"
   | "failed"
+  | "continued"
+  | "aborted"
   | string;
 
-export interface RebaseRepoResult {
+export interface IntegrationRepoResult {
   name: string;
   branch: string;
   baseBranch: string;
-  status: RebaseStatus;
+  // The ref actually integrated from: origin/<base> when it resolves, else local.
+  upstream?: string;
+  status: IntegrationStatus;
   detail: string;
+  // Unmerged paths when status is "conflicted".
+  conflicts?: string[] | null;
+  // The failing command with its stdout and stderr, verbatim. Kept apart from
+  // `detail` so a row can show the summary and put this behind a toggle.
+  gitOutput?: string;
 }
 
-export interface RebaseResult {
+export interface IntegrationResult {
   feature: string;
-  repositories: RebaseRepoResult[] | null;
+  // "rebase" | "merge" | "continue" | "abort"
+  operation: string;
+  repositories: IntegrationRepoResult[] | null;
+}
+
+// Whether a rebase or merge may run, per repository — shown in the confirm
+// dialog before anything changes.
+export interface RepoIntegrationReadiness {
+  repo: string;
+  agentPrepared: boolean;
+  // Unreviewed Agent Changes found. Integrating would let a later sync overwrite
+  // the result, so any is blocking.
+  agentChanges: number;
+  // Integrating will leave the agent workspace needing to be prepared again.
+  staleAfter: boolean;
+  blocked: boolean;
+  reason?: string;
+}
+
+export interface IntegrationReadiness {
+  feature: string;
+  repositories: RepoIntegrationReadiness[] | null;
+}
+
+export type RefKind = "head" | "remote" | "tag";
+
+export interface GraphRef {
+  name: string;
+  kind: RefKind;
+}
+
+export interface RefTip {
+  name: string;
+  kind: RefKind;
+  sha: string;
+}
+
+export interface GraphCommit {
+  sha: string;
+  parents: string[];
+  authorName: string;
+  authorEmail: string;
+  authorDate: string;
+  subject: string;
+  refs: GraphRef[] | null;
+  isHead: boolean;
+}
+
+// A branch in the graph that has a repo worktree, which is what makes it live
+// work rather than just a name.
+export interface BranchWorktree {
+  branch: string;
+  feature: string;
+  // Relative to the workspace root.
+  path: string;
+  integration: IntegrationState;
+  baseBranch: string;
+}
+
+export interface CommitGraph {
+  repo: string;
+  baseBranch: string;
+  // What the main clone has checked out. Never integrated into (docs/adr/0001);
+  // shown so the user can see which branch a Pull would fast-forward.
+  currentBranch: string;
+  commits: GraphCommit[] | null;
+  refs: RefTip[] | null;
+  worktrees: BranchWorktree[] | null;
+  // Refs whose tip is older than the commit limit, so they are not drawn.
+  // Reporting them is what stops the graph reading as "this branch is gone".
+  outsideWindow: RefTip[] | null;
+  limit: number;
+  allBranches: boolean;
+  truncated: boolean;
+}
+
+// Push outcome per repository. A push that failed in one repository is not a
+// failure of the whole operation, which is why this is a result rather than a
+// thrown error — reporting "pushed" while every repository failed was the bug.
+export type PushStatus = "pushed" | "up-to-date" | "skipped" | "failed" | string;
+
+export interface PushRepoResult {
+  name: string;
+  branch: string;
+  status: PushStatus;
+  detail: string;
+  // Whether this repository went up with --force-with-lease.
+  forced: boolean;
+  // Human-readable failure summary, and the raw git command with its output.
+  error?: string;
+  gitOutput?: string;
+}
+
+export interface PushResult {
+  feature: string;
+  repositories: PushRepoResult[] | null;
+}
+
+// A rebase together with the pushes that followed it. Which repositories get
+// pushed is decided in internal/feature — only the ones whose history was
+// actually rewritten (docs/adr/0003).
+export interface IntegrationPushResult {
+  integration: IntegrationResult;
+  pushes?: PushResult[] | null;
+}
+
+// What a push would send, per repository, with the range each count came from.
+// The badge and this list resolve the range the same way, so they cannot
+// disagree about what "unpushed" means.
+export interface UnpushedRepo {
+  name: string;
+  branch: string;
+  // e.g. "origin/feature/x..HEAD". Empty when no comparison point was found.
+  range: string;
+  count: number;
+  commits: GraphCommit[] | null;
+  error?: string;
+}
+
+export interface UnpushedResult {
+  feature: string;
+  repositories: UnpushedRepo[] | null;
+}
+
+// Read-only inspection shown while the rebase dialog fills itself in. Opening
+// the dialog changes nothing.
+export interface RepoRebasePreflight {
+  repo: string;
+  branch: string;
+  baseBranch: string;
+  // The ref the rebase would replay onto, preferring origin/<base>. Absent when
+  // none resolved, in which case `reason` says so.
+  upstream?: string;
+  // Commits the upstream has that this branch does not — how much a rebase
+  // would replay over. Zero means already up to date.
+  behind: number;
+  // Commits that would need force-pushing afterwards.
+  unpushed: number;
+  // Dirty repo worktrees are skipped rather than stashed.
+  dirty: boolean;
+  integration: IntegrationState;
+  // Unreviewed Agent Changes; any is blocking, because a later sync would
+  // overwrite the rebase.
+  agentChanges: number;
+  blocked: boolean;
+  reason?: string;
+}
+
+export interface RebasePreflight {
+  feature: string;
+  repositories: RepoRebasePreflight[] | null;
+}
+
+// The workspace's Commit Message Template, with what it currently produces.
+export interface CommitMessageTemplateInfo {
+  template: string;
+  variables: string[];
+  // Shown as the commit field's placeholder rather than prefilled, so
+  // {{timestamp}} is not frozen to whenever the screen opened.
+  preview: string;
+  // Set when the saved template cannot be rendered; preview then shows the
+  // built-in default that would be used instead.
+  error?: string;
+}
+
+export interface CommitFileChange {
+  // git's name-status letter: A, M, D, R, C or T.
+  status: string;
+  path: string;
+  // Set for renames and copies.
+  oldPath?: string;
 }
 
 export interface FeatureDeleteResult {
@@ -367,6 +584,9 @@ export interface ChangeFileView {
 
 export interface SyncOptions {
   repo: string;
+  // Repo-relative files to sync instead of the whole repository — one Agent
+  // Change Resolution rather than all of them. Requires `repo`.
+  paths?: string[];
   dryRun: boolean;
   includeRisky: boolean;
   allowMaskedSync: boolean;

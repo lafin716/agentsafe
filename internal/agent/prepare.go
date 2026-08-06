@@ -95,6 +95,9 @@ type PrepareOptions struct {
 }
 
 func Init(root string, cfg config.Config, featureName string, opt PrepareOptions) error {
+	if err := GuardIntegrationInProgress(root, featureName, ""); err != nil {
+		return err
+	}
 	fm, err := feature.Load(root, featureName)
 	if err != nil {
 		return err
@@ -122,6 +125,9 @@ func Init(root string, cfg config.Config, featureName string, opt PrepareOptions
 // PrepareRepository creates or replaces one repository's sanitized agent
 // folder while preserving all other repository folders and metadata.
 func PrepareRepository(root string, cfg config.Config, featureName, repoName string, opt PrepareOptions) (PrepareMetadata, error) {
+	if err := GuardIntegrationInProgress(root, featureName, repoName); err != nil {
+		return PrepareMetadata{}, err
+	}
 	fm, err := feature.Load(root, featureName)
 	if err != nil {
 		return PrepareMetadata{}, err

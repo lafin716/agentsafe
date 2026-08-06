@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -182,8 +183,98 @@ func repoCmd() *cobra.Command {
 		return nil
 	}}
 	remove.Flags().BoolVar(&deleteFiles, "delete-files", false, "also delete cloned files (main/<repo> and feature worktrees)")
-	c.AddCommand(add, list, remove)
+
+	var logAll bool
+	var logLimit int
+	var logRefs []string
+	logCmd := &cobra.Command{
+		Use:   "log NAME",
+		Short: "Show a repository's commit graph",
+		Long: "Read one repository's commit graph from its main clone.\n\n" +
+			"Every repo worktree of a repository shares its main clone's object\n" +
+			"database, so this one read already covers every feature branch.\n\n" +
+			"By default only the managed refs are shown — the base branch and the\n" +
+			"feature branches that have a repo worktree here. Use --all-branches to\n" +
+			"include every ref in the repository.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, cfg, err := cwdConfig()
+			if err != nil {
+				return err
+			}
+			graph, err := repo.LoadCommitGraph(root, cfg, args[0], repo.CommitGraphOptions{
+				AllBranches: logAll,
+				Limit:       logLimit,
+				ExtraRefs:   logRefs,
+			})
+			if err != nil {
+				return err
+			}
+			if output.IsStructured() {
+				return output.Emit(graph)
+			}
+			repo.PrintCommitGraph(graph)
+			return nil
+		}}
+	logCmd.Flags().BoolVar(&logAll, "all-branches", false, "include every ref, not just the managed ones")
+	logCmd.Flags().IntVar(&logLimit, "limit", repo.DefaultCommitLimit, "how many commits to read")
+	logCmd.Flags().StringArrayVar(&logRefs, "ref", nil, "additional ref to include (repeatable)")
+
+	c.AddCommand(add, list, remove, logCmd)
 	return c
+}
+
+// printIntegrationResult renders a rebase/merge outcome for the CLI's text mode.
+// Conflicted repositories list their unmerged paths, since resolving them is the
+// user's next step.
+func printIntegrationResult(res feature.IntegrationResult) {
+	fmt.Printf("Feature: %s (%s)\n\n", res.Feature, res.Operation)
+	for _, r := range res.Repositories {
+		fmt.Printf("[%s] %s", r.Name, r.Status)
+		if r.Detail != "" {
+			fmt.Printf(" — %s", r.Detail)
+		}
+		fmt.Println()
+		for _, path := range r.Conflicts {
+			fmt.Printf("    conflict: %s\n", path)
+		}
+	}
+}
+
+// printRebasePreflight renders what a rebase would do, for --check.
+func printRebasePreflight(res agent.RebasePreflightResult) {
+	fmt.Printf("Feature: %s\n\n", res.Feature)
+	for _, r := range res.Repositories {
+		fmt.Printf("[%s] %s → %s\n", r.Repo, r.Branch, r.Upstream)
+		if r.Behind > 0 {
+			fmt.Printf("    %d commit(s) to replay over\n", r.Behind)
+		} else {
+			fmt.Println("    up to date")
+		}
+		if r.Unpushed > 0 {
+			fmt.Printf("    %d unpushed commit(s) would need force-pushing\n", r.Unpushed)
+		}
+		if r.Blocked {
+			fmt.Printf("    would be skipped: %s\n", r.Reason)
+		}
+	}
+}
+
+// runRebase dispatches between starting a rebase and resolving an interrupted
+// one, so `agentsafe feature rebase` stays the single verb for both.
+func runRebase(root string, cfg config.Config, name, repoFilter, upstream string,
+	wantContinue, wantAbort, abortOnConflict bool) (feature.IntegrationResult, error) {
+	switch {
+	case wantContinue:
+		return feature.ContinueIntegration(root, name, repoFilter)
+	case wantAbort:
+		return feature.AbortIntegration(root, name, repoFilter)
+	default:
+		return agent.RebaseFeature(root, cfg, name, repoFilter, feature.IntegrateOptions{
+			AbortOnConflict: abortOnConflict,
+			Upstream:        upstream,
+		})
+	}
 }
 
 func pullCmd() *cobra.Command {
@@ -294,30 +385,110 @@ whether to error, reuse it, or recreate the local branch from the base.`,
 		}
 		return feature.List(root)
 	}}
-	var rebaseRepo string
-	rebase := &cobra.Command{Use: "rebase NAME", Short: "Rebase feature worktrees onto their base branch", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		root, cfg, err := cwdConfig()
-		if err != nil {
-			return err
-		}
-		res, err := feature.Rebase(root, cfg, args[0], rebaseRepo)
-		if err != nil {
-			return err
-		}
-		if output.IsStructured() {
-			return output.Emit(res)
-		}
-		fmt.Printf("Feature: %s\n\n", res.Feature)
-		for _, r := range res.Repositories {
-			fmt.Printf("[%s] %s", r.Name, r.Status)
-			if r.Detail != "" {
-				fmt.Printf(" — %s", r.Detail)
+	var rebaseRepo, rebaseUpstream string
+	var rebaseAbortOnConflict, rebaseContinue, rebaseAbort, rebasePush, rebaseCheck bool
+	rebase := &cobra.Command{
+		Use:   "rebase NAME",
+		Short: "Rebase feature worktrees onto their base branch",
+		Long: "Rebase each of a feature's repo worktrees onto its base branch.\n\n" +
+			"A conflict is left in place so it can be resolved, then finished with\n" +
+			"--continue or discarded with --abort. Pass --abort-on-conflict to restore\n" +
+			"the worktree immediately instead.\n\n" +
+			"Repositories holding unreviewed agent changes are skipped: rebasing them\n" +
+			"would let a later sync overwrite the rebase.\n\n" +
+			"--push force-pushes the repositories that were actually rebased, with an\n" +
+			"explicit lease on the SHA origin/<branch> is read to hold. Repositories\n" +
+			"that were up to date, skipped, conflicted or failed are not pushed.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, cfg, err := cwdConfig()
+			if err != nil {
+				return err
 			}
-			fmt.Println()
-		}
-		return nil
-	}}
+			if rebaseContinue && rebaseAbort {
+				return fmt.Errorf("--continue and --abort are mutually exclusive")
+			}
+			if rebaseCheck {
+				preflight, checkErr := agent.RebasePreflight(root, cfg, args[0], rebaseRepo)
+				if checkErr != nil {
+					return checkErr
+				}
+				if output.IsStructured() {
+					return output.Emit(preflight)
+				}
+				printRebasePreflight(preflight)
+				return nil
+			}
+			res, err := runRebase(root, cfg, args[0], rebaseRepo, rebaseUpstream,
+				rebaseContinue, rebaseAbort, rebaseAbortOnConflict)
+			if err != nil {
+				return err
+			}
+			out := feature.IntegrationPushResult{Integration: res}
+			if rebasePush {
+				// Which repositories get pushed is decided in internal/feature so
+				// the desktop app and this command cannot drift (docs/adr/0003).
+				out.Pushes, err = feature.PushIntegrated(root, args[0], res)
+				if err != nil {
+					return err
+				}
+			}
+			if output.IsStructured() {
+				return output.Emit(out)
+			}
+			printIntegrationResult(res)
+			for _, p := range out.Pushes {
+				printPushResult(p)
+			}
+			if out.PushFailed() {
+				return fmt.Errorf("rebase succeeded but the follow-up push failed; see the output above")
+			}
+			return nil
+		}}
+	rebase.Flags().BoolVar(&rebaseCheck, "check", false,
+		"report what a rebase would do to each repository, changing nothing")
 	rebase.Flags().StringVar(&rebaseRepo, "repo", "", "limit to repository")
+	rebase.Flags().StringVar(&rebaseUpstream, "onto", "", "rebase onto this ref instead of the base branch")
+	rebase.Flags().BoolVar(&rebaseAbortOnConflict, "abort-on-conflict", false,
+		"restore the worktree on conflict instead of leaving it to be resolved")
+	rebase.Flags().BoolVar(&rebaseContinue, "continue", false, "resume an interrupted rebase or merge after resolving conflicts")
+	rebase.Flags().BoolVar(&rebaseAbort, "abort", false, "discard an interrupted rebase or merge")
+	rebase.Flags().BoolVar(&rebasePush, "push", false,
+		"force-push (with an explicit lease) the repositories that were rebased")
+
+	var mergeRepo, mergeUpstream string
+	var mergeAbortOnConflict bool
+	merge := &cobra.Command{
+		Use:   "merge NAME",
+		Short: "Merge the base branch into feature worktree branches",
+		Long: "Merge each of a feature's base branches into its branch — the alternative\n" +
+			"to rebase for a branch that has already been pushed.\n\n" +
+			"Only this direction exists. Merging a feature into its base branch locally\n" +
+			"would leave the main clone diverged from origin, which breaks the --ff-only\n" +
+			"pull it is kept current with; use `agentsafe mr create` for that.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, cfg, err := cwdConfig()
+			if err != nil {
+				return err
+			}
+			res, err := agent.MergeFeature(root, cfg, args[0], mergeRepo, feature.IntegrateOptions{
+				AbortOnConflict: mergeAbortOnConflict,
+				Upstream:        mergeUpstream,
+			})
+			if err != nil {
+				return err
+			}
+			if output.IsStructured() {
+				return output.Emit(res)
+			}
+			printIntegrationResult(res)
+			return nil
+		}}
+	merge.Flags().StringVar(&mergeRepo, "repo", "", "limit to repository")
+	merge.Flags().StringVar(&mergeUpstream, "from", "", "merge this ref instead of the base branch")
+	merge.Flags().BoolVar(&mergeAbortOnConflict, "abort-on-conflict", false,
+		"restore the worktree on conflict instead of leaving it to be resolved")
 	var deleteBranch, deleteForce bool
 	del := &cobra.Command{Use: "delete NAME", Short: "Delete a feature's worktrees and artifacts", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
@@ -396,8 +567,87 @@ whether to error, reuse it, or recreate the local branch from the base.`,
 	recreateRepo.Flags().BoolVar(&recreateForce, "force", false, "discard uncommitted worktree changes")
 	repoWorktree.AddCommand(addRepo, recreateRepo)
 
-	c.AddCommand(create, check, list, rebase, del, repoWorktree)
+	var logRepo string
+	var logLimit int
+	var logAllCommits bool
+	featureLog := &cobra.Command{
+		Use:   "log NAME",
+		Short: "List the commits a push would send, per repository",
+		Long: "Show what `agentsafe push` would upload for each of a feature's repo\n" +
+			"worktrees.\n\n" +
+			"The comparison point is resolved per repository: origin/<branch> when the\n" +
+			"branch has been pushed, otherwise origin/<base>, otherwise the local base.\n" +
+			"The resolved range is printed so the count is never unexplained.\n\n" +
+			"--all lists every commit each repo worktree is sitting on instead, which\n" +
+			"is scoped to that worktree's HEAD — not the repository's whole graph.\n" +
+			"Use `agentsafe repo log` for the repository-wide commit graph.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, _, err := cwdConfig()
+			if err != nil {
+				return err
+			}
+			res, err := featureCommitLog(root, args[0], logRepo, logLimit, logAllCommits)
+			if err != nil {
+				return err
+			}
+			if output.IsStructured() {
+				return output.Emit(res)
+			}
+			printUnpushed(res)
+			return nil
+		}}
+	featureLog.Flags().StringVar(&logRepo, "repo", "", "limit to repository")
+	featureLog.Flags().IntVar(&logLimit, "limit", 200, "how many commits to list per repository")
+	featureLog.Flags().BoolVar(&logAllCommits, "all", false,
+		"list every commit on each repo worktree instead of only the unpushed ones")
+
+	c.AddCommand(create, check, list, rebase, merge, del, repoWorktree, featureLog)
 	return c
+}
+
+// featureCommitLog reads either the unpushed commits or every commit on each
+// repo worktree, in the one shape the printer and the structured output take.
+func featureCommitLog(root, name, repoFilter string, limit int, all bool) (feature.UnpushedResult, error) {
+	if !all {
+		return feature.UnpushedCommits(root, name, repoFilter, limit)
+	}
+	m, err := feature.Load(root, name)
+	if err != nil {
+		return feature.UnpushedResult{}, err
+	}
+	res := feature.UnpushedResult{Feature: m.Name, Repositories: []feature.UnpushedRepo{}}
+	for _, r := range m.Repositories {
+		if repoFilter != "" && r.Name != repoFilter {
+			continue
+		}
+		entry, logErr := feature.WorktreeCommits(root, name, r.Name, limit)
+		if logErr != nil {
+			return feature.UnpushedResult{}, logErr
+		}
+		res.Repositories = append(res.Repositories, entry)
+	}
+	return res, nil
+}
+
+// printUnpushed renders the unpushed-commit listing for the CLI's text mode.
+func printUnpushed(res feature.UnpushedResult) {
+	fmt.Printf("Feature: %s\n\n", res.Feature)
+	for _, r := range res.Repositories {
+		fmt.Printf("[%s] %s", r.Name, r.Branch)
+		if r.Range == "" {
+			fmt.Println(" — no comparison point found (never pushed, no base branch)")
+			continue
+		}
+		fmt.Printf(" — %d commit(s) in %s\n", r.Count, r.Range)
+		if r.Error != "" {
+			fmt.Printf("    error: %s\n", r.Error)
+			continue
+		}
+		for _, commit := range r.Commits {
+			fmt.Printf("    %s %s\n", aggit.ShortSHA(commit.SHA), commit.Subject)
+		}
+	}
 }
 
 func worktreeTemplateCmd() *cobra.Command {
@@ -709,17 +959,28 @@ func agentCmd() *cobra.Command {
 	diff.Flags().StringVar(&repoFilter, "repo", "", "limit to repository")
 	var opt agent.Options
 	var syncMessage string
-	sync := &cobra.Command{Use: "sync FEATURE", Short: "Sync reviewed agent changes back to worktrees", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		root, cfg, err := cwdConfig()
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(syncMessage) != "" {
-			return agent.SyncAndCommit(root, cfg, args[0], syncMessage, opt)
-		}
-		return agent.Sync(root, cfg, args[0], opt)
-	}}
+	sync := &cobra.Command{
+		Use:   "sync FEATURE",
+		Short: "Sync reviewed agent changes back to worktrees",
+		Long: "Copy reviewed agent changes back into the feature's repo worktrees.\n\n" +
+			"Use --path to resolve individual files instead of the whole repository;\n" +
+			"it repeats, is relative to the repository root, and requires --repo.\n" +
+			"The risky/masked gate, the rollback snapshot and the sync history entry\n" +
+			"all apply to whatever subset is selected.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, cfg, err := cwdConfig()
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(syncMessage) != "" {
+				return agent.SyncAndCommit(root, cfg, args[0], syncMessage, opt)
+			}
+			return agent.Sync(root, cfg, args[0], opt)
+		}}
 	sync.Flags().StringVar(&opt.Repo, "repo", "", "limit to repository")
+	sync.Flags().StringArrayVar(&opt.Paths, "path", nil,
+		"limit to this repo-relative file (repeatable; requires --repo)")
 	sync.Flags().BoolVar(&opt.DryRun, "dry-run", false, "show changes without applying")
 	sync.Flags().BoolVar(&opt.IncludeRisky, "include-risky", false, "allow risky files to sync")
 	sync.Flags().BoolVar(&opt.AllowMaskedSync, "allow-masked-sync", false, "allow masked files to sync")
@@ -753,7 +1014,11 @@ func agentCmd() *cobra.Command {
 		if shipNoPush {
 			msg := shipMessage
 			if strings.TrimSpace(msg) == "" {
-				msg = agent.DefaultCommitMessage(args[0])
+				values, valErr := agent.CommitMessageValuesFor(root, args[0], time.Now())
+				if valErr != nil {
+					return valErr
+				}
+				msg = agent.CommitMessageFor(cfg.Git.CommitMessageTemplate, values)
 			}
 			if err := agent.SyncAndCommit(root, cfg, args[0], msg, shipOpt); err != nil {
 				return err
@@ -869,22 +1134,53 @@ func commitCmd() *cobra.Command {
 
 func pushCmd() *cobra.Command {
 	var repoFilter string
+	var force bool
 	c := &cobra.Command{Use: "push FEATURE", Short: "Push feature branches", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		root, _, err := cwdConfig()
 		if err != nil {
 			return err
 		}
-		if err := feature.Push(root, args[0], repoFilter); err != nil {
+		res, err := feature.Push(root, args[0], repoFilter, feature.PushOptions{Force: force})
+		if err != nil {
 			return err
 		}
 		if output.IsStructured() {
-			return output.Emit(simpleResult{Status: "ok"})
+			return output.Emit(res)
+		}
+		printPushResult(res)
+		// A repository that failed to push is the whole point of running this, so
+		// the exit status has to say so rather than leaving it in the log.
+		if res.Failed() {
+			return fmt.Errorf("push failed for %d of %d repository(s)",
+				len(res.Failures()), len(res.Repositories))
 		}
 		return nil
 	}}
 	c.Flags().StringVar(&repoFilter, "repo", "", "limit to repository")
+	c.Flags().BoolVar(&force, "force", false,
+		"force-push with --force-with-lease, needed after a rebase rewrote the branch")
 	return c
 }
+
+// printPushResult renders a push outcome for the CLI's text mode. The raw git
+// output is printed for failures only, where it is the thing that explains a
+// refused lease.
+func printPushResult(res feature.PushResult) {
+	fmt.Printf("Feature: %s\n\n", res.Feature)
+	for _, r := range res.Repositories {
+		fmt.Printf("[%s] %s", r.Name, r.Status)
+		if r.Detail != "" {
+			fmt.Printf(" — %s", r.Detail)
+		}
+		fmt.Println()
+		if r.GitOutput != "" {
+			for _, line := range strings.Split(r.GitOutput, "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+	}
+}
+
 
 func mrCmd() *cobra.Command {
 	var target, title string

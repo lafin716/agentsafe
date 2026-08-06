@@ -1,7 +1,10 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-type ToastKind = "info" | "success" | "error";
+// "warning" is for an outcome the user has to act on that is not a failure —
+// an Interrupted Integration is the motivating case: the work is intact and
+// waiting to be resolved, so calling it an error would misdescribe it.
+type ToastKind = "info" | "success" | "warning" | "error";
 type Toast = { id: number; kind: ToastKind; message: string };
 
 type ToastContextValue = {
@@ -34,6 +37,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                 "border-destructive/40 bg-destructive text-destructive-foreground",
               t.kind === "success" &&
                 "border-emerald-700 bg-emerald-600 text-white",
+              t.kind === "warning" && "border-amber-600 bg-amber-500 text-white",
               t.kind === "info" && "border-border bg-card text-card-foreground"
             )}
           >

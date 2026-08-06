@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +19,18 @@ import (
 )
 
 type Options struct {
-	Repo            string
+	Repo string
+	// Paths narrows the sync to specific files inside Repo — one Agent Change
+	// Resolution rather than all of them. Paths are repo-relative and
+	// slash-separated, matching Change.Path. Requires Repo: a bare filename is
+	// ambiguous across repositories, and resolving the wrong one would write a
+	// file into a worktree the user was not looking at.
+	//
+	// Everything else about a sync is unchanged — the risky/masked gate, the
+	// RecordSync rollback snapshot and the history entry all apply to the subset,
+	// which is why this is a filter on the change set rather than its own copy
+	// routine.
+	Paths           []string
 	DryRun          bool
 	IncludeRisky    bool
 	AllowMaskedSync bool
@@ -203,7 +215,17 @@ func validatePreparedRepositories(root, featureName string, fm feature.Metadata,
 }
 
 func Sync(root string, cfg config.Config, featureName string, opt Options) error {
+	// A worktree mid-rebase is a partial replay corresponding to no commit;
+	// writing reviewed changes into it would tangle them with a conflict the
+	// user has not finished resolving (docs/adr/0002).
+	if err := GuardIntegrationInProgress(root, featureName, opt.Repo); err != nil {
+		return err
+	}
 	byRepo, err := Diff(root, cfg, featureName, opt.Repo)
+	if err != nil {
+		return err
+	}
+	byRepo, err = filterChangesByPath(byRepo, opt.Repo, opt.Paths)
 	if err != nil {
 		return err
 	}
@@ -273,6 +295,47 @@ func Sync(root string, cfg config.Config, featureName string, opt Options) error
 	return nil
 }
 
+// filterChangesByPath narrows a change set to the requested repo-relative paths.
+// An empty paths list means "everything", which is the whole-repository case.
+//
+// A path with no matching Agent Change is an error rather than a silent no-op:
+// the caller asked to resolve a specific change, and having it quietly do
+// nothing would read as "resolved" in the UI while the agent copy still differs.
+func filterChangesByPath(byRepo map[string][]Change, repoName string, paths []string) (map[string][]Change, error) {
+	if len(paths) == 0 {
+		return byRepo, nil
+	}
+	if repoName == "" {
+		return nil, fmt.Errorf("a repository is required when syncing specific paths")
+	}
+	wanted := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if p = filepath.ToSlash(strings.TrimSpace(p)); p != "" {
+			wanted[p] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return nil, fmt.Errorf("no valid paths given")
+	}
+	kept := []Change{}
+	for _, c := range byRepo[repoName] {
+		if wanted[c.Path] {
+			kept = append(kept, c)
+			delete(wanted, c.Path)
+		}
+	}
+	if len(wanted) > 0 {
+		missing := make([]string, 0, len(wanted))
+		for p := range wanted {
+			missing = append(missing, p)
+		}
+		sort.Strings(missing)
+		return nil, fmt.Errorf("no agent change for path(s) in repository %s: %s",
+			repoName, strings.Join(missing, ", "))
+	}
+	return map[string][]Change{repoName: kept}, nil
+}
+
 // SyncAndCommit syncs reviewed agent changes back to worktrees, then commits
 // them with the given message. A dry-run or an empty message skips the commit,
 // so callers can reuse it for a preview. The sync step reuses Sync, preserving
@@ -288,14 +351,21 @@ func SyncAndCommit(root string, cfg config.Config, featureName, message string, 
 }
 
 // SyncCommitPush chains sync → commit → push into one operation. When message is
-// empty a templated default is used. risky/masked files stay gated by opt: with
-// IncludeRisky/AllowMaskedSync false, Sync aborts before any commit or push so
-// masked secrets never reach the worktree. A dry run stops after the sync diff.
-// feature.Commit/Push are no-ops ("clean"/"nothing to push") when there is
-// nothing to do, so an empty change set is not an error.
+// empty the workspace's Commit Message Template supplies one. risky/masked files
+// stay gated by opt: with IncludeRisky/AllowMaskedSync false, Sync aborts before
+// any commit or push so masked secrets never reach the worktree. A dry run stops
+// after the sync diff. feature.Commit/Push are no-ops ("clean"/"nothing to
+// push") when there is nothing to do, so an empty change set is not an error.
 func SyncCommitPush(root string, cfg config.Config, featureName, message string, opt Options) error {
 	if strings.TrimSpace(message) == "" {
-		message = DefaultCommitMessage(featureName)
+		// Rendered once here rather than per repository: every variable comes from
+		// Feature metadata or the clock, so one message serves them all and
+		// feature.Commit keeps taking a plain string.
+		values, err := CommitMessageValuesFor(root, featureName, time.Now())
+		if err != nil {
+			return err
+		}
+		message = CommitMessageFor(cfg.Git.CommitMessageTemplate, values)
 	}
 	if err := SyncAndCommit(root, cfg, featureName, message, opt); err != nil {
 		return err
@@ -303,13 +373,41 @@ func SyncCommitPush(root string, cfg config.Config, featureName, message string,
 	if opt.DryRun {
 		return nil
 	}
-	return feature.Push(root, featureName, opt.Repo)
+	res, err := feature.Push(root, featureName, opt.Repo, feature.PushOptions{})
+	if err != nil {
+		return err
+	}
+	// The sync and the commit already happened, so a failed push is not a reason
+	// to undo anything — but it is a reason for this call to fail. Reporting
+	// success while a branch never reached origin is exactly what the per-repo
+	// result exists to prevent.
+	if res.Failed() {
+		return fmt.Errorf("synced and committed, but the push failed: %s",
+			strings.Join(res.FailureSummaries(), "; "))
+	}
+	return nil
 }
 
-// DefaultCommitMessage builds the templated commit message used when the caller
-// does not supply one (e.g. the desktop one-click button or `agent ship`).
-func DefaultCommitMessage(featureName string) string {
-	return fmt.Sprintf("agent(%s): auto-sync %s", featureName, time.Now().Format(time.RFC3339))
+// CommitMessageValuesFor reads the Feature's metadata into the substitutions a
+// Commit Message Template can use.
+func CommitMessageValuesFor(root, featureName string, now time.Time) (CommitMessageValues, error) {
+	fm, err := feature.Load(root, featureName)
+	if err != nil {
+		return CommitMessageValues{}, err
+	}
+	return CommitMessageValues{
+		Feature: fm.Name,
+		Branch:  fm.Branch,
+		Base:    fm.BaseBranch,
+		Now:     now,
+	}, nil
+}
+
+// DefaultCommitMessage is the built-in fallback used when the workspace has no
+// Commit Message Template, or has one that cannot be rendered. now is passed in
+// so a preview and the commit it previews agree.
+func DefaultCommitMessage(featureName string, now time.Time) string {
+	return fmt.Sprintf("agent(%s): auto-sync %s", featureName, now.Format(time.RFC3339))
 }
 
 // RestoreFromWorktree overwrites one file in the prepared agent workspace with
@@ -320,6 +418,11 @@ func RestoreFromWorktree(root string, cfg config.Config, featureName, repoName, 
 	relPath = filepath.ToSlash(strings.TrimSpace(relPath))
 	if relPath == "" || filepath.IsAbs(relPath) || strings.HasPrefix(relPath, "../") || strings.Contains(relPath, "/../") || relPath == ".." {
 		return fmt.Errorf("invalid file path %q", relPath)
+	}
+	// Mid-integration the worktree file holds conflict markers, so copying it
+	// into the agent workspace would poison the agent copy (docs/adr/0002).
+	if err := GuardIntegrationInProgress(root, featureName, repoName); err != nil {
+		return err
 	}
 	fm, err := feature.Load(root, featureName)
 	if err != nil {
@@ -373,6 +476,9 @@ func RestoreFromWorktree(root string, cfg config.Config, featureName, repoName, 
 // number of files restored. It reuses Diff (scoped to the repo) for the change
 // list and the per-file RestoreFromWorktree for each file.
 func RestoreRepoFromWorktree(root string, cfg config.Config, featureName, repoName string) (int, error) {
+	if err := GuardIntegrationInProgress(root, featureName, repoName); err != nil {
+		return 0, err
+	}
 	changes, err := Diff(root, cfg, featureName, repoName)
 	if err != nil {
 		return 0, err

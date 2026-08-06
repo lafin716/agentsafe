@@ -21,7 +21,16 @@ import type {
   PrepareMetadata,
   PreviewResult,
   SecurityPreviewFile,
-  RebaseResult,
+  CommitFileChange,
+  CommitGraph,
+  CommitMessageTemplateInfo,
+  IntegrationPushResult,
+  IntegrationReadiness,
+  IntegrationResult,
+  PushResult,
+  RebasePreflight,
+  UnpushedRepo,
+  UnpushedResult,
   Repository,
   RepoRuntimeState,
   RequestResults,
@@ -114,7 +123,81 @@ type AppBindings = {
     force: boolean
   ): Promise<RepoMeta>;
   FeatureStatus(name: string): Promise<FeatureStatusResult>;
-  RebaseFeature(name: string, repoFilter: string): Promise<RebaseResult>;
+  // Integration operations on repo worktrees. `upstream` overrides the base
+  // branch, which is how the commit graph integrates from a clicked ref.
+  // A conflict is left in place as an Interrupted Integration, then finished with
+  // ContinueIntegration or discarded with AbortIntegration (docs/adr/0002).
+  RebaseFeature(
+    name: string,
+    repoFilter: string,
+    upstream: string
+  ): Promise<IntegrationResult>;
+  MergeFeature(
+    name: string,
+    repoFilter: string,
+    upstream: string
+  ): Promise<IntegrationResult>;
+  ContinueIntegration(
+    name: string,
+    repoFilter: string
+  ): Promise<IntegrationResult>;
+  AbortIntegration(name: string, repoFilter: string): Promise<IntegrationResult>;
+  // Per-repository verdict for the confirm dialog. Costs filesystem work, so it
+  // runs when the dialog opens rather than on every graph read.
+  CheckIntegration(
+    name: string,
+    repoFilter: string
+  ): Promise<IntegrationReadiness>;
+  // One read per repository covers every feature branch: repo worktrees share
+  // their main clone's object database.
+  RepoCommitGraph(
+    repoName: string,
+    allBranches: boolean,
+    limit: number,
+    extraRefs: string[]
+  ): Promise<CommitGraph>;
+  CommitFileChanges(
+    repoName: string,
+    sha: string
+  ): Promise<CommitFileChange[]>;
+  // force uses --force-with-lease against the SHA origin/<branch> is read to
+  // hold. The per-repository result must be inspected: a repository that failed
+  // is not a thrown error.
+  PushFeature(
+    name: string,
+    repoFilter: string,
+    force: boolean
+  ): Promise<PushResult>;
+  // What a push would send, per repository, with the resolved range.
+  UnpushedCommits(
+    name: string,
+    repoFilter: string,
+    limit: number
+  ): Promise<UnpushedResult>;
+  // The commits one repo worktree is sitting on, scoped to its HEAD. Use
+  // RepoCommitGraph for the repository-wide view.
+  WorktreeCommits(
+    name: string,
+    repoName: string,
+    limit: number
+  ): Promise<UnpushedRepo>;
+  // Read-only inspection for the rebase dialog. Costs several git subprocesses
+  // per repository, so it runs when the dialog opens rather than on every load.
+  RebasePreflight(name: string, repoFilter: string): Promise<RebasePreflight>;
+  // Rebase, then force-push the repositories the rebase actually rewrote.
+  // Which those are is decided in internal/feature, so this cannot drift from
+  // the CLI (docs/adr/0003).
+  RebaseAndPush(
+    name: string,
+    repoFilter: string,
+    upstream: string,
+    push: boolean
+  ): Promise<IntegrationPushResult>;
+  // The workspace's Commit Message Template and what it currently renders to.
+  // An empty feature name previews with stand-in values, for the settings page.
+  CommitMessageTemplateInfo(
+    featureName: string
+  ): Promise<CommitMessageTemplateInfo>;
   FeatureDelete(
     name: string,
     deleteBranch: boolean,
@@ -130,6 +213,13 @@ type AppBindings = {
   ): Promise<PrepareMetadata>;
   AgentDiff(name: string, repoFilter: string): Promise<DiffResult>;
   AgentChangeFileView(
+    name: string,
+    repoName: string,
+    path: string
+  ): Promise<ChangeFileView>;
+  // One Repo Worktree Change: the file as the branch's last commit has it,
+  // against the file on disk now — what the next commit would record.
+  WorktreeChangeFileView(
     name: string,
     repoName: string,
     path: string
@@ -161,7 +251,7 @@ type AppBindings = {
   DeleteAllBackups(): Promise<number>;
   RestoreBackup(path: string): Promise<void>;
   Commit(name: string, message: string, repoFilter: string): Promise<void>;
-  Push(name: string, repoFilter: string): Promise<void>;
+  Push(name: string, repoFilter: string): Promise<PushResult>;
   CreateMergeRequests(name: string, title: string): Promise<RequestResults>;
   OpenURL(url: string): Promise<void>;
   SaveGitSettings(

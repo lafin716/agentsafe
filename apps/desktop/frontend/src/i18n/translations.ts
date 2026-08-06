@@ -56,7 +56,7 @@ const en: Dict = {
   "toolOpen.folder": "Folder",
   "toolOpen.terminal": "Terminal",
   "toolOpen.otherTerminals": "Other terminals",
-  "toolOpen.more": "More",
+  "toolOpen.otherTools": "Other tools",
   "toolOpen.browse": "Choose executable…",
 
   // workspace switcher
@@ -135,6 +135,9 @@ const en: Dict = {
   "features.createDesc": "Creates branches and worktrees across all configured repositories.",
   "features.nameLabel": "Name",
   "features.baseLabel": "Base branch (optional)",
+  "features.basePlaceholder": "workspace default",
+  "features.baseHint":
+    "A branch, tag or commit to branch from. Leave empty to use the workspace default.",
   "features.forceLabel": "Force recreate if the local branch already exists",
   "features.existingBranchLabel": "When the branch already exists",
   "features.existingBranchError": "Stop with an error",
@@ -612,6 +615,177 @@ const en: Dict = {
   "toast.backupDeleted": "Backup deleted",
   "toast.backupsAllDeleted": "{count} backups deleted",
   "toast.rolledBack": "Rolled back",
+
+  // Commit graph. A "repo worktree" is the per-repository directory a feature
+  // branch is checked out in — never the feature itself, which this UI calls a
+  // worktree elsewhere. Keep the qualifier: the whole point of these messages is
+  // saying which directory changes.
+  "nav.commitGraph": "Commit graph",
+  "header.commitGraph": "Commit graph",
+  "git.noRepos": "No repositories configured yet. Add one on the Workspace screen.",
+  "git.repoLabel": "Repository",
+  "git.allBranches": "All branches",
+  "git.fetch": "Fetch",
+  "git.fetchHint":
+    "Fetch and prune from origin; fast-forwards the main clone when it is on the base branch and clean.",
+  "git.refreshedAt": "Updated {time}",
+  "git.mainCloneOn": "Main clone on {branch} · base branch {base}",
+  "git.loading": "Reading the commit graph...",
+  "git.empty": "No commits to show.",
+  "git.loadMore": "Load {count} more",
+  "git.parents": "Parents",
+  "git.rootCommit": "none (root commit)",
+  "git.loadingFiles": "Reading changed files...",
+  "git.noFiles": "This commit changed no files.",
+  "git.copySha": "Copy full SHA",
+  "git.createFeatureHere": "Create a worktree from this commit...",
+  "git.outsideWindow":
+    "{count} branch(es) are older than the newest {limit} commits, so they are not drawn.",
+  "git.loadRefTip": "Load {name} far enough back to show its tip",
+  "git.andMore": "and {count} more",
+
+  "git.integrationInProgress": "{kind} in progress · {branch} ({feature})",
+  "git.integrationProgress": "Commit {step} of {total} · {count} conflicted file(s)",
+  "git.integrationConflictCount": "{count} conflicted file(s)",
+  "git.openTerminal": "Open a terminal here",
+  "git.continueIntegration": "Continue",
+  "git.abortIntegration": "Abort",
+
+  "git.rebase": "Rebase",
+  "git.merge": "Merge",
+  "git.push": "Push",
+  "git.forcePush": "Force-push (--force-with-lease)",
+  "git.pushed": "Pushed {branch}",
+  "git.forcePushed": "Force-pushed {branch}",
+  "git.rebaseOntoBase": "Rebase onto {base}",
+  "git.mergeBaseInto": "Merge {base} into this branch",
+  "git.rebaseBranchOntoHere": "Rebase {branch} onto here",
+  "git.mergeHereIntoBranch": "Merge here into {branch}",
+  "git.checkoutMainClone": "Switch the main clone to {name}",
+  "git.openFeature": "Open worktree {feature}",
+  "git.noWorktreesToMove": "No repo worktree in this repository to move.",
+  "git.noWorktreeForBranch": "{branch} has no repo worktree in this repository.",
+
+  "git.confirmRebaseTitle": "Rebase {branch} onto {upstream}?",
+  "git.confirmMergeTitle": "Merge {upstream} into {branch}?",
+  "git.confirmFeature": "Worktree: {feature}",
+  "git.checkingReadiness": "Checking agent workspaces...",
+  "git.alsoOtherRepos": "Also change this worktree's other {count} repository(ies)",
+  "git.ready": "ready",
+  "git.willNeedPrepare": "ready — the agent workspace will need preparing again",
+  "git.reviewChanges": "Review changes",
+  "git.conflictPolicyNote":
+    "A conflict is left in place so you can resolve it, then continue or abort. The main clone is never changed.",
+
+  "integration.toast.rebased": "Rebased {count} repo worktree(s): {repos}",
+  "integration.toast.merged": "Merged into {count} repo worktree(s): {repos}",
+  "integration.toast.upToDate": "Already up to date ({repos})",
+  "integration.toast.conflicted":
+    "Conflict in {repos} — resolve the files, then continue or abort",
+  "integration.toast.skipped": "Skipped {repos} — see the reason in the dialog",
+  "integration.toast.failed": "Could not run in {repos}",
+  "integration.toast.continued": "Integration finished in {repos}",
+  "integration.toast.aborted": "Integration discarded in {repos}",
+  "integration.toast.nothing": "Nothing to do",
+
+  "push.toast.pushed": "Pushed {count} repository(s): {repos}",
+  "push.toast.failed": "Push failed in {count} repository(s): {repos}",
+  "push.toast.skipped": "Skipped {repos} — see the reason in the dialog",
+  "push.toast.upToDate": "Nothing to push ({repos})",
+  "push.toast.nothing": "Nothing to push",
+
+  "common.showDetails": "Details",
+  "common.hideDetails": "Hide details",
+
+  "commits.merge": "merge",
+
+  // Agent Change Resolution — the per-file and per-repository buttons that end
+  // an Agent Change by choosing a side.
+  "feature.applyAgent": "Apply the agent version to the repo worktree",
+  "feature.applyAgentShort": "Use agent",
+  "feature.applyAgentGatedConfirm":
+    "{path} is marked {kind}. Apply the agent version to the repo worktree anyway?",
+  "feature.applyAgentGatedCheckbox": "Yes, I reviewed this file",
+  "feature.applyRepoAgent": "Apply every agent change in this repository",
+  "feature.applyRepoAgentShort": "Use all agent",
+  "feature.applyRepoAgentConfirm":
+    "Apply all {count} agent change(s) in {repo} to the repo worktree?",
+  "feature.applyRepoAgentGatedCheckbox":
+    "Include {count} risky/masked file(s) — I reviewed them",
+  "feature.commitTemplateHint":
+    "Leave empty and sync → commit → push will use the commit message template shown above.",
+
+  // Delivery popups
+  "feature.changesPopupOpen": "Show the changed files",
+  "feature.changesPopupTitle": "Uncommitted changes · {repo}",
+  "feature.changesPopupDesc":
+    "Files that differ from the last commit on this branch — what the next commit would contain.",
+  "feature.unpushedPopupOpen": "Show the commits that would be pushed",
+  "feature.unpushedPopupTitle": "Unpushed commits · {repo}",
+  "feature.unpushedPopupRange": "Counted from {range}",
+  "feature.unpushedPopupNoRange":
+    "No comparison point found — the branch has never been pushed and its base branch is missing.",
+  "feature.unpushedPopupEmpty": "Nothing to push.",
+  "feature.viewWorktreeDiff": "Compare with the last commit",
+  "feature.worktreeFileViewDesc":
+    "{repo} · last commit on the branch vs the file on disk",
+  "feature.fileViewCommitted": "Last commit",
+  "feature.fileViewWorking": "Working file",
+
+  // Repo worktree commit list
+  "feature.worktreeLog": "Show this repository's commits",
+  "feature.worktreeLogShort": "Commits",
+  "feature.worktreeLogTitle": "Commits · {repo}",
+  "feature.worktreeLogDesc":
+    "Commits this repo worktree is sitting on ({branch}). The commit graph page shows the whole repository.",
+  "feature.worktreeLogEmpty": "No commits.",
+
+  // Worktree status row
+  "feature.baseBranchTitle": "Base branch: {base}",
+  "feature.unknownBranch": "unknown branch",
+  "feature.integrationBranchLine":
+    "{kind} in progress on {branch} — HEAD is detached until it is resolved",
+
+  // Interrupted Integration controls
+  "feature.integrationOpen": "{kind} stopped on a conflict",
+  "feature.integrationProgress": "{step} of {total}",
+  "feature.integrationConflictCount": "{count} file(s) still conflict.",
+  "feature.integrationNoConflicts":
+    "No conflicting files remain — continue to finish it.",
+  "feature.integrationContinue": "Continue",
+  "feature.integrationAbort": "Abort",
+  "feature.integrationTerminal": "Open a terminal",
+  "feature.gitOutputLabel": "git output",
+
+  // Rebase dialog
+  "feature.rebaseTitle": "Rebase · {feature}",
+  "feature.rebaseDesc":
+    "Replay each repo worktree's branch onto its base branch. A conflict is left in place so you can resolve it.",
+  "feature.rebasePreflightLoading": "Checking each repository…",
+  "feature.rebaseBehind": "{count} behind",
+  "feature.rebaseUpToDate": "up to date",
+  "feature.rebaseUnpushed": "{count} unpushed",
+  "feature.rebaseRepo": "Rebase",
+  "feature.rebaseAll": "Rebase {count} repository(s)",
+  "feature.rebasePushOption": "Force-push with a lease after rebasing",
+
+  // Commit message template (settings)
+  "settings.commitTemplate": "Commit message template",
+  "settings.commitTemplateHint":
+    "Used by sync → commit → push when no message is typed. Available variables: {vars}",
+  "settings.commitTemplatePreview": "Preview: {preview}",
+  "settings.commitTemplatePlaceholder": "agent({{feature}}): auto-sync {{date}}",
+
+  // Repository commit list (workspace screen)
+  "workspace.repoLog": "Commits",
+  "workspace.repoLogTitle": "Commits · {repo}",
+  "workspace.repoLogDesc":
+    "The repository's commit graph, read from its main clone. Covers every feature branch.",
+  "workspace.repoLogEmpty": "No commits — pull the repository first.",
+
+  "time.minutesAgo": "{count}m ago",
+  "time.hoursAgo": "{count}h ago",
+  "time.daysAgo": "{count}d ago",
 };
 
 const ko: Dict = {
@@ -660,7 +834,7 @@ const ko: Dict = {
   "toolOpen.folder": "폴더",
   "toolOpen.terminal": "터미널",
   "toolOpen.otherTerminals": "다른 터미널",
-  "toolOpen.more": "더보기",
+  "toolOpen.otherTools": "다른 툴",
   "toolOpen.browse": "실행 파일 선택…",
 
   // workspace switcher
@@ -706,6 +880,7 @@ const ko: Dict = {
   "repo.cloneOne": "Clone",
   "repo.pullOne": "Pull",
   "repo.checkout": "체크아웃",
+  "repo.detached": "detached HEAD",
   "repo.noRemoteBranches": "원격 브랜치 없음",
   "repo.addTitle": "리포지토리 추가",
   "repo.nameLabel": "이름",
@@ -738,6 +913,9 @@ const ko: Dict = {
   "features.createDesc": "설정된 모든 리포지토리에 브랜치와 worktree를 생성합니다.",
   "features.nameLabel": "이름",
   "features.baseLabel": "기준 브랜치 (선택)",
+  "features.basePlaceholder": "워크스페이스 기본값",
+  "features.baseHint":
+    "분기할 브랜치·태그·커밋입니다. 비워두면 워크스페이스 기본값을 씁니다.",
   "features.forceLabel": "로컬 브랜치가 이미 있으면 강제로 다시 생성",
   "features.existingBranchLabel": "동일한 브랜치가 이미 있을 때",
   "features.existingBranchError": "오류로 중단",
@@ -1211,6 +1389,176 @@ const ko: Dict = {
   "toast.backupDeleted": "백업 삭제됨",
   "toast.backupsAllDeleted": "백업 {count}개 삭제됨",
   "toast.rolledBack": "되돌렸습니다",
+
+  // 커밋 그래프. "저장소 워크트리"는 feature 브랜치가 체크아웃된 저장소별
+  // 디렉터리이고, 이 UI가 다른 곳에서 "워크트리"라고 부르는 feature 자체와는
+  // 다르다. 한정어를 빼지 말 것 — 어느 디렉터리가 바뀌는지 알리는 것이 이
+  // 문구들의 존재 이유다.
+  "nav.commitGraph": "커밋 그래프",
+  "header.commitGraph": "커밋 그래프",
+  "git.noRepos": "등록된 저장소가 없습니다. 워크스페이스 화면에서 추가하세요.",
+  "git.repoLabel": "저장소",
+  "git.allBranches": "모든 브랜치",
+  "git.fetch": "가져오기",
+  "git.fetchHint":
+    "origin에서 fetch하고 사라진 ref를 정리합니다. 메인 클론이 base 브랜치에 있고 변경이 없으면 fast-forward까지 합니다.",
+  "git.refreshedAt": "{time} 갱신",
+  "git.mainCloneOn": "메인 클론: {branch} · base 브랜치: {base}",
+  "git.loading": "커밋 그래프를 읽는 중...",
+  "git.empty": "표시할 커밋이 없습니다.",
+  "git.loadMore": "{count}개 더 보기",
+  "git.parents": "부모",
+  "git.rootCommit": "없음 (최초 커밋)",
+  "git.loadingFiles": "변경 파일을 읽는 중...",
+  "git.noFiles": "이 커밋은 변경한 파일이 없습니다.",
+  "git.copySha": "전체 SHA 복사",
+  "git.createFeatureHere": "이 커밋에서 워크트리 만들기...",
+  "git.outsideWindow":
+    "브랜치 {count}개가 최신 {limit}개 커밋보다 오래되어 그래프에 없습니다.",
+  "git.loadRefTip": "{name}의 tip이 보일 때까지 더 불러오기",
+  "git.andMore": "그 외 {count}개",
+
+  "git.integrationInProgress": "{kind} 진행 중 · {branch} ({feature})",
+  "git.integrationProgress": "{total}개 중 {step}번째 · 충돌 파일 {count}개",
+  "git.integrationConflictCount": "충돌 파일 {count}개",
+  "git.openTerminal": "여기서 터미널 열기",
+  "git.continueIntegration": "계속",
+  "git.abortIntegration": "중단",
+
+  "git.rebase": "Rebase",
+  "git.merge": "Merge",
+  "git.push": "Push",
+  "git.forcePush": "강제 Push (--force-with-lease)",
+  "git.pushed": "{branch} push 완료",
+  "git.forcePushed": "{branch} 강제 push 완료",
+  "git.rebaseOntoBase": "{base} 위로 rebase",
+  "git.mergeBaseInto": "{base}를 이 브랜치에 merge",
+  "git.rebaseBranchOntoHere": "{branch}를 여기로 rebase",
+  "git.mergeHereIntoBranch": "여기를 {branch}에 merge",
+  "git.checkoutMainClone": "메인 클론을 {name}으로 전환",
+  "git.openFeature": "워크트리 {feature} 열기",
+  "git.noWorktreesToMove": "이 저장소에는 옮길 저장소 워크트리가 없습니다.",
+  "git.noWorktreeForBranch": "{branch}는 이 저장소에 저장소 워크트리가 없습니다.",
+
+  "git.confirmRebaseTitle": "{branch}를 {upstream} 위로 rebase할까요?",
+  "git.confirmMergeTitle": "{upstream}를 {branch}에 merge할까요?",
+  "git.confirmFeature": "워크트리: {feature}",
+  "git.checkingReadiness": "agent 워크스페이스를 확인하는 중...",
+  "git.alsoOtherRepos": "이 워크트리의 다른 저장소 {count}개도 함께 변경",
+  "git.ready": "가능",
+  "git.willNeedPrepare": "가능 — 이후 agent 워크스페이스를 다시 준비해야 합니다",
+  "git.reviewChanges": "변경 검토",
+  "git.conflictPolicyNote":
+    "충돌은 해결할 수 있도록 그대로 남겨두며, 이후 계속하거나 중단할 수 있습니다. 메인 클론은 변경되지 않습니다.",
+
+  "integration.toast.rebased": "저장소 워크트리 {count}개를 rebase했습니다: {repos}",
+  "integration.toast.merged": "저장소 워크트리 {count}개에 merge했습니다: {repos}",
+  "integration.toast.upToDate": "이미 최신입니다 ({repos})",
+  "integration.toast.conflicted":
+    "{repos}에서 충돌 — 파일을 해결한 뒤 계속하거나 중단하세요",
+  "integration.toast.skipped": "{repos} 건너뜀 — 대화상자의 사유를 확인하세요",
+  "integration.toast.failed": "{repos}에서 실행할 수 없었습니다",
+  "integration.toast.continued": "{repos}의 통합을 마쳤습니다",
+  "integration.toast.aborted": "{repos}의 통합을 되돌렸습니다",
+  "integration.toast.nothing": "할 일이 없습니다",
+
+  "push.toast.pushed": "저장소 {count}개를 푸시했습니다: {repos}",
+  "push.toast.failed": "저장소 {count}개에서 푸시 실패: {repos}",
+  "push.toast.skipped": "{repos} 건너뜀 — 대화상자의 사유를 확인하세요",
+  "push.toast.upToDate": "푸시할 것이 없습니다 ({repos})",
+  "push.toast.nothing": "푸시할 것이 없습니다",
+
+  "common.showDetails": "자세히",
+  "common.hideDetails": "접기",
+
+  "commits.merge": "머지",
+
+  // 에이전트 변경 해소 — 파일 단위·저장소 단위로 어느 쪽을 채택할지 고르는 버튼
+  "feature.applyAgent": "에이전트 버전을 저장소 워크트리에 반영",
+  "feature.applyAgentShort": "에이전트 사용",
+  "feature.applyAgentGatedConfirm":
+    "{path} 은(는) {kind} 로 표시되어 있습니다. 그래도 에이전트 버전을 저장소 워크트리에 반영할까요?",
+  "feature.applyAgentGatedCheckbox": "네, 이 파일을 검토했습니다",
+  "feature.applyRepoAgent": "이 저장소의 에이전트 변경을 모두 반영",
+  "feature.applyRepoAgentShort": "전체 에이전트 사용",
+  "feature.applyRepoAgentConfirm":
+    "{repo} 의 에이전트 변경 {count}건을 모두 저장소 워크트리에 반영할까요?",
+  "feature.applyRepoAgentGatedCheckbox":
+    "위험/마스킹 파일 {count}건 포함 — 검토했습니다",
+  "feature.commitTemplateHint":
+    "비워 두면 동기화 → 커밋 → 푸시가 위에 보이는 커밋 메시지 템플릿을 사용합니다.",
+
+  // 전달 팝업
+  "feature.changesPopupOpen": "변경된 파일 보기",
+  "feature.changesPopupTitle": "커밋되지 않은 변경 · {repo}",
+  "feature.changesPopupDesc":
+    "이 브랜치의 마지막 커밋과 다른 파일들 — 다음 커밋에 담길 내용입니다.",
+  "feature.unpushedPopupOpen": "푸시될 커밋 보기",
+  "feature.unpushedPopupTitle": "미푸시 커밋 · {repo}",
+  "feature.unpushedPopupRange": "{range} 기준",
+  "feature.unpushedPopupNoRange":
+    "비교 기준을 찾지 못했습니다 — 한 번도 푸시되지 않았고 base 브랜치도 없습니다.",
+  "feature.unpushedPopupEmpty": "푸시할 것이 없습니다.",
+  "feature.viewWorktreeDiff": "마지막 커밋과 비교",
+  "feature.worktreeFileViewDesc":
+    "{repo} · 브랜치의 마지막 커밋 vs 디스크의 파일",
+  "feature.fileViewCommitted": "마지막 커밋",
+  "feature.fileViewWorking": "작업 파일",
+
+  // 저장소 워크트리 커밋 목록
+  "feature.worktreeLog": "이 저장소의 커밋 보기",
+  "feature.worktreeLogShort": "커밋",
+  "feature.worktreeLogTitle": "커밋 · {repo}",
+  "feature.worktreeLogDesc":
+    "이 저장소 워크트리가 올라타 있는 커밋들입니다 ({branch}). 저장소 전체는 커밋 그래프 페이지에서 봅니다.",
+  "feature.worktreeLogEmpty": "커밋이 없습니다.",
+
+  // 워크트리 상태 행
+  "feature.baseBranchTitle": "base 브랜치: {base}",
+  "feature.unknownBranch": "알 수 없는 브랜치",
+  "feature.integrationBranchLine":
+    "{branch} 에서 {kind} 진행 중 — 해소할 때까지 HEAD 가 detached 상태입니다",
+
+  // 중단된 통합 해소 컨트롤
+  "feature.integrationOpen": "{kind} 가 충돌로 멈췄습니다",
+  "feature.integrationProgress": "{total} 중 {step}",
+  "feature.integrationConflictCount": "아직 {count}개 파일이 충돌 상태입니다.",
+  "feature.integrationNoConflicts":
+    "남은 충돌 파일이 없습니다 — 계속하기로 마무리하세요.",
+  "feature.integrationContinue": "계속하기",
+  "feature.integrationAbort": "되돌리기",
+  "feature.integrationTerminal": "터미널 열기",
+  "feature.gitOutputLabel": "git 출력",
+
+  // rebase 대화상자
+  "feature.rebaseTitle": "Rebase · {feature}",
+  "feature.rebaseDesc":
+    "각 저장소 워크트리의 브랜치를 base 브랜치 위로 다시 얹습니다. 충돌은 해결할 수 있도록 그대로 남겨둡니다.",
+  "feature.rebasePreflightLoading": "저장소별로 확인하는 중…",
+  "feature.rebaseBehind": "{count}개 뒤짐",
+  "feature.rebaseUpToDate": "최신",
+  "feature.rebaseUnpushed": "미푸시 {count}개",
+  "feature.rebaseRepo": "Rebase",
+  "feature.rebaseAll": "저장소 {count}개 rebase",
+  "feature.rebasePushOption": "rebase 후 force-with-lease 푸시",
+
+  // 커밋 메시지 템플릿 (설정)
+  "settings.commitTemplate": "커밋 메시지 템플릿",
+  "settings.commitTemplateHint":
+    "메시지를 입력하지 않은 동기화 → 커밋 → 푸시에서 사용합니다. 사용 가능한 변수: {vars}",
+  "settings.commitTemplatePreview": "미리보기: {preview}",
+  "settings.commitTemplatePlaceholder": "agent({{feature}}): auto-sync {{date}}",
+
+  // 저장소 커밋 목록 (워크스페이스 화면)
+  "workspace.repoLog": "커밋",
+  "workspace.repoLogTitle": "커밋 · {repo}",
+  "workspace.repoLogDesc":
+    "저장소의 메인 클론에서 읽은 커밋 그래프입니다. 모든 feature 브랜치가 포함됩니다.",
+  "workspace.repoLogEmpty": "커밋이 없습니다 — 먼저 저장소를 pull 하세요.",
+
+  "time.minutesAgo": "{count}분 전",
+  "time.hoursAgo": "{count}시간 전",
+  "time.daysAgo": "{count}일 전",
 };
 
 export const messages: Record<Locale, Dict> = { en, ko };

@@ -38,22 +38,36 @@ import {
   X,
 } from "lucide-react";
 import { api, errMessage } from "@/lib/api";
+import { summarizeIntegration } from "@/lib/integration";
+import { summarizePush } from "@/lib/push";
 import type {
   Change,
   ChangeFileView,
+  CommitMessageTemplateInfo,
   DiffResult,
   FeatureDeleteResult,
   FeatureMetadata,
   FeaturePathsResult,
   FeatureStatusResult,
+  GraphCommit,
+  IntegrationRepoResult,
+  IntegrationState,
+  PushRepoResult,
+  RebasePreflight,
   RepoFileStatus,
+  RepoStatus,
   RequestResult,
   RequestResults,
   Repository,
   TerminalSession,
+  UnpushedRepo,
+  UnpushedResult,
 } from "@/lib/types";
+import { integrationInProgress } from "@/lib/types";
 import { TerminalPanel, runtime } from "@/components/TerminalPanel";
 import { ToolOpenMenu } from "@/components/ToolOpenMenu";
+import { CommitList, shortSHA } from "@/components/CommitList";
+import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -128,7 +142,34 @@ export function FeatureDetailPage({
   const [openStatusRepos, setOpenStatusRepos] = useState<Set<string>>(new Set());
   // The per-file diff modal. The file content is fetched by <ChangeFileDiff>
   // itself, so this only needs to identify which change is being viewed.
-  const [fileView, setFileView] = useState<{ repo: string; change: Change } | null>(
+  // `side` picks which comparison to show: "agent" is the agent copy against the
+  // repo worktree, "worktree" is the branch's last commit against the worktree.
+  const [fileView, setFileView] = useState<{
+    repo: string;
+    change: Change;
+    side: "agent" | "worktree";
+  } | null>(null);
+  // Popups on the delivery screen: the Repo Worktree Change list behind the
+  // change badge, and the unpushed commit list behind the push badge.
+  const [changesPopup, setChangesPopup] = useState<string | null>(null);
+  const [unpushedPopup, setUnpushedPopup] = useState<string | null>(null);
+  const [unpushed, setUnpushed] = useState<UnpushedResult | null>(null);
+  const [unpushedLoading, setUnpushedLoading] = useState(false);
+  // A Repo Worktree's commit list, opened from the status screen.
+  const [worktreeLogRepo, setWorktreeLogRepo] = useState<string | null>(null);
+  // The rebase dialog. It opens immediately and fills in asynchronously,
+  // because the preflight costs several git subprocesses per repository.
+  const [rebaseOpen, setRebaseOpen] = useState(false);
+  const [preflight, setPreflight] = useState<RebasePreflight | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [rebasePush, setRebasePush] = useState(true);
+  const [integrationResults, setIntegrationResults] = useState<
+    IntegrationRepoResult[] | null
+  >(null);
+  const [pushResults, setPushResults] = useState<PushRepoResult[] | null>(null);
+  // What the Commit Message Template renders to right now, shown as the commit
+  // field's placeholder.
+  const [msgTemplate, setMsgTemplate] = useState<CommitMessageTemplateInfo | null>(
     null
   );
   // Whether the in-app diff modal is expanded to fill the window.
@@ -284,6 +325,25 @@ export function FeatureDetailPage({
     loadCounts();
     loadRepoManager();
   }, [loadStatus, loadCounts, loadRepoManager]);
+
+  // The rendered Commit Message Template, used as the commit field's
+  // placeholder. Rendered per feature, so {{branch}} and {{base}} are this
+  // feature's. A failure here is not worth a toast: the field simply falls back
+  // to its literal placeholder.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .CommitMessageTemplateInfo(name)
+      .then((info) => {
+        if (!cancelled) setMsgTemplate(info);
+      })
+      .catch(() => {
+        if (!cancelled) setMsgTemplate(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
 
   useEffect(() => {
     if (!tab.startsWith("terminal:")) return;
@@ -446,6 +506,96 @@ export function FeatureDetailPage({
       await Promise.all([loadDiff(), loadStatus(), loadCounts()]);
     });
 
+  // The two halves of an Agent Change Resolution. "Use the worktree" discards
+  // the agent copy (restoreFromWorktree, already here); "use the agent" copies
+  // the agent version into the Repo Worktree, which is a sync narrowed to that
+  // one path.
+  //
+  // The row buttons deliberately ignore the dry-run toggle above: a per-file
+  // button that silently did nothing because a toggle elsewhere was on would be
+  // a trap. risky/masked files are approved right here in the confirm dialog
+  // rather than sending the user off to flip the page-level toggles.
+  const applyAgentChange = (repo: string, change: Change) =>
+    run(async () => {
+      let approveGated = false;
+      if (change.risky || change.masked) {
+        const kind = change.masked
+          ? t("feature.masked")
+          : t("feature.risky");
+        if (
+          !(await confirm({
+            message: t("feature.applyAgentGatedConfirm", {
+              path: change.path,
+              kind,
+            }),
+            danger: true,
+            checkbox: {
+              label: t("feature.applyAgentGatedCheckbox"),
+              onChange: (v) => {
+                approveGated = v;
+              },
+            },
+          }))
+        )
+          return;
+        if (!approveGated) {
+          notify(t("toast.applyAgentNotApproved"), "warning");
+          return;
+        }
+      }
+      await api.AgentSync(name, {
+        repo,
+        paths: [change.path],
+        dryRun: false,
+        includeRisky: approveGated,
+        allowMaskedSync: approveGated,
+      });
+      notify(t("toast.agentChangeApplied", { path: change.path }), "success");
+      await Promise.all([loadDiff(), loadStatus(), loadCounts()]);
+    });
+
+  const applyRepoAgentChanges = (repo: string, changes: Change[]) =>
+    run(async () => {
+      const gated = changes.filter((c) => c.risky || c.masked);
+      let approveGated = false;
+      if (
+        !(await confirm({
+          message: t("feature.applyRepoAgentConfirm", {
+            repo,
+            count: changes.length,
+          }),
+          danger: gated.length > 0,
+          checkbox:
+            gated.length > 0
+              ? {
+                  label: t("feature.applyRepoAgentGatedCheckbox", {
+                    count: gated.length,
+                  }),
+                  onChange: (v) => {
+                    approveGated = v;
+                  },
+                }
+              : undefined,
+        }))
+      )
+        return;
+      if (gated.length > 0 && !approveGated) {
+        notify(t("toast.applyAgentNotApproved"), "warning");
+        return;
+      }
+      await api.AgentSync(name, {
+        repo,
+        dryRun: false,
+        includeRisky: approveGated,
+        allowMaskedSync: approveGated,
+      });
+      notify(
+        t("toast.agentRepoChangesApplied", { repo, count: changes.length }),
+        "success"
+      );
+      await Promise.all([loadDiff(), loadStatus(), loadCounts()]);
+    });
+
   const restoreFromWorktree = (repo: string, path: string) =>
     run(async () => {
       await api.AgentRestoreFromWorktree(name, repo, path);
@@ -468,7 +618,36 @@ export function FeatureDetailPage({
     });
 
   const openChangeFileView = (repo: string, change: Change) => {
-    setFileView({ repo, change });
+    setFileView({ repo, change, side: "agent" });
+  };
+
+  // Repo Worktree Changes carry a git status code, not an agent Change; the
+  // viewer takes the same shape either way, so this adapts one to the other.
+  const openWorktreeFileView = (repo: string, file: RepoFileStatus) => {
+    setFileView({
+      repo,
+      // risky/masked are properties of an Agent Change — a file the agent
+      // proposed. A Repo Worktree Change is the user's own edit, so neither
+      // gate applies and the badges must not appear.
+      change: { repo, path: file.path, type: file.type, risky: false, masked: false },
+      side: "worktree",
+    });
+  };
+
+  const loadUnpushed = useCallback(async () => {
+    setUnpushedLoading(true);
+    try {
+      setUnpushed(await api.UnpushedCommits(name, "", 200));
+    } catch (e) {
+      notify(errMessage(e), "error");
+    } finally {
+      setUnpushedLoading(false);
+    }
+  }, [name, notify]);
+
+  const openUnpushedPopup = (repo: string) => {
+    setUnpushedPopup(repo);
+    void loadUnpushed();
   };
 
   const del = () =>
@@ -759,31 +938,86 @@ export function FeatureDetailPage({
     run(async () => {
       setActingRepo(repoName || "*");
       try {
-        await api.Push(name, repoName);
-        notify(t("toast.pushed"), "success");
+        // The result is per repository. Reporting success here without looking
+        // at it is what made a push where every repository failed still say
+        // "pushed".
+        const res = await api.PushFeature(name, repoName, false);
+        const summary = summarizePush(res);
+        setPushResults(summary.failed.length > 0 ? summary.failed : null);
+        notify(t(summary.messageKey, summary.params), summary.level);
         await loadStatus();
       } finally {
         setActingRepo(null);
       }
     });
 
-  const rebase = () =>
+  // Opening the rebase dialog changes nothing; the preflight fills it in.
+  const openRebase = () => {
+    setRebaseOpen(true);
+    setIntegrationResults(null);
+    setPushResults(null);
+    void loadPreflight("");
+  };
+
+  const loadPreflight = useCallback(
+    async (repoFilter: string) => {
+      setPreflightLoading(true);
+      try {
+        setPreflight(await api.RebasePreflight(name, repoFilter));
+      } catch (e) {
+        notify(errMessage(e), "error");
+      } finally {
+        setPreflightLoading(false);
+      }
+    },
+    [name, notify]
+  );
+
+  // Same policy as the commit graph: a conflict is left in place as an
+  // Interrupted Integration rather than aborted, and a repository holding
+  // unreviewed Agent Changes is skipped. summarizeIntegration is shared so the
+  // two screens cannot drift on what "failed" versus "conflicted" means.
+  //
+  // Only repositories that were actually rebased are pushed afterwards: pushing
+  // a conflicted one would publish a half-finished rebase, and the others have
+  // nothing new to send (docs/adr/0003).
+  const rebase = (repoFilter: string) =>
     run(async () => {
-      const res = await api.RebaseFeature(name, "");
-      const repos = res.repositories ?? [];
-      const failed = repos.filter((r) => r.status === "failed");
-      const rebased = repos.filter((r) => r.status === "rebased");
-      if (failed.length > 0) {
+      // One call: the backend decides which repositories the follow-up push
+      // applies to, so this screen and the CLI cannot disagree about it.
+      const res = await api.RebaseAndPush(name, repoFilter, "", rebasePush);
+      const summary = summarizeIntegration(res.integration);
+      setIntegrationResults(res.integration.repositories ?? []);
+      notify(t(summary.messageKey, summary.params), summary.level);
+
+      const failures = (res.pushes ?? []).flatMap((p) => summarizePush(p).failed);
+      setPushResults(failures.length > 0 ? failures : null);
+      if (failures.length > 0) {
         notify(
-          t("toast.rebaseConflict", {
-            repos: failed.map((r) => r.name).join(", "),
+          t("push.toast.failed", {
+            count: failures.length,
+            repos: failures.map((r) => r.name).join(", "),
           }),
           "error"
         );
-      } else {
-        notify(t("toast.rebased", { count: rebased.length }), "success");
       }
-      await loadStatus();
+      // Always re-read every repository, even when one was rebased: the dialog
+      // lists them all, and refreshing with the filter would drop the rest.
+      await Promise.all([loadStatus(), loadPreflight("")]);
+    });
+
+  const resolveIntegration = (repoFilter: string, action: "continue" | "abort") =>
+    run(async () => {
+      const res =
+        action === "continue"
+          ? await api.ContinueIntegration(name, repoFilter)
+          : await api.AbortIntegration(name, repoFilter);
+      const summary = summarizeIntegration(res);
+      setIntegrationResults(res.repositories ?? []);
+      notify(t(summary.messageKey, summary.params), summary.level);
+      // The rebase dialog may be open on this repository, so its preflight is
+      // stale the moment an integration is resolved.
+      await Promise.all([loadStatus(), rebaseOpen ? loadPreflight("") : null]);
     });
 
   const prepareRepo = (repoName: string) =>
@@ -1088,16 +1322,28 @@ export function FeatureDetailPage({
                             )}
                           </button>
                           {changes.length > 0 && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 shrink-0"
-                              disabled={busy || diffLoading}
-                              onClick={() => restoreRepoFromWorktree(r.name, changes.length)}
-                              title={t("feature.restoreRepoFromWorktree")}
-                            >
-                              <RotateCcw className="size-3.5" /> {t("feature.restoreRepoFromWorktreeShort")}
-                            </Button>
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 shrink-0"
+                                disabled={busy || diffLoading}
+                                onClick={() => restoreRepoFromWorktree(r.name, changes.length)}
+                                title={t("feature.restoreRepoFromWorktree")}
+                              >
+                                <RotateCcw className="size-3.5" /> {t("feature.restoreRepoFromWorktreeShort")}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 shrink-0"
+                                disabled={busy || diffLoading}
+                                onClick={() => applyRepoAgentChanges(r.name, changes)}
+                                title={t("feature.applyRepoAgent")}
+                              >
+                                <Upload className="size-3.5" /> {t("feature.applyRepoAgentShort")}
+                              </Button>
+                            </>
                           )}
                         </div>
                         {open && (
@@ -1111,6 +1357,7 @@ export function FeatureDetailPage({
                                   change={c}
                                   onView={() => openChangeFileView(r.name, c)}
                                   onRestore={() => restoreFromWorktree(r.name, c.path)}
+                                  onApply={() => applyAgentChange(r.name, c)}
                                   disabled={busy || diffLoading}
                                 />
                               ))}
@@ -1169,8 +1416,18 @@ export function FeatureDetailPage({
                             id="cm"
                             value={commitMsg}
                             onChange={(e) => setCommitMsg(e.target.value)}
-                            placeholder="feat: add coupon v2"
+                            // The template preview is the placeholder, not the
+                            // value: prefilling would freeze {{timestamp}} to
+                            // whenever this screen happened to open, and would
+                            // also enable the commit buttons, which require a
+                            // message the user actually typed.
+                            placeholder={msgTemplate?.preview || "feat: add coupon v2"}
                           />
+                          {msgTemplate?.preview && (
+                            <p className="text-xs text-muted-foreground">
+                              {t("feature.commitTemplateHint")}
+                            </p>
+                          )}
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <Button
@@ -1199,8 +1456,27 @@ export function FeatureDetailPage({
                                   <div className="flex flex-wrap items-center gap-2">
                                     <Boxes className="size-4 text-muted-foreground" />
                                     <span className="font-medium">{r.name}</span>
-                                    {dirty && <Badge variant="warning">{t("feature.repoChanges", { count: (r.changes ?? []).length })}</Badge>}
-                                    {ahead > 0 && <Badge variant="secondary">{t("feature.repoAhead", { count: ahead })}</Badge>}
+                                    {/* The badges are the entry points to the
+                                        detail popups: the change badge lists the
+                                        files, the push badge lists the commits. */}
+                                    {dirty && (
+                                      <BadgeButton
+                                        variant="warning"
+                                        onClick={() => setChangesPopup(r.name)}
+                                        title={t("feature.changesPopupOpen")}
+                                      >
+                                        {t("feature.repoChanges", { count: (r.changes ?? []).length })}
+                                      </BadgeButton>
+                                    )}
+                                    {ahead > 0 && (
+                                      <BadgeButton
+                                        variant="secondary"
+                                        onClick={() => openUnpushedPopup(r.name)}
+                                        title={t("feature.unpushedPopupOpen")}
+                                      >
+                                        {t("feature.repoAhead", { count: ahead })}
+                                      </BadgeButton>
+                                    )}
                                   </div>
                                   {r.error && (
                                     <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
@@ -1287,7 +1563,7 @@ export function FeatureDetailPage({
                 </div>
               )}
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" size="sm" onClick={rebase} disabled={busy || statusLoading}>
+                <Button variant="outline" size="sm" onClick={openRebase} disabled={busy || statusLoading}>
                   <GitMerge className="size-4" /> {t("feature.rebase")}
                 </Button>
                 <Button variant="outline" size="sm" onClick={loadStatus} disabled={statusLoading}>
@@ -1346,14 +1622,27 @@ export function FeatureDetailPage({
                               <span className="truncate font-medium">{repoName}</span>
                               {hasChanges && <Badge variant="warning">{t("feature.repoChanges", { count: changes.length })}</Badge>}
                               {!included && <Badge variant="outline">미추가</Badge>}
-                              {included && r?.status.trim() === "" && <Badge variant="outline">{t("feature.clean")}</Badge>}
+                              {included && !integrationInProgress(r?.integration) && r?.status.trim() === "" && (
+                                <Badge variant="outline">{t("feature.clean")}</Badge>
+                              )}
                               {(histCounts[repoName] ?? 0) > 0 && (
                                 <Badge variant="secondary">{t("feature.syncHistoryBadge", { count: histCounts[repoName] })}</Badge>
                               )}
                             </div>
-                            <div className="mt-1 truncate text-xs text-muted-foreground">{configured?.DefaultBranch || "-"}</div>
+                            <WorktreeBranchLine status={r} configuredBase={configured?.DefaultBranch} />
                           </div>
                           <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                            {included && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={busy}
+                                onClick={() => setWorktreeLogRepo(repoName)}
+                                title={t("feature.worktreeLog")}
+                              >
+                                <History className="size-4" /> {t("feature.worktreeLogShort")}
+                              </Button>
+                            )}
                             {included ? (
                               <Button variant="outline" size="sm" disabled={busy} onClick={() => recreateFeatureRepo(repoName)}>
                                 <RotateCcw className="size-4" /> {t("feature.repoRecreate")}
@@ -1374,12 +1663,26 @@ export function FeatureDetailPage({
                             />
                           </div>
                         </div>
+                        {integrationInProgress(r?.integration) && (
+                          <InterruptedIntegrationPanel
+                            state={r!.integration!}
+                            busy={busy}
+                            onContinue={() => resolveIntegration(repoName, "continue")}
+                            onAbort={() => resolveIntegration(repoName, "abort")}
+                            onTerminal={() => openRepoWorktreeTerminal(repoName, terminalProgram)}
+                          />
+                        )}
                         {r?.error ? (
                           <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">{r.error}</div>
                         ) : hasChanges && open ? (
                           <ul className="divide-y rounded-md border">
                             {changes.map((change, i) => (
-                              <RepoStatusRow key={change.code + "-" + change.path + "-" + i} change={change} />
+                              <RepoStatusRow
+                                key={change.code + "-" + change.path + "-" + i}
+                                change={change}
+                                disabled={busy}
+                                onView={() => openWorktreeFileView(repoName, change)}
+                              />
                             ))}
                           </ul>
                         ) : null}
@@ -1650,6 +1953,7 @@ export function FeatureDetailPage({
               feature={name}
               repo={fileView.repo}
               change={fileView.change}
+              side={fileView.side}
               fill={fileFullscreen}
               className="min-h-0 flex-1"
               headerActions={
@@ -1680,6 +1984,528 @@ export function FeatureDetailPage({
           </div>
         </div>
       )}
+
+      {/* Repo Worktree Change list behind the change badge. Reuses the change
+          set the status load already returned, so opening it costs no git. */}
+      {changesPopup && (
+        <Modal
+          title={t("feature.changesPopupTitle", { repo: changesPopup })}
+          description={t("feature.changesPopupDesc")}
+          onClose={() => setChangesPopup(null)}
+          size="lg"
+        >
+          {(() => {
+            const repo = (status?.repositories ?? []).find(
+              (r) => r.name === changesPopup
+            );
+            const files = repo?.changes ?? [];
+            if (files.length === 0) {
+              return (
+                <p className="p-4 text-sm text-muted-foreground">
+                  {t("feature.noChanges")}
+                </p>
+              );
+            }
+            return (
+              <ul className="divide-y">
+                {files.map((change, i) => (
+                  <RepoStatusRow
+                    key={change.code + "-" + change.path + "-" + i}
+                    change={change}
+                    disabled={busy}
+                    onView={() => {
+                      setChangesPopup(null);
+                      openWorktreeFileView(changesPopup, change);
+                    }}
+                  />
+                ))}
+              </ul>
+            );
+          })()}
+        </Modal>
+      )}
+
+      {/* Unpushed commits behind the push badge. */}
+      {unpushedPopup && (
+        <UnpushedModal
+          repo={unpushedPopup}
+          result={unpushed}
+          loading={unpushedLoading}
+          onClose={() => setUnpushedPopup(null)}
+        />
+      )}
+
+      {/* A Repo Worktree's commit list, from the status screen. Coexists with
+          the commit graph page: this answers "what is on this branch" without
+          leaving the feature. */}
+      {worktreeLogRepo && (
+        <WorktreeLogModal
+          feature={name}
+          repo={worktreeLogRepo}
+          onClose={() => setWorktreeLogRepo(null)}
+        />
+      )}
+
+      {rebaseOpen && (
+        <RebaseModal
+          feature={name}
+          preflight={preflight}
+          loading={preflightLoading}
+          busy={busy}
+          push={rebasePush}
+          setPush={setRebasePush}
+          results={integrationResults}
+          pushFailures={pushResults}
+          onRebase={rebase}
+          onResolve={resolveIntegration}
+          onTerminal={(repo) => openRepoWorktreeTerminal(repo, terminalProgram)}
+          onRefresh={() => loadPreflight("")}
+          onClose={() => setRebaseOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// The branch line under a repository name on the status screen. This used to
+// print the repository's configured default branch, which is the Base Branch,
+// not what the Repo Worktree has checked out — so every row claimed to be on
+// "develop". Mid-rebase there is no branch at all, and saying so is the point.
+function WorktreeBranchLine({
+  status,
+  configuredBase,
+}: {
+  status?: RepoStatus;
+  configuredBase?: string;
+}) {
+  const { t } = useI18n();
+  const base = status?.baseBranch || configuredBase || "";
+  const integration = status?.integration;
+
+  if (integrationInProgress(integration)) {
+    return (
+      <div className="mt-1 truncate text-xs text-amber-600">
+        {t("feature.integrationBranchLine", {
+          kind: integration?.kind ?? "",
+          branch: integration?.branch || t("feature.unknownBranch"),
+        })}
+      </div>
+    );
+  }
+
+  if (!status?.branch) {
+    return <div className="mt-1 truncate text-xs text-muted-foreground">-</div>;
+  }
+
+  return (
+    <div
+      className="mt-1 flex min-w-0 items-baseline gap-2 text-xs text-muted-foreground"
+      title={base ? t("feature.baseBranchTitle", { base }) : undefined}
+    >
+      <span className="shrink-0 font-mono">{status.branch}</span>
+      {status.lastCommit && (
+        <>
+          <span className="shrink-0 font-mono opacity-70">
+            {shortSHA(status.lastCommit.sha)}
+          </span>
+          <span className="truncate">{status.lastCommit.subject}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+// The banner and resolution controls for an Interrupted Integration. Shown
+// wherever the state is surfaced, so a user who hit the conflict on one screen
+// can finish from another (docs/adr/0002). Resolving the conflict itself
+// happens in an editor or terminal — hence the terminal button.
+function InterruptedIntegrationPanel({
+  state,
+  busy,
+  onContinue,
+  onAbort,
+  onTerminal,
+}: {
+  state: IntegrationState;
+  busy: boolean;
+  onContinue: () => void;
+  onAbort: () => void;
+  onTerminal: () => void;
+}) {
+  const { t } = useI18n();
+  const paths = state.conflictPaths ?? [];
+  return (
+    <div className="space-y-2 rounded-md border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+      <div className="flex flex-wrap items-center gap-2">
+        <AlertTriangle className="size-4 shrink-0" />
+        <span className="font-medium">
+          {t("feature.integrationOpen", { kind: state.kind ?? "" })}
+        </span>
+        {state.total ? (
+          <Badge variant="outline">
+            {t("feature.integrationProgress", {
+              step: state.step ?? 0,
+              total: state.total,
+            })}
+          </Badge>
+        ) : null}
+      </div>
+      <p className="text-xs">
+        {paths.length > 0
+          ? t("feature.integrationConflictCount", { count: paths.length })
+          : t("feature.integrationNoConflicts")}
+      </p>
+      {paths.length > 0 && (
+        <ul className="max-h-32 space-y-0.5 overflow-auto font-mono text-xs">
+          {paths.map((p: string) => (
+            <li key={p} className="truncate">
+              {p}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={busy} onClick={onContinue}>
+          {t("feature.integrationContinue")}
+        </Button>
+        <Button variant="outline" size="sm" disabled={busy} onClick={onAbort}>
+          {t("feature.integrationAbort")}
+        </Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onTerminal}>
+          <Terminal className="size-3.5" /> {t("feature.integrationTerminal")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function UnpushedModal({
+  repo,
+  result,
+  loading,
+  onClose,
+}: {
+  repo: string;
+  result: UnpushedResult | null;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const entry = (result?.repositories ?? []).find((r) => r.name === repo);
+  return (
+    <Modal
+      title={t("feature.unpushedPopupTitle", { repo })}
+      // The resolved range is shown because it is not always the same one: a
+      // branch that has never been pushed is compared against its base instead.
+      description={
+        entry?.range
+          ? t("feature.unpushedPopupRange", { range: entry.range })
+          : t("feature.unpushedPopupNoRange")
+      }
+      onClose={onClose}
+      size="lg"
+    >
+      {loading && !entry ? (
+        <LoadingState label={t("common.loading")} />
+      ) : entry?.error ? (
+        <p className="p-4 text-sm text-destructive">{entry.error}</p>
+      ) : (
+        <CommitList
+          commits={entry?.commits ?? []}
+          emptyLabel={t("feature.unpushedPopupEmpty")}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function WorktreeLogModal({
+  feature,
+  repo,
+  onClose,
+}: {
+  feature: string;
+  repo: string;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const [entry, setEntry] = useState<UnpushedRepo | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    // Scoped to this Repo Worktree's HEAD, not the repository's whole graph:
+    // the repository-wide view would list the Base Branch and every other
+    // Feature's commits, which is not what "this worktree's commits" means.
+    // The commit graph page is where the repository-wide view lives.
+    api
+      .WorktreeCommits(feature, repo, 200)
+      .then((res) => {
+        if (!cancelled) setEntry(res);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errMessage(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [feature, repo]);
+
+  return (
+    <Modal
+      title={t("feature.worktreeLogTitle", { repo })}
+      description={t("feature.worktreeLogDesc", {
+        branch: entry?.branch || feature,
+      })}
+      onClose={onClose}
+      size="lg"
+    >
+      {error ? (
+        <p className="p-4 text-sm text-destructive">{error}</p>
+      ) : entry === null ? (
+        <LoadingState label={t("common.loading")} />
+      ) : (
+        <CommitList
+          commits={entry.commits ?? []}
+          emptyLabel={t("feature.worktreeLogEmpty")}
+        />
+      )}
+    </Modal>
+  );
+}
+
+// The rebase dialog. It opens at once and fills in from the preflight, because
+// inspecting every repository costs several git subprocesses each.
+function RebaseModal({
+  feature,
+  preflight,
+  loading,
+  busy,
+  push,
+  setPush,
+  results,
+  pushFailures,
+  onRebase,
+  onResolve,
+  onTerminal,
+  onRefresh,
+  onClose,
+}: {
+  feature: string;
+  preflight: RebasePreflight | null;
+  loading: boolean;
+  busy: boolean;
+  push: boolean;
+  setPush: (v: boolean) => void;
+  results: IntegrationRepoResult[] | null;
+  pushFailures: PushRepoResult[] | null;
+  onRebase: (repoFilter: string) => void;
+  onResolve: (repoFilter: string, action: "continue" | "abort") => void;
+  onTerminal: (repo: string) => void;
+  onRefresh: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const repos = preflight?.repositories ?? [];
+  const runnable = repos.filter((r) => !r.blocked && r.behind > 0);
+  const resultByRepo = new Map((results ?? []).map((r) => [r.name, r]));
+  const pushFailureByRepo = new Map((pushFailures ?? []).map((r) => [r.name, r]));
+
+  return (
+    <Modal
+      title={t("feature.rebaseTitle", { feature })}
+      description={t("feature.rebaseDesc")}
+      onClose={onClose}
+      size="xl"
+      headerActions={
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8"
+          disabled={loading || busy}
+          onClick={onRefresh}
+          title={t("common.refresh")}
+        >
+          {loading ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <RefreshCw className="size-4" />
+          )}
+        </Button>
+      }
+      footer={
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Toggle
+            checked={push}
+            onChange={setPush}
+            label={t("feature.rebasePushOption")}
+          />
+          <Button
+            disabled={busy || loading || runnable.length === 0}
+            onClick={() => onRebase("")}
+          >
+            <GitMerge className="size-4" />{" "}
+            {t("feature.rebaseAll", { count: runnable.length })}
+          </Button>
+        </div>
+      }
+    >
+      {loading && repos.length === 0 ? (
+        <LoadingState label={t("feature.rebasePreflightLoading")} />
+      ) : repos.length === 0 ? (
+        <p className="p-4 text-sm text-muted-foreground">{t("feature.noRepos")}</p>
+      ) : (
+        <ul className="divide-y">
+          {repos.map((r) => {
+            const result = resultByRepo.get(r.repo);
+            const pushFailure = pushFailureByRepo.get(r.repo);
+            return (
+              <li key={r.repo} className="space-y-2 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Boxes className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="font-medium">{r.repo}</span>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {r.branch} → {r.upstream || r.baseBranch}
+                  </span>
+                  {r.behind > 0 ? (
+                    <Badge variant="secondary">
+                      {t("feature.rebaseBehind", { count: r.behind })}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline">{t("feature.rebaseUpToDate")}</Badge>
+                  )}
+                  {r.unpushed > 0 && (
+                    <Badge variant="outline">
+                      {t("feature.rebaseUnpushed", { count: r.unpushed })}
+                    </Badge>
+                  )}
+                  <span className="flex-1" />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || loading || r.blocked || r.behind === 0}
+                    onClick={() => onRebase(r.repo)}
+                  >
+                    <GitMerge className="size-3.5" /> {t("feature.rebaseRepo")}
+                  </Button>
+                </div>
+
+                {r.blocked && (
+                  <p className="text-xs text-amber-600">{r.reason}</p>
+                )}
+
+                {integrationInProgress(r.integration) && (
+                  // All three resolution controls, as on every other screen
+                  // that surfaces this state (docs/adr/0002) — resolving the
+                  // conflict itself happens in a terminal or editor, so
+                  // offering continue/abort without a way in would be a
+                  // dead end.
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => onResolve(r.repo, "continue")}
+                    >
+                      {t("feature.integrationContinue")}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => onResolve(r.repo, "abort")}
+                    >
+                      {t("feature.integrationAbort")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => onTerminal(r.repo)}
+                    >
+                      <Terminal className="size-3.5" />{" "}
+                      {t("feature.integrationTerminal")}
+                    </Button>
+                  </div>
+                )}
+
+                {result && <IntegrationOutcome result={result} />}
+                {pushFailure && (
+                  <GitFailure
+                    summary={pushFailure.error || pushFailure.detail}
+                    output={pushFailure.gitOutput}
+                  />
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Modal>
+  );
+}
+
+function IntegrationOutcome({ result }: { result: IntegrationRepoResult }) {
+  const { t } = useI18n();
+  const tone =
+    result.status === "conflicted"
+      ? "text-amber-600"
+      : result.status === "failed"
+        ? "text-destructive"
+        : "text-muted-foreground";
+  return (
+    <div className="space-y-1 text-xs">
+      <p className={tone}>
+        <span className="font-medium">{result.status}</span>
+        {result.detail ? ` — ${result.detail}` : ""}
+      </p>
+      {(result.conflicts ?? []).length > 0 && (
+        <ul className="max-h-24 space-y-0.5 overflow-auto font-mono text-xs text-amber-600">
+          {(result.conflicts ?? []).map((p) => (
+            <li key={p} className="truncate">
+              {p}
+            </li>
+          ))}
+        </ul>
+      )}
+      {result.gitOutput && (
+        <GitFailure summary={t("feature.gitOutputLabel")} output={result.gitOutput} />
+      )}
+    </div>
+  );
+}
+
+// A one-line summary with git's own output folded away behind it. The raw
+// output is routinely the only place the real reason is written down — a
+// refused lease says so nowhere else — so it is kept, just not shouted.
+function GitFailure({
+  summary,
+  output,
+}: {
+  summary: string;
+  output?: string;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  if (!output) {
+    return <p className="text-xs text-destructive">{summary}</p>;
+  }
+  return (
+    <div className="space-y-1">
+      <div className="flex items-start gap-2">
+        <p className="min-w-0 flex-1 text-xs text-destructive">{summary}</p>
+        <button
+          type="button"
+          className="shrink-0 text-xs underline text-muted-foreground hover:text-foreground"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? t("common.hideDetails") : t("common.showDetails")}
+        </button>
+      </div>
+      {open && (
+        <pre className="max-h-48 overflow-auto rounded-md border bg-muted/50 p-2 text-[11px] leading-relaxed">
+          {output}
+        </pre>
+      )}
     </div>
   );
 }
@@ -1688,11 +2514,15 @@ function ChangeRow({
   change,
   onView,
   onRestore,
+  onApply,
   disabled,
 }: {
   change: Change;
   onView: () => void;
+  /** Agent Change Resolution in favour of the Repo Worktree. */
   onRestore: () => void;
+  /** Agent Change Resolution in favour of the agent copy. */
+  onApply: () => void;
   disabled: boolean;
 }) {
   const { t } = useI18n();
@@ -1734,6 +2564,16 @@ function ChangeRow({
         >
           <RotateCcw className="size-3.5" /> {t("feature.restoreFromWorktreeShort")}
         </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7"
+          disabled={disabled}
+          onClick={onApply}
+          title={t("feature.applyAgent")}
+        >
+          <Upload className="size-3.5" /> {t("feature.applyAgentShort")}
+        </Button>
       </div>
     </li>
   );
@@ -1747,6 +2587,7 @@ export function ChangeFileDiff({
   feature,
   repo,
   change,
+  side = "agent",
   headerActions,
   className,
   fill,
@@ -1754,6 +2595,12 @@ export function ChangeFileDiff({
   feature: string;
   repo: string;
   change: Change;
+  // Which comparison to show. "agent" is an Agent Change — the agent copy
+  // against the Repo Worktree. "worktree" is a Repo Worktree Change — the
+  // branch's last commit against the working file, i.e. what the next commit
+  // would record. Both have the same two-panel shape; only the left-hand side
+  // and its label differ.
+  side?: "agent" | "worktree";
   headerActions?: ReactNode;
   className?: string;
   // When true, the diff grows to fill available height (used in fullscreen).
@@ -1769,8 +2616,11 @@ export function ChangeFileDiff({
   useEffect(() => {
     let cancelled = false;
     setState({ loading: true });
-    api
-      .AgentChangeFileView(feature, repo, change.path)
+    const load =
+      side === "worktree"
+        ? api.WorktreeChangeFileView(feature, repo, change.path)
+        : api.AgentChangeFileView(feature, repo, change.path);
+    load
       .then((data) => {
         if (!cancelled) setState({ loading: false, data });
       })
@@ -1780,7 +2630,7 @@ export function ChangeFileDiff({
     return () => {
       cancelled = true;
     };
-  }, [feature, repo, change.path]);
+  }, [feature, repo, change.path, side]);
 
   return (
     <div className={cn("flex flex-col overflow-hidden bg-card", className)}>
@@ -1792,7 +2642,12 @@ export function ChangeFileDiff({
             {change.masked && <Badge variant="destructive">{t("feature.masked")}</Badge>}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            {t("feature.fileViewDesc", { repo })}
+            {t(
+              side === "worktree"
+                ? "feature.worktreeFileViewDesc"
+                : "feature.fileViewDesc",
+              { repo }
+            )}
           </p>
         </div>
         {headerActions && (
@@ -1813,21 +2668,35 @@ export function ChangeFileDiff({
           </div>
         ) : state.data ? (
           (() => {
-            const wt = state.data.worktree;
-            const ag = state.data.agent;
-            const canDiff = !wt.error && !ag.error && (wt.exists || ag.exists);
+            // Left is always the "before" side. For an Agent Change that is the
+            // Repo Worktree and the agent copy is the proposal; for a Repo
+            // Worktree Change it is the last commit and the worktree is the
+            // proposal. The backend puts the committed content in the `agent`
+            // field for the worktree comparison so this component can stay one
+            // two-panel view.
+            const isWorktreeSide = side === "worktree";
+            const left = isWorktreeSide ? state.data.agent : state.data.worktree;
+            const right = isWorktreeSide ? state.data.worktree : state.data.agent;
+            const leftTitle = t(
+              isWorktreeSide ? "feature.fileViewCommitted" : "feature.fileViewWorktree"
+            );
+            const rightTitle = t(
+              isWorktreeSide ? "feature.fileViewWorking" : "feature.fileViewAgent"
+            );
+            const canDiff =
+              !left.error && !right.error && (left.exists || right.exists);
             if (!canDiff) {
               return (
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <FileViewSidePanel title={t("feature.fileViewWorktree")} side={wt} />
-                  <FileViewSidePanel title={t("feature.fileViewAgent")} side={ag} />
+                  <FileViewSidePanel title={leftTitle} side={left} />
+                  <FileViewSidePanel title={rightTitle} side={right} />
                 </div>
               );
             }
             return (
               <DiffView
-                left={{ title: t("feature.fileViewWorktree"), ...wt }}
-                right={{ title: t("feature.fileViewAgent"), ...ag }}
+                left={{ title: leftTitle, ...left }}
+                right={{ title: rightTitle, ...right }}
                 fill={fill}
               />
             );
@@ -2107,7 +2976,18 @@ function DiffColumn({
   );
 }
 
-function RepoStatusRow({ change }: { change: RepoFileStatus }) {
+// One Repo Worktree Change. Shared by the status screen's inline list and the
+// delivery screen's popup, so the same file reads the same in both — including
+// the "view" button, which is the whole reason they had to stop diverging.
+function RepoStatusRow({
+  change,
+  onView,
+  disabled,
+}: {
+  change: RepoFileStatus;
+  onView?: () => void;
+  disabled?: boolean;
+}) {
   const { t } = useI18n();
   const variant =
     change.type === "added"
@@ -2119,11 +2999,51 @@ function RepoStatusRow({ change }: { change: RepoFileStatus }) {
           : "outline";
   return (
     <li className="flex items-center gap-3 px-3 py-2 text-sm">
-      <Badge variant={variant} title={change.code} className="w-16 justify-center">
+      <Badge variant={variant} title={change.code} className="w-16 shrink-0 justify-center">
         {t(`feature.status.${change.type}`)}
       </Badge>
-      <span className="min-w-0 truncate font-mono text-xs">{change.path}</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-xs">{change.path}</span>
+      {onView && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 shrink-0"
+          disabled={disabled}
+          onClick={onView}
+          title={t("feature.viewWorktreeDiff")}
+        >
+          <Eye className="size-3.5" /> {t("feature.viewFileDiffShort")}
+        </Button>
+      )}
     </li>
+  );
+}
+
+// A badge that is also the control that opens its detail popup. Rendering a
+// <Badge> inside a <button> keeps the badge's own styling while making the
+// affordance real, rather than a badge with an invisible click target.
+function BadgeButton({
+  variant,
+  onClick,
+  title,
+  children,
+}: {
+  variant: "warning" | "secondary";
+  onClick: () => void;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Badge variant={variant} className="cursor-pointer hover:opacity-80">
+        {children}
+      </Badge>
+    </button>
   );
 }
 

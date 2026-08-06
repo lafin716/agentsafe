@@ -47,6 +47,11 @@ import { ToolOpenMenu } from "@/components/ToolOpenMenu";
 
 interface Props {
   onOpen: (name: string) => void;
+  // Starting point to seed the create form with, set when the commit graph asks
+  // to branch from a specific commit or ref. Empty means the configured default
+  // base branch.
+  initialBase?: string;
+  onInitialBaseConsumed?: () => void;
   // Terminal sessions are shared (per feature) with the feature detail page so
   // opening/closing in either view stays in sync and survives navigation.
   terminalTabs: Record<string, TerminalSession[]>;
@@ -74,6 +79,8 @@ const MAX_TERMINAL_HEIGHT = 900;
 
 export function FeaturesPage({
   onOpen,
+  initialBase,
+  onInitialBaseConsumed,
   terminalTabs,
   setTerminalTabs,
   expanded,
@@ -89,10 +96,20 @@ export function FeaturesPage({
   const [features, setFeatures] = useState<FeatureEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
+  // Empty means the workspace's configured default base branch, which is what
+  // this form did before it could be overridden.
+  const [base, setBase] = useState("");
   const [createCheck, setCreateCheck] = useState<FeatureCreateCheck | null>(null);
   const [existingBranch, setExistingBranch] = useState<"reuse" | "recreate">("reuse");
   const [syncing, setSyncing] = useState<Record<string, boolean>>({});
   const [syncErrors, setSyncErrors] = useState<Record<string, string>>({});
+
+  // Seed the base field when the commit graph sends a starting point. Held in
+  // App state rather than in the tab's view, so it also reaches a Features tab
+  // that was already open.
+  useEffect(() => {
+    if (initialBase) setBase(initialBase);
+  }, [initialBase]);
 
   const load = useCallback(async () => {
     try {
@@ -312,7 +329,7 @@ export function FeaturesPage({
     const featureName = name.trim();
     try {
       setBusy(true);
-      const check = await api.CheckFeatureCreation(featureName, "");
+      const check = await api.CheckFeatureCreation(featureName, base.trim());
       if (check.hasConflicts || check.blocked) {
         setExistingBranch("reuse");
         setCreateCheck(check);
@@ -330,9 +347,11 @@ export function FeaturesPage({
     featureName: string,
     policy: "error" | "reuse" | "recreate"
   ) {
-    await api.CreateFeature(featureName, "", policy);
+    await api.CreateFeature(featureName, base.trim(), policy);
     notify(t("toast.featureCreated", { name: featureName }), "success");
     setName("");
+    setBase("");
+    onInitialBaseConsumed?.();
     setCreateCheck(null);
     setExistingBranch("reuse");
     await load();
@@ -609,6 +628,18 @@ export function FeaturesPage({
                 onChange={(e) => setName(e.target.value)}
                 placeholder="coupon-v2"
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="fb">{t("features.baseLabel")}</Label>
+              <Input
+                id="fb"
+                value={base}
+                onChange={(e) => setBase(e.target.value)}
+                placeholder={t("features.basePlaceholder")}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("features.baseHint")}
+              </p>
             </div>
             <div className="sm:col-span-2">
               <Button type="submit" disabled={busy}>

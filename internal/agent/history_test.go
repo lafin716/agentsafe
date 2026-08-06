@@ -7,7 +7,7 @@ import (
 )
 
 // writeFile is a small test helper.
-func writeFile(t *testing.T, path, content string) {
+func writeHistoryFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
@@ -23,8 +23,8 @@ func TestRecordSyncAndRollback(t *testing.T) {
 	wt := filepath.Join(root, "feature", feature, repo)
 
 	// Pre-sync worktree state: keep.txt modified, gone.txt to be deleted.
-	writeFile(t, filepath.Join(wt, "keep.txt"), "old")
-	writeFile(t, filepath.Join(wt, "gone.txt"), "bye")
+	writeHistoryFile(t, filepath.Join(wt, "keep.txt"), "old")
+	writeHistoryFile(t, filepath.Join(wt, "gone.txt"), "bye")
 
 	changes := []Change{
 		{Repo: repo, Type: Modified, Path: "keep.txt"},
@@ -36,9 +36,9 @@ func TestRecordSyncAndRollback(t *testing.T) {
 	if err := RecordSync(root, feature, repo, wt, changes); err != nil {
 		t.Fatalf("RecordSync: %v", err)
 	}
-	writeFile(t, filepath.Join(wt, "keep.txt"), "new")           // modified
+	writeHistoryFile(t, filepath.Join(wt, "keep.txt"), "new")           // modified
 	os.Remove(filepath.Join(wt, "gone.txt"))                     // deleted
-	writeFile(t, filepath.Join(wt, "new.txt"), "added")          // added
+	writeHistoryFile(t, filepath.Join(wt, "new.txt"), "added")          // added
 
 	recs, err := ListHistory(root, feature, repo)
 	if err != nil || len(recs) != 1 {
