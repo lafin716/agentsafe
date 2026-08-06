@@ -4,7 +4,9 @@
       "Bash(rtk git *)",
       "Bash(git checkout *)",
       "Bash(rtk go *)",
-      "Skill(update-config)"
+      "Skill(update-config)",
+      "Read(//c/Users/user/.claude/skills/**)",
+      "Read(//c/Users/user/.claude/plugins/**)"
     ]
   }
 }
